@@ -1,0 +1,9 @@
+target/
+node_modules/
+.git/
+.env
+*.md
+!README.md
+client/node_modules/
+client/dist/
+
