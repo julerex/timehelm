@@ -27,7 +27,11 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
                             let world_state = GameMessage::WorldState {
                                 players: all_players,
                             };
-                            tracing::debug!("Player {} joined, total players: {}", player.id, player_count);
+                            tracing::debug!(
+                                "Player {} joined, total players: {}",
+                                player.id,
+                                player_count
+                            );
                             let _world_json = serde_json::to_string(&world_state).unwrap();
                             // In a real implementation, broadcast to all connected clients
                         }
@@ -84,4 +88,3 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
 
     rx.await.ok();
 }
-

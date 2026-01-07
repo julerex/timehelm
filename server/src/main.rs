@@ -26,9 +26,7 @@ async fn main() -> anyhow::Result<()> {
 
     let game_state = Arc::new(RwLock::new(GameState::new()));
 
-    let app_state = AppState {
-        game: game_state,
-    };
+    let app_state = AppState { game: game_state };
 
     let app = Router::new()
         .route("/ws", get(websocket_handler))
@@ -49,11 +47,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-
-async fn websocket_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> Response {
+async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(|socket| handle_websocket(socket, state))
 }
-

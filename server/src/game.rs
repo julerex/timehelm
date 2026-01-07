@@ -36,12 +36,7 @@ impl GameState {
         self.players.remove(player_id);
     }
 
-    pub fn update_player_position(
-        &mut self,
-        player_id: &str,
-        position: Position,
-        rotation: f32,
-    ) {
+    pub fn update_player_position(&mut self, player_id: &str, position: Position, rotation: f32) {
         if let Some(player) = self.players.get_mut(player_id) {
             player.position = position;
             player.rotation = rotation;
@@ -56,9 +51,18 @@ impl GameState {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum GameMessage {
-    Join { player: Player },
-    Leave { player_id: String },
-    Move { player_id: String, position: Position, rotation: f32 },
-    WorldState { players: Vec<Player> },
+    Join {
+        player: Player,
+    },
+    Leave {
+        player_id: String,
+    },
+    Move {
+        player_id: String,
+        position: Position,
+        rotation: f32,
+    },
+    WorldState {
+        players: Vec<Player>,
+    },
 }
-
