@@ -30,7 +30,6 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/ws", get(websocket_handler))
-        .nest_service("/", ServeDir::new("client/dist"))
         .fallback_service(ServeDir::new("client/dist").append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
         .with_state(app_state);
