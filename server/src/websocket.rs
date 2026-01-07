@@ -1,3 +1,4 @@
+use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 
@@ -74,7 +75,7 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
     // Keep connection alive
     let _ = tokio::spawn(async move {
         loop {
-            if sender.send(Message::Ping(vec![])).await.is_err() {
+            if sender.send(Message::Ping(Bytes::new())).await.is_err() {
                 break;
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;

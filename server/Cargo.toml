@@ -4,22 +4,22 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-axum = { version = "0.7", features = ["ws"] }
-futures-util = "0.3"
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "fs"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-oauth2 = "4.4"
-reqwest = { version = "0.11", features = ["json"] }
-jsonwebtoken = "9.2"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.6", features = ["v4", "serde"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-anyhow = "1.0"
-thiserror = "1.0"
-sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "migrate"] }
-dotenv = "0.15"
+tokio = { version = "*", features = ["full"] }
+axum = { version = "*", features = ["ws"] }
+futures-util = "*"
+tower = "*"
+tower-http = { version = "*", features = ["cors", "fs"] }
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+oauth2 = "*"
+reqwest = { version = "*", features = ["json"] }
+jsonwebtoken = { version = "*", features = ["rust_crypto"] }
+chrono = { version = "*", features = ["serde"] }
+uuid = { version = "*", features = ["v4", "serde"] }
+tracing = "*"
+tracing-subscriber = "*"
+anyhow = "*"
+thiserror = "*"
+sqlx = { version = "*", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "migrate"] }
+dotenv = "*"
 
