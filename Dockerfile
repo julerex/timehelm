@@ -20,9 +20,12 @@ RUN cargo build --release
 FROM node:20 as frontend-builder
 
 WORKDIR /app
+# Copy package files
 COPY client/package.json client/package-lock.json* ./
 RUN npm install
+# Copy client source code and vite config
 COPY client ./
+COPY vite.config.js ./
 RUN npm run build
 
 # Runtime stage

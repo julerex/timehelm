@@ -1,7 +1,7 @@
 # Rust
 target/
-Cargo.lock
 **/*.rs.bk
+# Note: Cargo.lock should be committed for applications/binaries
 
 # Node
 node_modules/
