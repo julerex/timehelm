@@ -3,12 +3,13 @@ FROM rust:1.75 as rust-builder
 
 WORKDIR /app
 
-# Copy Cargo files
-COPY server/Cargo.toml ./
-# Copy Cargo.lock if it exists (optional - will be generated during build if missing)
+# Copy Cargo files for dependency caching
+COPY server/Cargo.toml ./server/
 RUN mkdir -p server/src && echo "fn main() {}" > server/src/main.rs
+# Build dependencies only (for caching)
+RUN cd server && cargo build --release || true
 
-# Copy source code
+# Copy source code (this will overwrite the dummy main.rs)
 COPY server ./server
 
 # Build the application
