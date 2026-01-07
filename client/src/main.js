@@ -22,8 +22,7 @@ function init() {
         avatar_url: null,
     };
     
-    // Hide login screen, show HUD
-    document.getElementById('login-screen').style.display = 'none';
+    // Show HUD
     document.getElementById('hud').classList.add('visible');
     
     // Start game immediately
