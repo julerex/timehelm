@@ -1,8 +1,5 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
-use serde_json;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::game::GameMessage;
 use crate::AppState;
@@ -12,7 +9,7 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
     let mut player_id: Option<String> = None;
 
     // Handle incoming messages
-    let mut rx = tokio::spawn(async move {
+    let rx = tokio::spawn(async move {
         while let Some(msg) = receiver.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
@@ -23,13 +20,14 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
                             let mut game = state.game.write().await;
                             game.add_player(player.clone());
 
-                                // Broadcast join to all players
-                                let all_players = game.get_all_players();
-                                let world_state = GameMessage::WorldState {
-                                    players: all_players,
-                                };
-                                tracing::debug!("Player {} joined, total players: {}", player.id, all_players.len());
-                            let world_json = serde_json::to_string(&world_state).unwrap();
+                            // Broadcast join to all players
+                            let all_players = game.get_all_players();
+                            let player_count = all_players.len();
+                            let world_state = GameMessage::WorldState {
+                                players: all_players,
+                            };
+                            tracing::debug!("Player {} joined, total players: {}", player.id, player_count);
+                            let _world_json = serde_json::to_string(&world_state).unwrap();
                             // In a real implementation, broadcast to all connected clients
                         }
                         Ok(GameMessage::Move {
@@ -46,7 +44,7 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
                                 position: position.clone(),
                                 rotation,
                             };
-                            let move_json = serde_json::to_string(&move_msg).unwrap();
+                            let _move_json = serde_json::to_string(&move_msg).unwrap();
                             // In a real implementation, broadcast to all connected clients
                         }
                         Err(e) => {
