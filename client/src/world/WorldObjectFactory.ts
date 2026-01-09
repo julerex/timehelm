@@ -378,12 +378,16 @@ class HouseBuilder {
         const door = new THREE.Mesh(doorGeometry, this.doorMaterial);
         door.position.set(200, this.foundationHeight + this.doorHeight / 2, this.depth / 2);
         door.castShadow = true;
+        door.userData.occlusionType = 'door';
+        door.userData.floorLevel = 1;
         this.group.add(door);
 
         // Door frame
         const frameGeometry = new THREE.BoxGeometry(this.doorWidth + 20, this.doorHeight + 20, this.wallThickness + 2);
         const doorFrame = new THREE.Mesh(frameGeometry, this.frameMaterial);
         doorFrame.position.set(200, this.foundationHeight + this.doorHeight / 2 + 5, this.depth / 2 - 2);
+        doorFrame.userData.occlusionType = 'door';
+        doorFrame.userData.floorLevel = 1;
         this.group.add(doorFrame);
 
         // Door handle
@@ -391,6 +395,8 @@ class HouseBuilder {
         const handleMaterial = new THREE.MeshStandardMaterial({ color: 0xffd700 });
         const handle = new THREE.Mesh(handleGeometry, handleMaterial);
         handle.position.set(200 + 35, this.foundationHeight + this.doorHeight / 2, this.depth / 2 + 10);
+        handle.userData.occlusionType = 'door';
+        handle.userData.floorLevel = 1;
         this.group.add(handle);
     }
 
@@ -400,12 +406,16 @@ class HouseBuilder {
         const door = new THREE.Mesh(doorGeometry, this.doorMaterial);
         door.position.set(-300, this.foundationHeight + this.doorHeight / 2, -this.depth / 2);
         door.castShadow = true;
+        door.userData.occlusionType = 'door';
+        door.userData.floorLevel = 1;
         this.group.add(door);
 
         // Door frame
         const frameGeometry = new THREE.BoxGeometry(this.doorWidth + 20, this.doorHeight + 20, this.wallThickness + 2);
         const doorFrame = new THREE.Mesh(frameGeometry, this.frameMaterial);
         doorFrame.position.set(-300, this.foundationHeight + this.doorHeight / 2 + 5, -this.depth / 2 + 2);
+        doorFrame.userData.occlusionType = 'door';
+        doorFrame.userData.floorLevel = 1;
         this.group.add(doorFrame);
     }
 
@@ -421,10 +431,14 @@ class HouseBuilder {
         const bathroomDoor = new THREE.Mesh(interiorDoorGeometry, this.doorMaterial);
         bathroomDoor.position.set(this.width / 2 - 250 - 40, bathroomDoorY, -this.depth / 2 + 200);
         bathroomDoor.castShadow = true;
+        bathroomDoor.userData.occlusionType = 'door';
+        bathroomDoor.userData.floorLevel = 1;
         this.group.add(bathroomDoor);
 
         const bathroomFrame = new THREE.Mesh(interiorFrameGeometry, this.frameMaterial);
         bathroomFrame.position.set(this.width / 2 - 250 - 40, bathroomDoorY + 5, -this.depth / 2 + 200 - 2);
+        bathroomFrame.userData.occlusionType = 'door';
+        bathroomFrame.userData.floorLevel = 1;
         this.group.add(bathroomFrame);
     }
 
@@ -566,6 +580,7 @@ class HouseBuilder {
         );
         roofLeft.castShadow = true;
         roofLeft.receiveShadow = true;
+        roofLeft.userData.occlusionType = 'roof';
         this.group.add(roofLeft);
 
         // Right roof slope
@@ -578,6 +593,7 @@ class HouseBuilder {
         );
         roofRight.castShadow = true;
         roofRight.receiveShadow = true;
+        roofRight.userData.occlusionType = 'roof';
         this.group.add(roofRight);
 
         // Gable ends
@@ -600,12 +616,14 @@ class HouseBuilder {
         gableFront.position.set(0, secondFloorY + this.floorHeight, this.depth / 2 - this.wallThickness / 2);
         gableFront.castShadow = true;
         gableFront.receiveShadow = true;
+        gableFront.userData.occlusionType = 'roof';
         this.group.add(gableFront);
 
         const gableBack = new THREE.Mesh(gableGeometry, this.wallMaterial);
         gableBack.position.set(0, secondFloorY + this.floorHeight, -this.depth / 2 - this.wallThickness / 2);
         gableBack.castShadow = true;
         gableBack.receiveShadow = true;
+        gableBack.userData.occlusionType = 'roof';
         this.group.add(gableBack);
     }
 
@@ -680,6 +698,7 @@ class HouseBuilder {
         porchRoof.position.set(200, this.foundationHeight + 260, this.depth / 2 + porchDepth / 2);
         porchRoof.castShadow = true;
         porchRoof.receiveShadow = true;
+        porchRoof.userData.occlusionType = 'roof';
         this.group.add(porchRoof);
     }
 }

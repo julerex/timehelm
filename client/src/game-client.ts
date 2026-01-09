@@ -322,11 +322,18 @@ export class GameClient {
     /**
      * Sets opacity for objects based on height threshold.
      * Objects above the threshold become semi-transparent.
+     * Doors and roof elements are made transparent along with walls at the same floor level.
      * @param heightThreshold - Height in cm above which objects become transparent. null = fully opaque.
      */
     private setHeightOpacity(heightThreshold: number | null): void {
         const hiddenOpacity = 0.15;
         const visibleOpacity = 1.0;
+
+        // Floor height constants (matching WorldObjectFactory)
+        const foundationHeight = 40;
+        const floorHeight = 270;
+        const floor1Top = foundationHeight + floorHeight;       // 310cm
+        const floor2Top = foundationHeight + floorHeight * 2;   // 580cm
 
         for (const obj of this.worldObjects) {
             obj.traverse((child) => {
@@ -335,12 +342,27 @@ export class GameClient {
                     const worldPos = new THREE.Vector3();
                     child.getWorldPosition(worldPos);
 
-                    // Determine target opacity
+                    // Determine target opacity based on type
                     let targetOpacity: number;
                     if (heightThreshold === null) {
                         targetOpacity = visibleOpacity;
                     } else {
-                        targetOpacity = worldPos.y > heightThreshold ? hiddenOpacity : visibleOpacity;
+                        const occlusionType = child.userData.occlusionType as string | undefined;
+                        const floorLevel = child.userData.floorLevel as number | undefined;
+
+                        if (occlusionType === 'door' && floorLevel !== undefined) {
+                            // Doors become transparent when their floor's walls would be transparent
+                            // Floor 1 doors: transparent when threshold < floor1Top (310cm)
+                            // Floor 2 doors: transparent when threshold < floor2Top (580cm)
+                            const floorTop = floorLevel === 1 ? floor1Top : floor2Top;
+                            targetOpacity = heightThreshold < floorTop ? hiddenOpacity : visibleOpacity;
+                        } else if (occlusionType === 'roof') {
+                            // Roof becomes transparent when threshold < floor2Top (when looking at 2nd floor)
+                            targetOpacity = heightThreshold < floor2Top ? hiddenOpacity : visibleOpacity;
+                        } else {
+                            // Default height-based check for walls and other objects
+                            targetOpacity = worldPos.y > heightThreshold ? hiddenOpacity : visibleOpacity;
+                        }
                     }
 
                     // Update material opacity
