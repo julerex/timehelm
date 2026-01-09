@@ -106,7 +106,8 @@ export class Player {
 
     public updateAnimation(deltaTime: number = 1): void {
         if (this._isMoving) {
-            this._walkCycle += 0.15 * deltaTime;
+            // Walk cycle speed scaled for 60x game time (1.5 = 0.15 * 10)
+            this._walkCycle += 1.5 * deltaTime;
             const swing = Math.sin(this._walkCycle) * 0.6;
 
             // Animate legs

@@ -33,9 +33,10 @@ export class GameClient {
     private players: Map<string, Player> = new Map();
     private myPlayer: Player | null = null;
 
-    // Movement configuration
-    private readonly moveSpeed = 10;
-    private readonly rotationSpeed = 0.02;
+    // Movement configuration (scaled for 60x game time)
+    // 6000 units/game minute = 100 units/frame at 60 FPS
+    private readonly moveSpeed = 100;
+    private readonly rotationSpeed = 0.2;
 
     // Random movement state
     private randomMoveTimer = 0;
