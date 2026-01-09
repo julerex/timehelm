@@ -18,6 +18,10 @@ export class GameClient {
         this.cameraDistance = 10;
         this.isRightMouseDown = false;
         this.lastMousePos = { x: 0, y: 0 };
+        
+        // Random movement state
+        this.randomMoveTimer = 0;
+        this.randomMoveAction = 'idle'; // 'idle', 'forward', 'left', 'right'
     }
 
     init() {
@@ -339,19 +343,22 @@ export class GameClient {
         let moved = false;
         let newRotation = this.myPlayer.rotation;
 
-        if (this.keys['w'] || this.keys['arrowup']) {
+        // Random movement logic
+        this.randomMoveTimer -= 1;
+        if (this.randomMoveTimer <= 0) {
+            // Pick a new random action
+            const actions = ['idle', 'forward', 'left', 'right'];
+            this.randomMoveAction = actions[Math.floor(Math.random() * actions.length)];
+            this.randomMoveTimer = Math.floor(Math.random() * 60) + 30; // 0.5 to 1.5 seconds at 60fps
+        }
+
+        if (this.randomMoveAction === 'forward') {
             this.myPlayer.mesh.translateZ(-this.moveSpeed);
             moved = true;
-        }
-        if (this.keys['s'] || this.keys['arrowdown']) {
-            this.myPlayer.mesh.translateZ(this.moveSpeed);
-            moved = true;
-        }
-        if (this.keys['a'] || this.keys['arrowleft']) {
+        } else if (this.randomMoveAction === 'left') {
             newRotation += this.rotationSpeed;
             moved = true;
-        }
-        if (this.keys['d'] || this.keys['arrowright']) {
+        } else if (this.randomMoveAction === 'right') {
             newRotation -= this.rotationSpeed;
             moved = true;
         }
@@ -384,6 +391,14 @@ export class GameClient {
 
     updateCamera() {
         if (!this.myPlayer) return;
+
+        // Handle arrow keys for horizontal camera rotation
+        if (this.keys['arrowleft']) {
+            this.cameraRotation.theta += 0.02;
+        }
+        if (this.keys['arrowright']) {
+            this.cameraRotation.theta -= 0.02;
+        }
 
         // Calculate camera position relative to player
         // theta: horizontal rotation, phi: vertical rotation
