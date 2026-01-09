@@ -60,7 +60,6 @@ export class Player {
 
     private _position: Position = { x: 0, y: 0, z: 0 };
     private _rotation: number = 0;
-    private _walkCycle: number = 0;
     private _isMoving: boolean = false;
     private _lastPosition: Position | null = null;
     private _activity: Activity = 'idle';
@@ -157,38 +156,8 @@ export class Player {
         this.mesh.rotation.y = this._rotation;
     }
 
-    public updateAnimation(deltaTime: number = 1): void {
-        if (this._isMoving) {
-            // Walk cycle speed scaled for 60x game time (1.5 = 0.15 * 10)
-            this._walkCycle += 1.5 * deltaTime;
-            const swing = Math.sin(this._walkCycle) * 0.6;
-
-            // Animate legs
-            this.leftLeg.rotation.x = swing;
-            this.rightLeg.rotation.x = -swing;
-
-            // Animate arms (opposite to legs)
-            this.leftArm.rotation.x = -swing;
-            this.rightArm.rotation.x = swing;
-
-            // Slight body bob
-            const torso = this.mesh.children[0] as THREE.Mesh;
-            if (torso) {
-                torso.position.y = 110 + Math.abs(Math.cos(this._walkCycle)) * 5;
-            }
-        } else {
-            // Reset to idle pose
-            this._walkCycle = 0;
-            this.leftLeg.rotation.x = THREE.MathUtils.lerp(this.leftLeg.rotation.x, 0, 0.2);
-            this.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rightLeg.rotation.x, 0, 0.2);
-            this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, 0, 0.2);
-            this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, 0, 0.2);
-
-            const torso = this.mesh.children[0] as THREE.Mesh;
-            if (torso) {
-                torso.position.y = THREE.MathUtils.lerp(torso.position.y, 110, 0.2);
-            }
-        }
+    public updateAnimation(_deltaTime: number = 1): void {
+        // No walking animation - character stays in static pose
     }
 
     public detectMovementFromPosition(): void {

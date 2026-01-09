@@ -11,7 +11,7 @@ export class CameraController {
     private readonly camera: THREE.PerspectiveCamera;
     private rotation: CameraRotation = { theta: 0, phi: 0.5 };
     private distance: number = 1000;
-    private anchored: boolean = true;
+    private anchored: boolean = false;
     private focusPoint: THREE.Vector3 | null = null;
 
     // Configuration
