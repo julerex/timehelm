@@ -12,6 +12,12 @@ export class GameClient {
         this.keys = {};
         this.moveSpeed = 0.1;
         this.rotationSpeed = 0.02;
+
+        // Camera rotation state
+        this.cameraRotation = { theta: 0, phi: 0.5 }; // theta: horizontal, phi: vertical
+        this.cameraDistance = 10;
+        this.isRightMouseDown = false;
+        this.lastMousePos = { x: 0, y: 0 };
     }
 
     init() {
@@ -155,6 +161,46 @@ export class GameClient {
 
         document.addEventListener('keyup', (e) => {
             this.keys[e.key.toLowerCase()] = false;
+        });
+
+        // Mouse controls for camera
+        document.addEventListener('mousedown', (e) => {
+            if (e.button === 2) { // Right click
+                this.isRightMouseDown = true;
+                this.lastMousePos = { x: e.clientX, y: e.clientY };
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (this.isRightMouseDown) {
+                const deltaX = e.clientX - this.lastMousePos.x;
+                const deltaY = e.clientY - this.lastMousePos.y;
+
+                this.cameraRotation.theta -= deltaX * 0.01;
+                this.cameraRotation.phi += deltaY * 0.01;
+
+                // Clamp vertical rotation
+                this.cameraRotation.phi = Math.max(0.1, Math.min(Math.PI / 2 - 0.1, this.cameraRotation.phi));
+
+                this.lastMousePos = { x: e.clientX, y: e.clientY };
+            }
+        });
+
+        document.addEventListener('mouseup', (e) => {
+            if (e.button === 2) {
+                this.isRightMouseDown = false;
+            }
+        });
+
+        // Zoom control
+        document.addEventListener('wheel', (e) => {
+            this.cameraDistance += e.deltaY * 0.01;
+            this.cameraDistance = Math.max(2, Math.min(50, this.cameraDistance));
+        });
+
+        // Prevent context menu on right click
+        document.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
         });
     }
 
@@ -314,16 +360,6 @@ export class GameClient {
             this.myPlayer.rotation = newRotation;
             this.myPlayer.mesh.rotation.y = newRotation;
 
-            // Update camera to follow player
-            const offset = new THREE.Vector3(0, 5, 10);
-            offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), newRotation);
-            this.camera.position.set(
-                this.myPlayer.mesh.position.x + offset.x,
-                this.myPlayer.mesh.position.y + offset.y,
-                this.myPlayer.mesh.position.z + offset.z
-            );
-            this.camera.lookAt(this.myPlayer.mesh.position);
-
             // Send movement update
             this.sendMessage({
                 type: 'Move',
@@ -342,7 +378,34 @@ export class GameClient {
         requestAnimationFrame(() => this.animate());
         this.updateTime();
         this.updateMovement();
+        this.updateCamera();
         this.renderer.render(this.scene, this.camera);
+    }
+
+    updateCamera() {
+        if (!this.myPlayer) return;
+
+        // Calculate camera position relative to player
+        // theta: horizontal rotation, phi: vertical rotation
+        const relativeTheta = this.myPlayer.rotation + this.cameraRotation.theta;
+        
+        const x = Math.sin(relativeTheta) * Math.cos(this.cameraRotation.phi) * this.cameraDistance;
+        const y = Math.sin(this.cameraRotation.phi) * this.cameraDistance;
+        const z = Math.cos(relativeTheta) * Math.cos(this.cameraRotation.phi) * this.cameraDistance;
+
+        this.camera.position.set(
+            this.myPlayer.mesh.position.x + x,
+            this.myPlayer.mesh.position.y + y,
+            this.myPlayer.mesh.position.z + z
+        );
+        
+        // Look slightly above the player's feet (at the head area)
+        const target = new THREE.Vector3(
+            this.myPlayer.mesh.position.x,
+            this.myPlayer.mesh.position.y + 1.5,
+            this.myPlayer.mesh.position.z
+        );
+        this.camera.lookAt(target);
     }
 
     updateTime() {
