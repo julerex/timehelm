@@ -16,6 +16,8 @@ export class GameClient {
         // Camera rotation state
         this.cameraRotation = { theta: 0, phi: 0.5 }; // theta: horizontal, phi: vertical
         this.cameraDistance = 10;
+        this.cameraAnchored = true;
+        this.cameraFocusPoint = null;
         this.isRightMouseDown = false;
         this.lastMousePos = { x: 0, y: 0 };
         
@@ -195,7 +197,18 @@ export class GameClient {
 
     setupControls() {
         document.addEventListener('keydown', (e) => {
-            this.keys[e.key.toLowerCase()] = true;
+            const key = e.key.toLowerCase();
+            this.keys[key] = true;
+
+            // Toggle camera anchor
+            if (key === 'c') {
+                this.cameraAnchored = !this.cameraAnchored;
+                console.log('Camera anchored:', this.cameraAnchored);
+                const cameraStatus = document.getElementById('camera-status');
+                if (cameraStatus) {
+                    cameraStatus.textContent = `Camera: ${this.cameraAnchored ? 'Anchored' : 'Free'} (Press 'C' to toggle)`;
+                }
+            }
         });
 
         document.addEventListener('keyup', (e) => {
@@ -486,25 +499,66 @@ export class GameClient {
             this.cameraRotation.theta -= 0.02;
         }
 
-        // Calculate camera position relative to player
-        // theta: horizontal rotation, phi: vertical rotation
-        const relativeTheta = this.myPlayer.rotation + this.cameraRotation.theta;
+        let targetX, targetY, targetZ;
+        let baseRotation = 0;
+
+        if (this.cameraAnchored) {
+            targetX = this.myPlayer.mesh.position.x;
+            targetY = this.myPlayer.mesh.position.y;
+            targetZ = this.myPlayer.mesh.position.z;
+            baseRotation = this.myPlayer.rotation;
+            this.cameraFocusPoint = null; // Reset when anchored
+        } else {
+            if (!this.cameraFocusPoint) {
+                this.cameraFocusPoint = new THREE.Vector3(
+                    this.myPlayer.mesh.position.x,
+                    this.myPlayer.mesh.position.y,
+                    this.myPlayer.mesh.position.z
+                );
+            }
+
+            // Move focus point with WASD when unanchored
+            const moveSpeed = 0.5;
+            if (this.keys['w']) {
+                this.cameraFocusPoint.z -= Math.cos(this.cameraRotation.theta) * moveSpeed;
+                this.cameraFocusPoint.x -= Math.sin(this.cameraRotation.theta) * moveSpeed;
+            }
+            if (this.keys['s']) {
+                this.cameraFocusPoint.z += Math.cos(this.cameraRotation.theta) * moveSpeed;
+                this.cameraFocusPoint.x += Math.sin(this.cameraRotation.theta) * moveSpeed;
+            }
+            if (this.keys['a']) {
+                this.cameraFocusPoint.x -= Math.cos(this.cameraRotation.theta) * moveSpeed;
+                this.cameraFocusPoint.z += Math.sin(this.cameraRotation.theta) * moveSpeed;
+            }
+            if (this.keys['d']) {
+                this.cameraFocusPoint.x += Math.cos(this.cameraRotation.theta) * moveSpeed;
+                this.cameraFocusPoint.z -= Math.sin(this.cameraRotation.theta) * moveSpeed;
+            }
+
+            targetX = this.cameraFocusPoint.x;
+            targetY = this.cameraFocusPoint.y;
+            targetZ = this.cameraFocusPoint.z;
+            baseRotation = 0; // Don't use player rotation when unanchored
+        }
+
+        const relativeTheta = baseRotation + this.cameraRotation.theta;
         
         const x = Math.sin(relativeTheta) * Math.cos(this.cameraRotation.phi) * this.cameraDistance;
         const y = Math.sin(this.cameraRotation.phi) * this.cameraDistance;
         const z = Math.cos(relativeTheta) * Math.cos(this.cameraRotation.phi) * this.cameraDistance;
 
         this.camera.position.set(
-            this.myPlayer.mesh.position.x + x,
-            this.myPlayer.mesh.position.y + y,
-            this.myPlayer.mesh.position.z + z
+            targetX + x,
+            targetY + y,
+            targetZ + z
         );
         
-        // Look slightly above the player's feet (at the head area)
+        // Look at the target point
         const target = new THREE.Vector3(
-            this.myPlayer.mesh.position.x,
-            this.myPlayer.mesh.position.y + 1.5,
-            this.myPlayer.mesh.position.z
+            targetX,
+            targetY + 1.5,
+            targetZ
         );
         this.camera.lookAt(target);
     }
