@@ -43,13 +43,34 @@ export class GameClient {
         document.getElementById('game-container').appendChild(this.renderer.domElement);
 
         // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        this.scene.add(ambientLight);
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        this.scene.add(this.ambientLight);
 
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(10, 10, 5);
-        directionalLight.castShadow = true;
-        this.scene.add(directionalLight);
+        this.sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        this.sunLight.position.set(0, 100, 0);
+        this.sunLight.castShadow = true;
+        
+        // Optimize shadows for sun
+        this.sunLight.shadow.camera.left = -50;
+        this.sunLight.shadow.camera.right = 50;
+        this.sunLight.shadow.camera.top = 50;
+        this.sunLight.shadow.camera.bottom = -50;
+        this.sunLight.shadow.mapSize.width = 2048;
+        this.sunLight.shadow.mapSize.height = 2048;
+        
+        this.scene.add(this.sunLight);
+
+        // Sun Mesh
+        const sunGeometry = new THREE.SphereGeometry(2, 32, 32);
+        const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+        this.sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
+        this.scene.add(this.sunMesh);
+
+        // Moon Mesh
+        const moonGeometry = new THREE.SphereGeometry(1.5, 32, 32);
+        const moonMaterial = new THREE.MeshBasicMaterial({ color: 0xcccccc });
+        this.moonMesh = new THREE.Mesh(moonGeometry, moonMaterial);
+        this.scene.add(this.moonMesh);
 
         // Ground
         const groundGeometry = new THREE.PlaneGeometry(100, 100);
@@ -319,8 +340,67 @@ export class GameClient {
 
     animate() {
         requestAnimationFrame(() => this.animate());
+        this.updateTime();
         this.updateMovement();
         this.renderer.render(this.scene, this.camera);
+    }
+
+    updateTime() {
+        // 24 hours game time = 24 minutes real time
+        // 1 hour game time = 1 minute real time
+        const now = new Date();
+        const minutes = now.getMinutes();
+        const seconds = now.getSeconds();
+        const ms = now.getMilliseconds();
+        
+        // This will give us 0-23.999... cycle every 24 minutes
+        const totalRealMinutes = now.getHours() * 60 + now.getMinutes();
+        const gameTime = (totalRealMinutes % 24) + (seconds / 60) + (ms / 60000);
+        this.gameTime = gameTime;
+
+        // Update time display
+        const displayHours = Math.floor(gameTime);
+        const displayMinutes = Math.floor((gameTime % 1) * 60);
+        const timeString = `${displayHours.toString().padStart(2, '0')}:${displayMinutes.toString().padStart(2, '0')}`;
+        const timeDisplay = document.getElementById('game-time-display');
+        if (timeDisplay) {
+            timeDisplay.textContent = timeString;
+        }
+
+        // Calculate sun position (rotation around X axis)
+        // 0h: midnight, 6h: sunrise, 12h: noon, 18h: sunset
+        const angle = (gameTime / 24) * Math.PI * 2 - Math.PI / 2;
+        const radius = 50;
+        
+        const sunX = 0;
+        const sunY = Math.sin(angle) * radius;
+        const sunZ = Math.cos(angle) * radius;
+
+        this.sunMesh.position.set(sunX, sunY, sunZ);
+        this.sunLight.position.set(sunX, sunY, sunZ);
+
+        // Update moon position (opposite to sun)
+        this.moonMesh.position.set(-sunX, -sunY, -sunZ);
+
+        // Adjust intensity and background color
+        const sunUp = sunY > 0;
+        const intensity = sunUp ? Math.max(0, Math.sin(angle)) : 0;
+        
+        this.sunLight.intensity = intensity;
+        this.ambientLight.intensity = 0.1 + intensity * 0.3;
+
+        // Sky color
+        if (sunUp) {
+            // Day sky: light blue
+            const dayColor = new THREE.Color(0x87CEEB);
+            const sunsetColor = new THREE.Color(0xFF4500);
+            const skyColor = dayColor.clone().lerp(sunsetColor, 1 - intensity);
+            this.scene.background = skyColor;
+        } else {
+            // Night sky: dark blue/black
+            const nightColor = new THREE.Color(0x000022);
+            this.scene.background = nightColor;
+        }
     }
 }
 
