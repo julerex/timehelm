@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { Tree, TreePreset } from '@dgreenheck/ez-tree';
+
+// Available tree presets from ez-tree
+export type TreePresetName = keyof typeof TreePreset;
 
 export class WorldObjectFactory {
     // --- Public Static Methods ---
@@ -12,7 +16,51 @@ export class WorldObjectFactory {
         return ground;
     }
 
-    public static createTree(x: number, z: number): THREE.Group {
+    /**
+     * Creates a procedurally generated tree using ez-tree
+     * @param x - X position
+     * @param z - Z position
+     * @param seed - Optional seed for reproducible tree generation
+     * @param preset - Optional preset type (defaults to 'Oak')
+     */
+    public static createTree(
+        x: number,
+        z: number,
+        seed?: number,
+        preset: TreePresetName = 'Oak Medium'
+    ): THREE.Group {
+        const tree = new Tree();
+
+        // Apply preset for base tree type
+        tree.loadPreset(TreePreset[preset]);
+
+        // Set seed for reproducibility (use position-based seed if not provided)
+        tree.options.seed = seed ?? Math.abs(x * 10000 + z);
+
+        // Scale the tree to match game units (1 unit = 1 cm)
+        // Default ez-tree is in meters, so multiply by 100 to convert to cm
+        const scaleFactor = 100;
+
+        // Generate the tree geometry
+        tree.generate();
+
+        // Apply scaling and enable shadows
+        tree.scale.set(scaleFactor, scaleFactor, scaleFactor);
+        tree.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+            }
+        });
+
+        tree.position.set(x, 0, z);
+        return tree;
+    }
+
+    /**
+     * Creates a simple box-based tree (fallback/low-poly version)
+     */
+    public static createSimpleTree(x: number, z: number): THREE.Group {
         const group = new THREE.Group();
 
         // Trunk (brown)
