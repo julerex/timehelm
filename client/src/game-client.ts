@@ -255,7 +255,8 @@ export class GameClient {
         // Random movement logic
         this.randomMoveTimer -= 1;
         if (this.randomMoveTimer <= 0) {
-            const actions: RandomMoveAction[] = ['idle', 'forward', 'left', 'right'];
+            // Weighted towards forward movement: 50% forward, 17% idle, 17% left, 17% right
+            const actions: RandomMoveAction[] = ['idle', 'forward', 'forward', 'forward', 'left', 'right'];
             this.randomMoveAction = actions[Math.floor(Math.random() * actions.length)];
             this.randomMoveTimer = Math.floor(Math.random() * 60) + 30;
         }

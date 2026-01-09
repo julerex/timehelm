@@ -68,11 +68,11 @@ export class CameraController {
     public update(player: Player | null, input: InputManager): void {
         if (!player) return;
 
-        // Handle arrow keys for horizontal camera rotation
-        if (input.isKeyPressed('arrowleft')) {
+        // Handle arrow keys and Q/E for horizontal camera rotation
+        if (input.isKeyPressed('arrowleft') || input.isKeyPressed('q')) {
             this.rotation.theta += this.rotationSpeed;
         }
-        if (input.isKeyPressed('arrowright')) {
+        if (input.isKeyPressed('arrowright') || input.isKeyPressed('e')) {
             this.rotation.theta -= this.rotationSpeed;
         }
 
