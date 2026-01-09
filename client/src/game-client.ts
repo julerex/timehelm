@@ -34,6 +34,9 @@ export class GameClient {
     private players: Map<string, Player> = new Map();
     private myPlayer: Player | null = null;
 
+    // World objects (for height-based opacity filtering)
+    private worldObjects: THREE.Object3D[] = [];
+
     // Movement configuration (scaled for 60x game time)
     // 6000 units/game minute = 100 units/frame at 60 FPS
     private readonly moveSpeed = 100;
@@ -90,9 +93,11 @@ export class GameClient {
         // World objects
         const tree = WorldObjectFactory.createTree(500, -500);
         this.scene.add(tree);
+        this.worldObjects.push(tree);
 
         const house = WorldObjectFactory.createHouse(-600, -400);
         this.scene.add(house);
+        this.worldObjects.push(house);
 
         // Handle window resize
         window.addEventListener('resize', this.handleResize);
@@ -101,11 +106,20 @@ export class GameClient {
     private setupInput(): void {
         this.inputManager = new InputManager();
 
-        // Camera toggle
+        // Camera toggle and height visibility
         this.inputManager.onKeyPress((key) => {
             if (key === 'c') {
                 this.cameraController?.toggleAnchor();
                 this.updateCameraStatusDisplay();
+            }
+
+            // Height-based opacity: 1-9 hide above (n * 3m), 0 resets
+            if (key >= '1' && key <= '9') {
+                const level = parseInt(key, 10);
+                const heightThreshold = level * 300; // 300cm = 3m per level
+                this.setHeightOpacity(heightThreshold);
+            } else if (key === '0') {
+                this.setHeightOpacity(null); // Reset to fully opaque
             }
         });
 
@@ -277,6 +291,41 @@ export class GameClient {
         if (cameraStatus && this.cameraController) {
             const status = this.cameraController.isAnchored() ? 'Anchored' : 'Free';
             cameraStatus.textContent = `Camera: ${status} (Press 'C' to toggle)`;
+        }
+    }
+
+    // --- Height-Based Visibility ---
+
+    /**
+     * Sets opacity for objects based on height threshold.
+     * Objects above the threshold become semi-transparent.
+     * @param heightThreshold - Height in cm above which objects become transparent. null = fully opaque.
+     */
+    private setHeightOpacity(heightThreshold: number | null): void {
+        const hiddenOpacity = 0.15;
+        const visibleOpacity = 1.0;
+
+        for (const obj of this.worldObjects) {
+            obj.traverse((child) => {
+                if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
+                    // Get world position of the mesh
+                    const worldPos = new THREE.Vector3();
+                    child.getWorldPosition(worldPos);
+
+                    // Determine target opacity
+                    let targetOpacity: number;
+                    if (heightThreshold === null) {
+                        targetOpacity = visibleOpacity;
+                    } else {
+                        targetOpacity = worldPos.y > heightThreshold ? hiddenOpacity : visibleOpacity;
+                    }
+
+                    // Update material opacity
+                    child.material.transparent = true;
+                    child.material.opacity = targetOpacity;
+                    child.material.needsUpdate = true;
+                }
+            });
         }
     }
 
