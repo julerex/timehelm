@@ -10,10 +10,7 @@ pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
 
     // Run migrations
     // Note: sqlx::migrate! path is relative to where Cargo.toml is located
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
     Ok(pool)
 }
-

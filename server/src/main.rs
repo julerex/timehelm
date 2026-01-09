@@ -4,19 +4,24 @@ use axum::{
     routing::get,
     Router,
 };
+use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
+// mod auth;  // Commented out - users/sessions tables not in use
+mod db;
 mod game;
 mod websocket;
 
+use db::create_pool;
 use game::GameState;
 use websocket::handle_websocket;
 
 #[derive(Clone)]
-struct AppState {
-    game: Arc<RwLock<GameState>>,
+pub struct AppState {
+    pub game: Arc<RwLock<GameState>>,
+    pub db: PgPool,
 }
 
 #[tokio::main]
@@ -24,12 +29,24 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     tracing_subscriber::fmt::init();
 
+    // Connect to database
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = create_pool(&database_url).await?;
+    tracing::info!("Connected to database");
+
     let game_state = Arc::new(RwLock::new(GameState::new()));
 
-    let app_state = AppState { game: game_state };
+    let app_state = AppState {
+        game: game_state,
+        db: pool,
+    };
 
     let app = Router::new()
         .route("/ws", get(websocket_handler))
+        // Auth routes commented out - users/sessions tables not in use
+        // .route("/auth/twitter", get(auth::twitter_login))
+        // .route("/auth/twitter/callback", get(auth::twitter_callback))
+        // .route("/api/me", get(auth::get_current_user))
         .fallback_service(ServeDir::new("client/dist").append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
         .with_state(app_state);
