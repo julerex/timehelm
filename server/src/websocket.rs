@@ -1,7 +1,9 @@
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
 
+use crate::db::get_game_time_minutes;
 use crate::game::GameMessage;
 use crate::AppState;
 
@@ -9,8 +11,45 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let mut player_id: Option<String> = None;
 
+    // Create channel for sending messages to this client
+    let (tx, mut rx) = mpsc::channel::<String>(32);
+
+    // Send initial time sync
+    if let Ok(game_time) = get_game_time_minutes(&state.db).await {
+        let time_sync = GameMessage::TimeSync {
+            game_time_minutes: game_time,
+        };
+        if let Ok(json) = serde_json::to_string(&time_sync) {
+            let _ = tx.send(json).await;
+        }
+    }
+
+    // Spawn task to forward messages to websocket and handle pings
+    let sender_task = tokio::spawn(async move {
+        let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        Some(text) => {
+                            if sender.send(Message::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                _ = ping_interval.tick() => {
+                    if sender.send(Message::Ping(Bytes::new())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
     // Handle incoming messages
-    let rx = tokio::spawn(async move {
+    let rx_task = tokio::spawn(async move {
         while let Some(msg) = receiver.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
@@ -98,15 +137,9 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
         }
     });
 
-    // Keep connection alive
-    drop(tokio::spawn(async move {
-        loop {
-            if sender.send(Message::Ping(Bytes::new())).await.is_err() {
-                break;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-        }
-    }));
-
-    rx.await.ok();
+    // Wait for either task to complete
+    tokio::select! {
+        _ = sender_task => {}
+        _ = rx_task => {}
+    }
 }

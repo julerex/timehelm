@@ -148,7 +148,8 @@ export class GameClient {
             onPlayerJoin: this.handlePlayerJoin.bind(this),
             onPlayerLeave: this.handlePlayerLeave.bind(this),
             onPlayerMove: this.handlePlayerMove.bind(this),
-            onActivityChanged: this.handleActivityChanged.bind(this)
+            onActivityChanged: this.handleActivityChanged.bind(this),
+            onTimeSync: this.handleTimeSync.bind(this)
         };
 
         this.networkManager = new NetworkManager(handlers);
@@ -214,6 +215,10 @@ export class GameClient {
         if (player) {
             player.activity = activity;
         }
+    }
+
+    private handleTimeSync(gameTimeMinutes: number): void {
+        this.dayNightCycle?.syncTime(gameTimeMinutes);
     }
 
     // --- Player Management ---

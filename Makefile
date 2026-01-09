@@ -1,4 +1,4 @@
-.PHONY: dev build deploy install lint lint-client lint-server
+.PHONY: dev build deploy install lint lint-client lint-server fmt
 
 install:
 	npm install
@@ -14,6 +14,9 @@ lint-client:
 lint-server:
 	cd server && cargo fmt --check
 	cd server && cargo clippy -- -D warnings
+
+fmt:
+	cd server && cargo fmt
 
 dev-server:
 	cd server && cargo run

@@ -113,4 +113,8 @@ pub enum GameMessage {
     WorldState {
         players: Vec<Player>,
     },
+    /// Server -> Client: Sync game time (in game minutes, where 0 = midnight)
+    TimeSync {
+        game_time_minutes: i64,
+    },
 }

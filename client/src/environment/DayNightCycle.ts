@@ -13,6 +13,12 @@ export class DayNightCycle {
     private readonly sunsetColor = new THREE.Color(0xff4500);
     private readonly nightColor = new THREE.Color(0x000022);
 
+    // Server-synced time tracking
+    // Game time advances at 1 game minute per real second (60x speed)
+    private syncedGameTimeMinutes: number = 0;
+    private syncRealTime: number = Date.now();
+    private hasSynced: boolean = false;
+
     constructor(scene: THREE.Scene) {
         this.scene = scene;
 
@@ -48,6 +54,23 @@ export class DayNightCycle {
         return this.calculateGameTime();
     }
 
+    /**
+     * Sync game time from server. Game time is in minutes where 0 = midnight.
+     * After sync, time advances at 1 game minute per real second.
+     */
+    public syncTime(gameTimeMinutes: number): void {
+        this.syncedGameTimeMinutes = gameTimeMinutes;
+        this.syncRealTime = Date.now();
+        this.hasSynced = true;
+        console.log(`Time synced: ${gameTimeMinutes} game minutes (${this.formatTime(gameTimeMinutes)})`);
+    }
+
+    private formatTime(gameMinutes: number): string {
+        const hours = Math.floor(gameMinutes / 60) % 24;
+        const minutes = Math.floor(gameMinutes) % 60;
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    }
+
     // --- Private Methods ---
 
     private createSunLight(): THREE.DirectionalLight {
@@ -79,15 +102,22 @@ export class DayNightCycle {
     }
 
     private calculateGameTime(): number {
-        // 24 hours game time = 24 minutes real time
-        // 1 hour game time = 1 minute real time
-        const now = new Date();
-        const seconds = now.getSeconds();
-        const ms = now.getMilliseconds();
+        if (!this.hasSynced) {
+            // Fallback: show 00:00 until server sync
+            return 0;
+        }
 
-        // This will give us 0-23.999... cycle every 24 minutes
-        const totalRealMinutes = now.getHours() * 60 + now.getMinutes();
-        return (totalRealMinutes % 24) + seconds / 60 + ms / 60000;
+        // Calculate elapsed real time since sync (in milliseconds)
+        const elapsedRealMs = Date.now() - this.syncRealTime;
+        
+        // 1 game minute = 1 real second, so elapsed game minutes = elapsed real seconds
+        const elapsedGameMinutes = elapsedRealMs / 1000;
+        
+        // Total game minutes since midnight (wraps at 24 hours = 1440 minutes)
+        const totalGameMinutes = (this.syncedGameTimeMinutes + elapsedGameMinutes) % 1440;
+        
+        // Convert to hours (0-23.999...) for compatibility with existing code
+        return totalGameMinutes / 60;
     }
 
     private updateTimeDisplay(gameTime: number): void {

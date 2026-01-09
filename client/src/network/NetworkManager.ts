@@ -6,7 +6,8 @@ export type WebSocketMessage =
     | { type: 'Move'; player_id: string; position: Position; rotation: number; is_moving: boolean }
     | { type: 'SetActivity'; player_id: string; activity: Activity }
     | { type: 'ActivityChanged'; player_id: string; activity: Activity }
-    | { type: 'WorldState'; players: PlayerData[] };
+    | { type: 'WorldState'; players: PlayerData[] }
+    | { type: 'TimeSync'; game_time_minutes: number };
 
 export interface NetworkEventHandlers {
     onWorldState: (players: PlayerData[]) => void;
@@ -14,6 +15,7 @@ export interface NetworkEventHandlers {
     onPlayerLeave: (playerId: string) => void;
     onPlayerMove: (playerId: string, position: Position, rotation: number, isMoving: boolean) => void;
     onActivityChanged: (playerId: string, activity: Activity) => void;
+    onTimeSync: (gameTimeMinutes: number) => void;
 }
 
 export class NetworkManager {
@@ -123,6 +125,9 @@ export class NetworkManager {
                 break;
             case 'ActivityChanged':
                 this.handlers.onActivityChanged(message.player_id, message.activity);
+                break;
+            case 'TimeSync':
+                this.handlers.onTimeSync(message.game_time_minutes);
                 break;
         }
     }
