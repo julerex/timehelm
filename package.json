@@ -15,7 +15,7 @@
   },
   "lint-staged": {
     "client/**/*.{ts,tsx}": [
-      "eslint --fix",
+      "./client/node_modules/.bin/eslint --fix --config client/eslint.config.js",
       "bash -c 'npm run --prefix client typecheck'"
     ],
     "server/**/*.rs": [

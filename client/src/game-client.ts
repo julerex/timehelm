@@ -7,7 +7,8 @@ import { DayNightCycle } from './environment/DayNightCycle';
 import { WorldObjectFactory } from './world/WorldObjectFactory';
 
 // Re-export types for external use
-export { Player, Position, PlayerData } from './entities/Player';
+export { Player } from './entities/Player';
+export type { Position, PlayerData } from './entities/Player';
 
 export interface User {
     id: string;
