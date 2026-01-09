@@ -1,0 +1,26 @@
+{
+  "name": "timehelm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "husky",
+    "lint": "npm run lint:client && npm run lint:server",
+    "lint:client": "npm run --prefix client lint",
+    "lint:server": "cd server && cargo clippy -- -D warnings && cargo fmt --check"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.11"
+  },
+  "lint-staged": {
+    "client/**/*.{ts,tsx}": [
+      "eslint --fix",
+      "bash -c 'npm run --prefix client typecheck'"
+    ],
+    "server/**/*.rs": [
+      "bash -c 'cd server && cargo fmt --check'",
+      "bash -c 'cd server && cargo clippy -- -D warnings'"
+    ]
+  }
+}
