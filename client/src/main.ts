@@ -1,7 +1,6 @@
-import * as THREE from 'three';
-import { GameClient } from './game-client.js';
+import { GameClient, User } from './game-client.ts';
 
-function generateRandomUsername() {
+function generateRandomUsername(): string {
     const adjectives = ['Swift', 'Brave', 'Clever', 'Mighty', 'Wise', 'Bold', 'Calm', 'Bright'];
     const nouns = ['Wolf', 'Eagle', 'Bear', 'Fox', 'Hawk', 'Lion', 'Tiger', 'Dragon'];
     const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
@@ -10,25 +9,24 @@ function generateRandomUsername() {
     return `${adjective}${noun}${number}`;
 }
 
-function init() {
+function init(): void {
     // Generate a random user ID and username
     const userId = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const username = generateRandomUsername();
-    
-    const user = {
+
+    const user: User = {
         id: userId,
         username: username,
         display_name: username,
-        avatar_url: null,
+        avatar_url: null
     };
-    
+
     // Show HUD
-    document.getElementById('hud').classList.add('visible');
-    
+    document.getElementById('hud')?.classList.add('visible');
+
     // Start game immediately
     const gameClient = new GameClient(user);
     gameClient.init();
 }
 
 init();
-

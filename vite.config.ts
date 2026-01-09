@@ -5,16 +5,15 @@ export default defineConfig({
         proxy: {
             '/auth': {
                 target: 'http://localhost:8080',
-                changeOrigin: true,
+                changeOrigin: true
             },
             '/ws': {
                 target: 'ws://localhost:8080',
-                ws: true,
-            },
-        },
+                ws: true
+            }
+        }
     },
     build: {
-        outDir: 'dist',
-    },
+        outDir: 'dist'
+    }
 });
-
