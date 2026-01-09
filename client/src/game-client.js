@@ -117,7 +117,86 @@ export class GameClient {
     }
 
     createPlayer(id, username) {
-        // ...
+        // Improved low-poly humanoid character
+        const group = new THREE.Group();
+
+        // Body (torso)
+        const bodyGeometry = new THREE.BoxGeometry(60, 80, 40);
+        const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
+        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        body.position.y = 110; // Centered at torso height
+        body.castShadow = true;
+        group.add(body);
+
+        // Head
+        const headGeometry = new THREE.BoxGeometry(40, 40, 40);
+        const headMaterial = new THREE.MeshStandardMaterial({ color: 0xffdbac });
+        const head = new THREE.Mesh(headGeometry, headMaterial);
+        head.position.y = 170;
+        head.castShadow = true;
+        group.add(head);
+
+        // Legs
+        const legGeometry = new THREE.BoxGeometry(20, 70, 20);
+        const legMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        
+        const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+        leftLeg.position.set(-15, 35, 0);
+        leftLeg.castShadow = true;
+        group.add(leftLeg);
+
+        const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+        rightLeg.position.set(15, 35, 0);
+        rightLeg.castShadow = true;
+        group.add(rightLeg);
+
+        // Arms
+        const armGeometry = new THREE.BoxGeometry(20, 70, 20);
+        const armMaterial = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
+
+        const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+        leftArm.position.set(-40, 110, 0);
+        leftArm.castShadow = true;
+        group.add(leftArm);
+
+        const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+        rightArm.position.set(40, 110, 0);
+        rightArm.castShadow = true;
+        group.add(rightArm);
+
+        // Name label
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = 256;
+        canvas.height = 64;
+        context.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = 'white';
+        context.font = '24px Arial';
+        context.textAlign = 'center';
+        context.fillText(username, canvas.width / 2, canvas.height / 2 + 8);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+        const sprite = new THREE.Sprite(spriteMaterial);
+        sprite.position.y = 250;
+        sprite.scale.set(200, 50, 100);
+        group.add(sprite);
+
+        return {
+            id,
+            username,
+            mesh: group,
+            leftLeg,
+            rightLeg,
+            leftArm,
+            rightArm,
+            position: { x: 0, y: 0, z: 0 },
+            rotation: 0,
+            walkCycle: 0,
+            isMoving: false,
+            lastPosition: null
+        };
     }
 
     createTree(x, z) {
