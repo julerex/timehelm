@@ -142,8 +142,15 @@ export class Player {
         };
     }
 
-    public moveForward(speed: number): void {
+    public moveForward(speed: number, bounds?: { minX: number; maxX: number; minZ: number; maxZ: number }): void {
         this.mesh.translateZ(-speed);
+        
+        // Clamp to bounds if provided
+        if (bounds) {
+            this.mesh.position.x = Math.max(bounds.minX, Math.min(bounds.maxX, this.mesh.position.x));
+            this.mesh.position.z = Math.max(bounds.minZ, Math.min(bounds.maxZ, this.mesh.position.z));
+        }
+        
         this._position = {
             x: this.mesh.position.x,
             y: this.mesh.position.y,

@@ -42,6 +42,14 @@ export class GameClient {
     private readonly moveSpeed = 100;
     private readonly rotationSpeed = 0.2;
 
+    // Lawn boundaries (ground size 10000, so half = 5000, minus margin for player body)
+    private readonly lawnBounds = {
+        minX: -4970,
+        maxX: 4970,
+        minZ: -4970,
+        maxZ: 4970
+    };
+
     // Random movement state
     private randomMoveTimer = 0;
     private randomMoveAction: RandomMoveAction = 'idle';
@@ -253,7 +261,7 @@ export class GameClient {
         }
 
         if (this.randomMoveAction === 'forward') {
-            this.myPlayer.moveForward(this.moveSpeed);
+            this.myPlayer.moveForward(this.moveSpeed, this.lawnBounds);
             moved = true;
         } else if (this.randomMoveAction === 'left') {
             this.myPlayer.rotate(this.rotationSpeed);
