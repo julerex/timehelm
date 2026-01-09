@@ -10,12 +10,12 @@ export class GameClient {
         this.players = new Map();
         this.myPlayer = null;
         this.keys = {};
-        this.moveSpeed = 0.1;
+        this.moveSpeed = 10;
         this.rotationSpeed = 0.02;
 
         // Camera rotation state
         this.cameraRotation = { theta: 0, phi: 0.5 }; // theta: horizontal, phi: vertical
-        this.cameraDistance = 10;
+        this.cameraDistance = 1000;
         this.cameraAnchored = true;
         this.cameraFocusPoint = null;
         this.isRightMouseDown = false;
@@ -42,10 +42,10 @@ export class GameClient {
         this.camera = new THREE.PerspectiveCamera(
             75,
             window.innerWidth / window.innerHeight,
-            0.1,
-            1000
+            10,
+            100000
         );
-        this.camera.position.set(0, 5, 10);
+        this.camera.position.set(0, 500, 1000);
         this.camera.lookAt(0, 0, 0);
 
         // Renderer
@@ -59,33 +59,33 @@ export class GameClient {
         this.scene.add(this.ambientLight);
 
         this.sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
-        this.sunLight.position.set(0, 100, 0);
+        this.sunLight.position.set(0, 10000, 0);
         this.sunLight.castShadow = true;
         
         // Optimize shadows for sun
-        this.sunLight.shadow.camera.left = -50;
-        this.sunLight.shadow.camera.right = 50;
-        this.sunLight.shadow.camera.top = 50;
-        this.sunLight.shadow.camera.bottom = -50;
+        this.sunLight.shadow.camera.left = -5000;
+        this.sunLight.shadow.camera.right = 5000;
+        this.sunLight.shadow.camera.top = 5000;
+        this.sunLight.shadow.camera.bottom = -5000;
         this.sunLight.shadow.mapSize.width = 2048;
         this.sunLight.shadow.mapSize.height = 2048;
         
         this.scene.add(this.sunLight);
 
         // Sun Mesh
-        const sunGeometry = new THREE.SphereGeometry(2, 32, 32);
+        const sunGeometry = new THREE.SphereGeometry(200, 32, 32);
         const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         this.sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
         this.scene.add(this.sunMesh);
 
         // Moon Mesh
-        const moonGeometry = new THREE.SphereGeometry(1.5, 32, 32);
+        const moonGeometry = new THREE.SphereGeometry(150, 32, 32);
         const moonMaterial = new THREE.MeshBasicMaterial({ color: 0xcccccc });
         this.moonMesh = new THREE.Mesh(moonGeometry, moonMaterial);
         this.scene.add(this.moonMesh);
 
         // Ground
-        const groundGeometry = new THREE.PlaneGeometry(100, 100);
+        const groundGeometry = new THREE.PlaneGeometry(10000, 10000);
         const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x90EE90 });
         const ground = new THREE.Mesh(groundGeometry, groundMaterial);
         ground.rotation.x = -Math.PI / 2;
@@ -100,9 +100,13 @@ export class GameClient {
         // Camera follows player
         this.camera.position.set(
             this.myPlayer.mesh.position.x,
-            this.myPlayer.mesh.position.y + 5,
-            this.myPlayer.mesh.position.z + 10
+            this.myPlayer.mesh.position.y + 500,
+            this.myPlayer.mesh.position.z + 1000
         );
+
+        // Add a tree
+        const tree = this.createTree(500, -500);
+        this.scene.add(tree);
 
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -113,86 +117,32 @@ export class GameClient {
     }
 
     createPlayer(id, username) {
-        // Improved low-poly humanoid character
+        // ...
+    }
+
+    createTree(x, z) {
         const group = new THREE.Group();
 
-        // Body (torso)
-        const bodyGeometry = new THREE.BoxGeometry(0.6, 0.8, 0.4);
-        const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
-        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-        body.position.y = 1.1; // Centered at torso height
-        body.castShadow = true;
-        group.add(body);
+        // Trunk (brown)
+        const trunkGeometry = new THREE.BoxGeometry(40, 150, 40);
+        const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+        trunk.position.y = 75; // Half of height to stand on ground
+        trunk.castShadow = true;
+        trunk.receiveShadow = true;
+        group.add(trunk);
 
-        // Head
-        const headGeometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
-        const headMaterial = new THREE.MeshStandardMaterial({ color: 0xffdbac });
-        const head = new THREE.Mesh(headGeometry, headMaterial);
-        head.position.y = 1.7;
-        head.castShadow = true;
-        group.add(head);
+        // Foliage (green)
+        const leavesGeometry = new THREE.BoxGeometry(200, 250, 200);
+        const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+        const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
+        leaves.position.y = 150 + 125; // trunk height + half of leaves height
+        leaves.castShadow = true;
+        leaves.receiveShadow = true;
+        group.add(leaves);
 
-        // Legs
-        const legGeometry = new THREE.BoxGeometry(0.2, 0.7, 0.2);
-        const legMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
-        
-        const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
-        leftLeg.position.set(-0.15, 0.35, 0);
-        leftLeg.castShadow = true;
-        group.add(leftLeg);
-
-        const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
-        rightLeg.position.set(0.15, 0.35, 0);
-        rightLeg.castShadow = true;
-        group.add(rightLeg);
-
-        // Arms
-        const armGeometry = new THREE.BoxGeometry(0.2, 0.7, 0.2);
-        const armMaterial = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
-
-        const leftArm = new THREE.Mesh(armGeometry, armMaterial);
-        leftArm.position.set(-0.4, 1.1, 0);
-        leftArm.castShadow = true;
-        group.add(leftArm);
-
-        const rightArm = new THREE.Mesh(armGeometry, armMaterial);
-        rightArm.position.set(0.4, 1.1, 0);
-        rightArm.castShadow = true;
-        group.add(rightArm);
-
-        // Name label
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.width = 256;
-        canvas.height = 64;
-        context.fillStyle = 'rgba(0, 0, 0, 0.8)';
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        context.fillStyle = 'white';
-        context.font = '24px Arial';
-        context.textAlign = 'center';
-        context.fillText(username, canvas.width / 2, canvas.height / 2 + 8);
-
-        const texture = new THREE.CanvasTexture(canvas);
-        const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
-        const sprite = new THREE.Sprite(spriteMaterial);
-        sprite.position.y = 2.5;
-        sprite.scale.set(2, 0.5, 1);
-        group.add(sprite);
-
-        return {
-            id,
-            username,
-            mesh: group,
-            leftLeg,
-            rightLeg,
-            leftArm,
-            rightArm,
-            position: { x: 0, y: 0, z: 0 },
-            rotation: 0,
-            walkCycle: 0,
-            isMoving: false,
-            lastPosition: null
-        };
+        group.position.set(x, 0, z);
+        return group;
     }
 
     setupControls() {
@@ -246,8 +196,8 @@ export class GameClient {
 
         // Zoom control
         document.addEventListener('wheel', (e) => {
-            this.cameraDistance += e.deltaY * 0.01;
-            this.cameraDistance = Math.max(2, Math.min(50, this.cameraDistance));
+            this.cameraDistance += e.deltaY;
+            this.cameraDistance = Math.max(200, Math.min(5000, this.cameraDistance));
         });
 
         // Prevent context menu on right click
@@ -445,7 +395,7 @@ export class GameClient {
                         Math.pow(pos.x - player.lastPosition.x, 2) + 
                         Math.pow(pos.z - player.lastPosition.z, 2)
                     );
-                    player.isMoving = dist > 0.001;
+                    player.isMoving = dist > 0.1;
                 }
                 player.lastPosition = { x: pos.x, y: pos.y, z: pos.z };
             }
@@ -464,7 +414,7 @@ export class GameClient {
                 
                 // Slight body bob
                 const torso = player.mesh.children[0];
-                if (torso) torso.position.y = 1.1 + Math.abs(Math.cos(player.walkCycle)) * 0.05;
+                if (torso) torso.position.y = 110 + Math.abs(Math.cos(player.walkCycle)) * 5;
             } else {
                 // Reset to idle pose
                 player.walkCycle = 0;
@@ -474,7 +424,7 @@ export class GameClient {
                 if (player.rightArm) player.rightArm.rotation.x = THREE.MathUtils.lerp(player.rightArm.rotation.x, 0, 0.2);
                 
                 const torso = player.mesh.children[0];
-                if (torso) torso.position.y = THREE.MathUtils.lerp(torso.position.y, 1.1, 0.2);
+                if (torso) torso.position.y = THREE.MathUtils.lerp(torso.position.y, 110, 0.2);
             }
         });
     }
@@ -518,7 +468,7 @@ export class GameClient {
             }
 
             // Move focus point with WASD when unanchored
-            const moveSpeed = 0.5;
+            const moveSpeed = 50;
             if (this.keys['w']) {
                 this.cameraFocusPoint.z -= Math.cos(this.cameraRotation.theta) * moveSpeed;
                 this.cameraFocusPoint.x -= Math.sin(this.cameraRotation.theta) * moveSpeed;
@@ -557,7 +507,7 @@ export class GameClient {
         // Look at the target point
         const target = new THREE.Vector3(
             targetX,
-            targetY + 1.5,
+            targetY + 150,
             targetZ
         );
         this.camera.lookAt(target);
@@ -588,7 +538,7 @@ export class GameClient {
         // Calculate sun position (rotation around X axis)
         // 0h: midnight, 6h: sunrise, 12h: noon, 18h: sunset
         const angle = (gameTime / 24) * Math.PI * 2 - Math.PI / 2;
-        const radius = 50;
+        const radius = 5000;
         
         const sunX = 0;
         const sunY = Math.sin(angle) * radius;
