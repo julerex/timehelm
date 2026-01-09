@@ -25,7 +25,7 @@ COPY client/package.json client/package-lock.json* ./
 RUN npm install
 # Copy client source code and vite config
 COPY client ./
-COPY vite.config.js ./
+COPY vite.config.ts ./
 RUN npm run build
 
 # Runtime stage
