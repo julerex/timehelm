@@ -1,4 +1,11 @@
-import { GameClient, User } from './game-client.ts';
+import { GameClient } from './game-client';
+
+interface User {
+    id: string;
+    username: string;
+    display_name: string;
+    avatar_url: string | null;
+}
 
 function generateRandomUsername(): string {
     const adjectives = ['Swift', 'Brave', 'Clever', 'Mighty', 'Wise', 'Bold', 'Calm', 'Bright'];
