@@ -170,6 +170,10 @@ export class GameClient {
         const tree = this.createTree(500, -500);
         this.scene.add(tree);
 
+        // Add a two-story house
+        const house = this.createHouse(-600, -400);
+        this.scene.add(house);
+
         // Handle window resize
         window.addEventListener('resize', () => {
             if (this.camera && this.renderer) {
@@ -285,6 +289,294 @@ export class GameClient {
         leaves.castShadow = true;
         leaves.receiveShadow = true;
         group.add(leaves);
+
+        group.position.set(x, 0, z);
+        return group;
+    }
+
+    private createHouse(x: number, z: number): THREE.Group {
+        const group = new THREE.Group();
+
+        // House dimensions
+        const houseWidth = 400;
+        const houseDepth = 300;
+        const floorHeight = 200;
+        const wallThickness = 20;
+
+        // Materials
+        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xf5deb3 }); // Wheat/beige walls
+        const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x8b0000 }); // Dark red roof
+        const doorMaterial = new THREE.MeshStandardMaterial({ color: 0x8b4513 }); // Brown door
+        const windowMaterial = new THREE.MeshStandardMaterial({ color: 0x87ceeb, transparent: true, opacity: 0.7 }); // Light blue windows
+        const frameMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff }); // White window frames
+        const foundationMaterial = new THREE.MeshStandardMaterial({ color: 0x696969 }); // Gray foundation
+        const chimneyMaterial = new THREE.MeshStandardMaterial({ color: 0xa52a2a }); // Brick red chimney
+
+        // Foundation
+        const foundationGeometry = new THREE.BoxGeometry(houseWidth + 40, 30, houseDepth + 40);
+        const foundation = new THREE.Mesh(foundationGeometry, foundationMaterial);
+        foundation.position.y = 15;
+        foundation.castShadow = true;
+        foundation.receiveShadow = true;
+        group.add(foundation);
+
+        // First floor walls
+        // Front wall (with door and windows)
+        const frontWallGeometry = new THREE.BoxGeometry(houseWidth, floorHeight, wallThickness);
+        const frontWall = new THREE.Mesh(frontWallGeometry, wallMaterial);
+        frontWall.position.set(0, 30 + floorHeight / 2, houseDepth / 2);
+        frontWall.castShadow = true;
+        frontWall.receiveShadow = true;
+        group.add(frontWall);
+
+        // Back wall
+        const backWall = new THREE.Mesh(frontWallGeometry, wallMaterial);
+        backWall.position.set(0, 30 + floorHeight / 2, -houseDepth / 2);
+        backWall.castShadow = true;
+        backWall.receiveShadow = true;
+        group.add(backWall);
+
+        // Side walls
+        const sideWallGeometry = new THREE.BoxGeometry(wallThickness, floorHeight, houseDepth);
+        const leftWall = new THREE.Mesh(sideWallGeometry, wallMaterial);
+        leftWall.position.set(-houseWidth / 2, 30 + floorHeight / 2, 0);
+        leftWall.castShadow = true;
+        leftWall.receiveShadow = true;
+        group.add(leftWall);
+
+        const rightWall = new THREE.Mesh(sideWallGeometry, wallMaterial);
+        rightWall.position.set(houseWidth / 2, 30 + floorHeight / 2, 0);
+        rightWall.castShadow = true;
+        rightWall.receiveShadow = true;
+        group.add(rightWall);
+
+        // Second floor walls
+        const secondFloorY = 30 + floorHeight;
+
+        const frontWall2 = new THREE.Mesh(frontWallGeometry, wallMaterial);
+        frontWall2.position.set(0, secondFloorY + floorHeight / 2, houseDepth / 2);
+        frontWall2.castShadow = true;
+        frontWall2.receiveShadow = true;
+        group.add(frontWall2);
+
+        const backWall2 = new THREE.Mesh(frontWallGeometry, wallMaterial);
+        backWall2.position.set(0, secondFloorY + floorHeight / 2, -houseDepth / 2);
+        backWall2.castShadow = true;
+        backWall2.receiveShadow = true;
+        group.add(backWall2);
+
+        const leftWall2 = new THREE.Mesh(sideWallGeometry, wallMaterial);
+        leftWall2.position.set(-houseWidth / 2, secondFloorY + floorHeight / 2, 0);
+        leftWall2.castShadow = true;
+        leftWall2.receiveShadow = true;
+        group.add(leftWall2);
+
+        const rightWall2 = new THREE.Mesh(sideWallGeometry, wallMaterial);
+        rightWall2.position.set(houseWidth / 2, secondFloorY + floorHeight / 2, 0);
+        rightWall2.castShadow = true;
+        rightWall2.receiveShadow = true;
+        group.add(rightWall2);
+
+        // Floor between stories
+        const floorGeometry = new THREE.BoxGeometry(houseWidth - wallThickness, 15, houseDepth - wallThickness);
+        const floorMaterial = new THREE.MeshStandardMaterial({ color: 0xdeb887 }); // Burlywood
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.position.y = secondFloorY;
+        floor.castShadow = true;
+        floor.receiveShadow = true;
+        group.add(floor);
+
+        // Door (front wall, first floor)
+        const doorGeometry = new THREE.BoxGeometry(60, 120, wallThickness + 5);
+        const door = new THREE.Mesh(doorGeometry, doorMaterial);
+        door.position.set(0, 30 + 60, houseDepth / 2);
+        door.castShadow = true;
+        group.add(door);
+
+        // Door frame
+        const doorFrameGeometry = new THREE.BoxGeometry(70, 130, wallThickness + 2);
+        const doorFrame = new THREE.Mesh(doorFrameGeometry, frameMaterial);
+        doorFrame.position.set(0, 30 + 65, houseDepth / 2 - 2);
+        group.add(doorFrame);
+
+        // Door handle
+        const handleGeometry = new THREE.BoxGeometry(8, 8, 10);
+        const handleMaterial = new THREE.MeshStandardMaterial({ color: 0xffd700 }); // Gold
+        const handle = new THREE.Mesh(handleGeometry, handleMaterial);
+        handle.position.set(20, 30 + 60, houseDepth / 2 + 8);
+        group.add(handle);
+
+        // First floor windows (front)
+        const windowGeometry = new THREE.BoxGeometry(50, 60, wallThickness + 5);
+        const windowFrameGeometry = new THREE.BoxGeometry(60, 70, wallThickness + 2);
+
+        // Left window (first floor front)
+        const window1Frame = new THREE.Mesh(windowFrameGeometry, frameMaterial);
+        window1Frame.position.set(-120, 30 + 100, houseDepth / 2 - 2);
+        group.add(window1Frame);
+
+        const window1 = new THREE.Mesh(windowGeometry, windowMaterial);
+        window1.position.set(-120, 30 + 100, houseDepth / 2);
+        group.add(window1);
+
+        // Right window (first floor front)
+        const window2Frame = new THREE.Mesh(windowFrameGeometry, frameMaterial);
+        window2Frame.position.set(120, 30 + 100, houseDepth / 2 - 2);
+        group.add(window2Frame);
+
+        const window2 = new THREE.Mesh(windowGeometry, windowMaterial);
+        window2.position.set(120, 30 + 100, houseDepth / 2);
+        group.add(window2);
+
+        // Second floor windows (front) - 3 windows
+        const window3Frame = new THREE.Mesh(windowFrameGeometry, frameMaterial);
+        window3Frame.position.set(-120, secondFloorY + 100, houseDepth / 2 - 2);
+        group.add(window3Frame);
+
+        const window3 = new THREE.Mesh(windowGeometry, windowMaterial);
+        window3.position.set(-120, secondFloorY + 100, houseDepth / 2);
+        group.add(window3);
+
+        const window4Frame = new THREE.Mesh(windowFrameGeometry, frameMaterial);
+        window4Frame.position.set(0, secondFloorY + 100, houseDepth / 2 - 2);
+        group.add(window4Frame);
+
+        const window4 = new THREE.Mesh(windowGeometry, windowMaterial);
+        window4.position.set(0, secondFloorY + 100, houseDepth / 2);
+        group.add(window4);
+
+        const window5Frame = new THREE.Mesh(windowFrameGeometry, frameMaterial);
+        window5Frame.position.set(120, secondFloorY + 100, houseDepth / 2 - 2);
+        group.add(window5Frame);
+
+        const window5 = new THREE.Mesh(windowGeometry, windowMaterial);
+        window5.position.set(120, secondFloorY + 100, houseDepth / 2);
+        group.add(window5);
+
+        // Side windows (both floors, both sides)
+        const sideWindowGeometry = new THREE.BoxGeometry(wallThickness + 5, 60, 50);
+        const sideWindowFrameGeometry = new THREE.BoxGeometry(wallThickness + 2, 70, 60);
+
+        // Left side windows
+        const windowL1Frame = new THREE.Mesh(sideWindowFrameGeometry, frameMaterial);
+        windowL1Frame.position.set(-houseWidth / 2 + 2, 30 + 100, 0);
+        group.add(windowL1Frame);
+
+        const windowL1 = new THREE.Mesh(sideWindowGeometry, windowMaterial);
+        windowL1.position.set(-houseWidth / 2, 30 + 100, 0);
+        group.add(windowL1);
+
+        const windowL2Frame = new THREE.Mesh(sideWindowFrameGeometry, frameMaterial);
+        windowL2Frame.position.set(-houseWidth / 2 + 2, secondFloorY + 100, 0);
+        group.add(windowL2Frame);
+
+        const windowL2 = new THREE.Mesh(sideWindowGeometry, windowMaterial);
+        windowL2.position.set(-houseWidth / 2, secondFloorY + 100, 0);
+        group.add(windowL2);
+
+        // Right side windows
+        const windowR1Frame = new THREE.Mesh(sideWindowFrameGeometry, frameMaterial);
+        windowR1Frame.position.set(houseWidth / 2 - 2, 30 + 100, 0);
+        group.add(windowR1Frame);
+
+        const windowR1 = new THREE.Mesh(sideWindowGeometry, windowMaterial);
+        windowR1.position.set(houseWidth / 2, 30 + 100, 0);
+        group.add(windowR1);
+
+        const windowR2Frame = new THREE.Mesh(sideWindowFrameGeometry, frameMaterial);
+        windowR2Frame.position.set(houseWidth / 2 - 2, secondFloorY + 100, 0);
+        group.add(windowR2Frame);
+
+        const windowR2 = new THREE.Mesh(sideWindowGeometry, windowMaterial);
+        windowR2.position.set(houseWidth / 2, secondFloorY + 100, 0);
+        group.add(windowR2);
+
+        // Roof (gabled roof using two planes)
+        const roofHeight = 120;
+        const roofOverhang = 40;
+
+        // Create roof using box geometry angled
+        const roofLength = houseDepth + roofOverhang * 2;
+        const roofWidth = Math.sqrt(Math.pow(houseWidth / 2 + roofOverhang, 2) + Math.pow(roofHeight, 2));
+
+        const roofGeometry = new THREE.BoxGeometry(roofWidth, 15, roofLength);
+
+        // Left roof slope
+        const roofLeft = new THREE.Mesh(roofGeometry, roofMaterial);
+        const roofAngle = Math.atan2(roofHeight, houseWidth / 2 + roofOverhang);
+        roofLeft.rotation.z = roofAngle;
+        roofLeft.position.set(
+            -(houseWidth / 4 + roofOverhang / 2) * Math.cos(roofAngle),
+            secondFloorY + floorHeight + roofHeight / 2 + 15,
+            0
+        );
+        roofLeft.castShadow = true;
+        roofLeft.receiveShadow = true;
+        group.add(roofLeft);
+
+        // Right roof slope
+        const roofRight = new THREE.Mesh(roofGeometry, roofMaterial);
+        roofRight.rotation.z = -roofAngle;
+        roofRight.position.set(
+            (houseWidth / 4 + roofOverhang / 2) * Math.cos(roofAngle),
+            secondFloorY + floorHeight + roofHeight / 2 + 15,
+            0
+        );
+        roofRight.castShadow = true;
+        roofRight.receiveShadow = true;
+        group.add(roofRight);
+
+        // Roof gable ends (triangular walls)
+        const gableShape = new THREE.Shape();
+        gableShape.moveTo(-houseWidth / 2, 0);
+        gableShape.lineTo(0, roofHeight);
+        gableShape.lineTo(houseWidth / 2, 0);
+        gableShape.lineTo(-houseWidth / 2, 0);
+
+        const gableGeometry = new THREE.ExtrudeGeometry(gableShape, { depth: wallThickness, bevelEnabled: false });
+
+        const gableFront = new THREE.Mesh(gableGeometry, wallMaterial);
+        gableFront.position.set(0, secondFloorY + floorHeight, houseDepth / 2 - wallThickness / 2);
+        gableFront.castShadow = true;
+        gableFront.receiveShadow = true;
+        group.add(gableFront);
+
+        const gableBack = new THREE.Mesh(gableGeometry, wallMaterial);
+        gableBack.position.set(0, secondFloorY + floorHeight, -houseDepth / 2 - wallThickness / 2);
+        gableBack.castShadow = true;
+        gableBack.receiveShadow = true;
+        group.add(gableBack);
+
+        // Chimney
+        const chimneyGeometry = new THREE.BoxGeometry(40, 150, 40);
+        const chimney = new THREE.Mesh(chimneyGeometry, chimneyMaterial);
+        chimney.position.set(houseWidth / 4, secondFloorY + floorHeight + roofHeight + 30, 0);
+        chimney.castShadow = true;
+        chimney.receiveShadow = true;
+        group.add(chimney);
+
+        // Chimney top
+        const chimneyTopGeometry = new THREE.BoxGeometry(50, 15, 50);
+        const chimneyTop = new THREE.Mesh(chimneyTopGeometry, chimneyMaterial);
+        chimneyTop.position.set(houseWidth / 4, secondFloorY + floorHeight + roofHeight + 112, 0);
+        chimneyTop.castShadow = true;
+        group.add(chimneyTop);
+
+        // Porch / Steps
+        const stepGeometry = new THREE.BoxGeometry(100, 15, 40);
+        const stepMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 }); // Gray steps
+
+        const step1 = new THREE.Mesh(stepGeometry, stepMaterial);
+        step1.position.set(0, 7.5, houseDepth / 2 + 30);
+        step1.castShadow = true;
+        step1.receiveShadow = true;
+        group.add(step1);
+
+        const step2 = new THREE.Mesh(stepGeometry, stepMaterial);
+        step2.position.set(0, 22.5, houseDepth / 2 + 60);
+        step2.castShadow = true;
+        step2.receiveShadow = true;
+        group.add(step2);
 
         group.position.set(x, 0, z);
         return group;
