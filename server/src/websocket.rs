@@ -3,7 +3,6 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 
-use crate::db::get_game_time_minutes;
 use crate::game::GameMessage;
 use crate::AppState;
 
@@ -14,14 +13,13 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
     // Create channel for sending messages to this client
     let (tx, mut rx) = mpsc::channel::<String>(32);
 
-    // Send initial time sync
-    if let Ok(game_time) = get_game_time_minutes(&state.db).await {
-        let time_sync = GameMessage::TimeSync {
-            game_time_minutes: game_time,
-        };
-        if let Ok(json) = serde_json::to_string(&time_sync) {
-            let _ = tx.send(json).await;
-        }
+    // Send initial time sync from server's authoritative game time
+    let game_time = state.game.read().await.get_game_time_minutes();
+    let time_sync = GameMessage::TimeSync {
+        game_time_minutes: game_time,
+    };
+    if let Ok(json) = serde_json::to_string(&time_sync) {
+        let _ = tx.send(json).await;
     }
 
     // Spawn task to forward messages to websocket and handle pings
