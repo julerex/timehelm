@@ -111,24 +111,52 @@ export class GameClient {
     }
 
     createPlayer(id, username) {
-        // Simple low-poly character
+        // Improved low-poly humanoid character
         const group = new THREE.Group();
 
-        // Body (cube)
-        const bodyGeometry = new THREE.BoxGeometry(0.8, 1.2, 0.6);
+        // Body (torso)
+        const bodyGeometry = new THREE.BoxGeometry(0.6, 0.8, 0.4);
         const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
         const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-        body.position.y = 0.6;
+        body.position.y = 1.1; // Centered at torso height
         body.castShadow = true;
         group.add(body);
 
-        // Head (cube)
-        const headGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+        // Head
+        const headGeometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
         const headMaterial = new THREE.MeshStandardMaterial({ color: 0xffdbac });
         const head = new THREE.Mesh(headGeometry, headMaterial);
-        head.position.y = 1.5;
+        head.position.y = 1.7;
         head.castShadow = true;
         group.add(head);
+
+        // Legs
+        const legGeometry = new THREE.BoxGeometry(0.2, 0.7, 0.2);
+        const legMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        
+        const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+        leftLeg.position.set(-0.15, 0.35, 0);
+        leftLeg.castShadow = true;
+        group.add(leftLeg);
+
+        const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+        rightLeg.position.set(0.15, 0.35, 0);
+        rightLeg.castShadow = true;
+        group.add(rightLeg);
+
+        // Arms
+        const armGeometry = new THREE.BoxGeometry(0.2, 0.7, 0.2);
+        const armMaterial = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
+
+        const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+        leftArm.position.set(-0.4, 1.1, 0);
+        leftArm.castShadow = true;
+        group.add(leftArm);
+
+        const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+        rightArm.position.set(0.4, 1.1, 0);
+        rightArm.castShadow = true;
+        group.add(rightArm);
 
         // Name label
         const canvas = document.createElement('canvas');
@@ -153,8 +181,15 @@ export class GameClient {
             id,
             username,
             mesh: group,
+            leftLeg,
+            rightLeg,
+            leftArm,
+            rightArm,
             position: { x: 0, y: 0, z: 0 },
             rotation: 0,
+            walkCycle: 0,
+            isMoving: false,
+            lastPosition: null
         };
     }
 
@@ -257,7 +292,7 @@ export class GameClient {
                 this.handleWorldState(message.players);
                 break;
             case 'Move':
-                this.handlePlayerMove(message.player_id, message.position, message.rotation);
+                this.handlePlayerMove(message.player_id, message.position, message.rotation, message.is_moving);
                 break;
             case 'Join':
                 if (message.player.id !== this.user.id) {
@@ -283,19 +318,21 @@ export class GameClient {
                         playerData.position.z
                     );
                     player.mesh.rotation.y = playerData.rotation;
+                    player.isMoving = playerData.is_moving || false;
                 }
             }
         });
         this.updatePlayersList();
     }
 
-    handlePlayerMove(playerId, position, rotation) {
+    handlePlayerMove(playerId, position, rotation, isMoving) {
         if (playerId === this.user.id) return;
 
         const player = this.players.get(playerId);
         if (player) {
             player.mesh.position.set(position.x, position.y, position.z);
             player.mesh.rotation.y = rotation;
+            player.isMoving = isMoving || false;
         }
     }
 
@@ -307,6 +344,7 @@ export class GameClient {
             playerData.position.z
         );
         player.mesh.rotation.y = playerData.rotation;
+        player.isMoving = playerData.is_moving || false;
         this.scene.add(player.mesh);
         this.players.set(playerData.id, player);
         this.updatePlayersList();
@@ -363,6 +401,8 @@ export class GameClient {
             moved = true;
         }
 
+        this.myPlayer.isMoving = moved;
+
         if (moved) {
             this.myPlayer.rotation = newRotation;
             this.myPlayer.mesh.rotation.y = newRotation;
@@ -377,14 +417,60 @@ export class GameClient {
                     z: this.myPlayer.mesh.position.z,
                 },
                 rotation: this.myPlayer.rotation,
+                is_moving: this.myPlayer.isMoving
             });
         }
+    }
+
+    updateAnimations() {
+        this.players.forEach((player) => {
+            // For other players, detect movement by position change
+            if (player.id !== this.user.id) {
+                const pos = player.mesh.position;
+                if (player.lastPosition) {
+                    const dist = Math.sqrt(
+                        Math.pow(pos.x - player.lastPosition.x, 2) + 
+                        Math.pow(pos.z - player.lastPosition.z, 2)
+                    );
+                    player.isMoving = dist > 0.001;
+                }
+                player.lastPosition = { x: pos.x, y: pos.y, z: pos.z };
+            }
+
+            if (player.isMoving) {
+                player.walkCycle += 0.15;
+                const swing = Math.sin(player.walkCycle) * 0.6;
+                
+                // Animate legs
+                if (player.leftLeg) player.leftLeg.rotation.x = swing;
+                if (player.rightLeg) player.rightLeg.rotation.x = -swing;
+                
+                // Animate arms (opposite to legs)
+                if (player.leftArm) player.leftArm.rotation.x = -swing;
+                if (player.rightArm) player.rightArm.rotation.x = swing;
+                
+                // Slight body bob
+                const torso = player.mesh.children[0];
+                if (torso) torso.position.y = 1.1 + Math.abs(Math.cos(player.walkCycle)) * 0.05;
+            } else {
+                // Reset to idle pose
+                player.walkCycle = 0;
+                if (player.leftLeg) player.leftLeg.rotation.x = THREE.MathUtils.lerp(player.leftLeg.rotation.x, 0, 0.2);
+                if (player.rightLeg) player.rightLeg.rotation.x = THREE.MathUtils.lerp(player.rightLeg.rotation.x, 0, 0.2);
+                if (player.leftArm) player.leftArm.rotation.x = THREE.MathUtils.lerp(player.leftArm.rotation.x, 0, 0.2);
+                if (player.rightArm) player.rightArm.rotation.x = THREE.MathUtils.lerp(player.rightArm.rotation.x, 0, 0.2);
+                
+                const torso = player.mesh.children[0];
+                if (torso) torso.position.y = THREE.MathUtils.lerp(torso.position.y, 1.1, 0.2);
+            }
+        });
     }
 
     animate() {
         requestAnimationFrame(() => this.animate());
         this.updateTime();
         this.updateMovement();
+        this.updateAnimations();
         this.updateCamera();
         this.renderer.render(this.scene, this.camera);
     }

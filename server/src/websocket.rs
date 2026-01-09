@@ -39,15 +39,17 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
                             player_id: pid,
                             position,
                             rotation,
+                            is_moving,
                         }) => {
                             let mut game = state.game.write().await;
-                            game.update_player_position(&pid, position.clone(), rotation);
+                            game.update_player_position(&pid, position.clone(), rotation, is_moving);
 
                             // Broadcast move to all players
                             let move_msg = GameMessage::Move {
                                 player_id: pid.clone(),
                                 position: position.clone(),
                                 rotation,
+                                is_moving,
                             };
                             let _move_json = serde_json::to_string(&move_msg).unwrap();
                             // In a real implementation, broadcast to all connected clients

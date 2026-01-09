@@ -7,6 +7,8 @@ pub struct Player {
     pub username: String,
     pub position: Position,
     pub rotation: f32,
+    #[serde(default)]
+    pub is_moving: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,10 +38,11 @@ impl GameState {
         self.players.remove(player_id);
     }
 
-    pub fn update_player_position(&mut self, player_id: &str, position: Position, rotation: f32) {
+    pub fn update_player_position(&mut self, player_id: &str, position: Position, rotation: f32, is_moving: bool) {
         if let Some(player) = self.players.get_mut(player_id) {
             player.position = position;
             player.rotation = rotation;
+            player.is_moving = is_moving;
         }
     }
 
@@ -61,6 +64,8 @@ pub enum GameMessage {
         player_id: String,
         position: Position,
         rotation: f32,
+        #[serde(default)]
+        is_moving: bool,
     },
     WorldState {
         players: Vec<Player>,
