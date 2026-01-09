@@ -1,9 +1,11 @@
-import type { PlayerData, Position } from '../entities/Player';
+import type { Activity, PlayerData, Position } from '../entities/Player';
 
 export type WebSocketMessage =
     | { type: 'Join'; player: PlayerData }
     | { type: 'Leave'; player_id: string }
     | { type: 'Move'; player_id: string; position: Position; rotation: number; is_moving: boolean }
+    | { type: 'SetActivity'; player_id: string; activity: Activity }
+    | { type: 'ActivityChanged'; player_id: string; activity: Activity }
     | { type: 'WorldState'; players: PlayerData[] };
 
 export interface NetworkEventHandlers {
@@ -11,6 +13,7 @@ export interface NetworkEventHandlers {
     onPlayerJoin: (player: PlayerData) => void;
     onPlayerLeave: (playerId: string) => void;
     onPlayerMove: (playerId: string, position: Position, rotation: number, isMoving: boolean) => void;
+    onActivityChanged: (playerId: string, activity: Activity) => void;
 }
 
 export class NetworkManager {
@@ -54,6 +57,14 @@ export class NetworkManager {
             position,
             rotation,
             is_moving: isMoving
+        });
+    }
+
+    public sendSetActivity(playerId: string, activity: Activity): void {
+        this.sendMessage({
+            type: 'SetActivity',
+            player_id: playerId,
+            activity
         });
     }
 
@@ -109,6 +120,9 @@ export class NetworkManager {
                     message.rotation,
                     message.is_moving
                 );
+                break;
+            case 'ActivityChanged':
+                this.handlers.onActivityChanged(message.player_id, message.activity);
                 break;
         }
     }

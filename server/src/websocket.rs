@@ -27,10 +27,9 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
                             let world_state = GameMessage::WorldState {
                                 players: all_players,
                             };
+                            let player_id_ref = &player.id;
                             tracing::debug!(
-                                "Player {} joined, total players: {}",
-                                player.id,
-                                player_count
+                                "Player {player_id_ref} joined, total players: {player_count}"
                             );
                             let _world_json = serde_json::to_string(&world_state).unwrap();
                             // In a real implementation, broadcast to all connected clients
@@ -42,7 +41,12 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
                             is_moving,
                         }) => {
                             let mut game = state.game.write().await;
-                            game.update_player_position(&pid, position.clone(), rotation, is_moving);
+                            game.update_player_position(
+                                &pid,
+                                position.clone(),
+                                rotation,
+                                is_moving,
+                            );
 
                             // Broadcast move to all players
                             let move_msg = GameMessage::Move {
@@ -52,6 +56,22 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
                                 is_moving,
                             };
                             let _move_json = serde_json::to_string(&move_msg).unwrap();
+                            // In a real implementation, broadcast to all connected clients
+                        }
+                        Ok(GameMessage::SetActivity {
+                            player_id: pid,
+                            activity,
+                        }) => {
+                            let mut game = state.game.write().await;
+                            game.update_player_activity(&pid, activity.clone());
+
+                            // Broadcast activity change to all players
+                            let activity_msg = GameMessage::ActivityChanged {
+                                player_id: pid.clone(),
+                                activity,
+                            };
+                            let _activity_json = serde_json::to_string(&activity_msg).unwrap();
+                            tracing::debug!("Player {pid} activity changed");
                             // In a real implementation, broadcast to all connected clients
                         }
                         Err(e) => {
@@ -79,14 +99,14 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
     });
 
     // Keep connection alive
-    let _ = tokio::spawn(async move {
+    drop(tokio::spawn(async move {
         loop {
             if sender.send(Message::Ping(Bytes::new())).await.is_err() {
                 break;
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
         }
-    });
+    }));
 
     rx.await.ok();
 }

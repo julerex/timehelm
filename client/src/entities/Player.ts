@@ -6,12 +6,47 @@ export interface Position {
     z: number;
 }
 
+/// Daily routine activities that characters can be engaged in
+export type Activity =
+    | 'idle'
+    | 'sleeping'
+    | 'eating'
+    | 'cooking'
+    | 'working'
+    | 'exercising'
+    | 'socializing'
+    | 'shopping'
+    | 'cleaning'
+    | 'bathing'
+    | 'reading'
+    | 'watching_tv'
+    | 'gaming'
+    | 'commuting';
+
+export const ACTIVITY_DISPLAY_TEXT: Record<Activity, string> = {
+    idle: 'Idle',
+    sleeping: 'Sleeping 💤',
+    eating: 'Eating 🍽️',
+    cooking: 'Cooking 🍳',
+    working: 'Working 💼',
+    exercising: 'Exercising 🏃',
+    socializing: 'Socializing 💬',
+    shopping: 'Shopping 🛒',
+    cleaning: 'Cleaning 🧹',
+    bathing: 'Bathing 🛁',
+    reading: 'Reading 📖',
+    watching_tv: 'Watching TV 📺',
+    gaming: 'Gaming 🎮',
+    commuting: 'Commuting 🚶',
+};
+
 export interface PlayerData {
     id: string;
     username: string;
     position: Position;
     rotation: number;
     is_moving?: boolean;
+    activity?: Activity;
 }
 
 export class Player {
@@ -28,18 +63,23 @@ export class Player {
     private _walkCycle: number = 0;
     private _isMoving: boolean = false;
     private _lastPosition: Position | null = null;
+    private _activity: Activity = 'idle';
+    private _activityCanvas: HTMLCanvasElement;
+    private _activityTexture: THREE.CanvasTexture;
 
     constructor(id: string, username: string) {
         this.id = id;
         this.username = username;
 
         // Create mesh group and body parts
-        const { group, leftLeg, rightLeg, leftArm, rightArm } = this.createMesh(username);
+        const { group, leftLeg, rightLeg, leftArm, rightArm, activityCanvas, activityTexture } = this.createMesh(username);
         this.mesh = group;
         this.leftLeg = leftLeg;
         this.rightLeg = rightLeg;
         this.leftArm = leftArm;
         this.rightArm = rightArm;
+        this._activityCanvas = activityCanvas;
+        this._activityTexture = activityTexture;
     }
 
     // --- Getters and Setters ---
@@ -70,6 +110,17 @@ export class Player {
         this._isMoving = moving;
     }
 
+    get activity(): Activity {
+        return this._activity;
+    }
+
+    set activity(activity: Activity) {
+        if (this._activity !== activity) {
+            this._activity = activity;
+            this.updateActivityDisplay();
+        }
+    }
+
     // --- Public Methods ---
 
     public static fromData(data: PlayerData): Player {
@@ -77,6 +128,7 @@ export class Player {
         player.position = data.position;
         player.rotation = data.rotation;
         player.isMoving = data.is_moving || false;
+        player.activity = data.activity || 'idle';
         return player;
     }
 
@@ -86,7 +138,8 @@ export class Player {
             username: this.username,
             position: this.position,
             rotation: this.rotation,
-            is_moving: this.isMoving
+            is_moving: this.isMoving,
+            activity: this.activity
         };
     }
 
@@ -158,6 +211,8 @@ export class Player {
         rightLeg: THREE.Mesh;
         leftArm: THREE.Mesh;
         rightArm: THREE.Mesh;
+        activityCanvas: HTMLCanvasElement;
+        activityTexture: THREE.CanvasTexture;
     } {
         const group = new THREE.Group();
 
@@ -226,6 +281,56 @@ export class Player {
         sprite.scale.set(200, 50, 100);
         group.add(sprite);
 
-        return { group, leftLeg, rightLeg, leftArm, rightArm };
+        // Activity info box (above name label)
+        const activityCanvas = document.createElement('canvas');
+        const activityContext = activityCanvas.getContext('2d');
+        activityCanvas.width = 320;
+        activityCanvas.height = 48;
+        if (activityContext) {
+            this.renderActivityCanvas(activityContext, activityCanvas.width, activityCanvas.height, ACTIVITY_DISPLAY_TEXT['idle']);
+        }
+
+        const activityTexture = new THREE.CanvasTexture(activityCanvas);
+        const activitySpriteMaterial = new THREE.SpriteMaterial({ map: activityTexture });
+        const activitySprite = new THREE.Sprite(activitySpriteMaterial);
+        activitySprite.position.y = 310;
+        activitySprite.scale.set(240, 36, 100);
+        group.add(activitySprite);
+
+        return { group, leftLeg, rightLeg, leftArm, rightArm, activityCanvas, activityTexture };
+    }
+
+    private renderActivityCanvas(context: CanvasRenderingContext2D, width: number, height: number, text: string): void {
+        // Clear canvas
+        context.clearRect(0, 0, width, height);
+
+        // Draw rounded rectangle background
+        const radius = 12;
+        const padding = 4;
+        context.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        context.beginPath();
+        context.roundRect(padding, padding, width - padding * 2, height - padding * 2, radius);
+        context.fill();
+
+        // Draw border
+        context.strokeStyle = 'rgba(74, 144, 226, 0.8)';
+        context.lineWidth = 2;
+        context.stroke();
+
+        // Draw text
+        context.fillStyle = '#333333';
+        context.font = 'bold 20px Arial';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(text, width / 2, height / 2);
+    }
+
+    private updateActivityDisplay(): void {
+        const context = this._activityCanvas.getContext('2d');
+        if (context) {
+            const displayText = ACTIVITY_DISPLAY_TEXT[this._activity] || 'Idle';
+            this.renderActivityCanvas(context, this._activityCanvas.width, this._activityCanvas.height, displayText);
+            this._activityTexture.needsUpdate = true;
+        }
     }
 }

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Player, Position, PlayerData } from './entities/Player';
+import { Player, Position, PlayerData, Activity } from './entities/Player';
 import { CameraController } from './camera/CameraController';
 import { InputManager } from './input/InputManager';
 import { NetworkManager, NetworkEventHandlers } from './network/NetworkManager';
@@ -8,7 +8,7 @@ import { WorldObjectFactory } from './world/WorldObjectFactory';
 
 // Re-export types for external use
 export { Player } from './entities/Player';
-export type { Position, PlayerData } from './entities/Player';
+export type { Position, PlayerData, Activity } from './entities/Player';
 
 export interface User {
     id: string;
@@ -147,7 +147,8 @@ export class GameClient {
             onWorldState: this.handleWorldState.bind(this),
             onPlayerJoin: this.handlePlayerJoin.bind(this),
             onPlayerLeave: this.handlePlayerLeave.bind(this),
-            onPlayerMove: this.handlePlayerMove.bind(this)
+            onPlayerMove: this.handlePlayerMove.bind(this),
+            onActivityChanged: this.handleActivityChanged.bind(this)
         };
 
         this.networkManager = new NetworkManager(handlers);
@@ -171,6 +172,7 @@ export class GameClient {
                     existingPlayer.position = playerData.position;
                     existingPlayer.rotation = playerData.rotation;
                     existingPlayer.isMoving = playerData.is_moving || false;
+                    existingPlayer.activity = playerData.activity || 'idle';
                 } else {
                     this.addRemotePlayer(playerData);
                 }
@@ -204,6 +206,13 @@ export class GameClient {
             player.position = position;
             player.rotation = rotation;
             player.isMoving = isMoving;
+        }
+    }
+
+    private handleActivityChanged(playerId: string, activity: Activity): void {
+        const player = this.players.get(playerId);
+        if (player) {
+            player.activity = activity;
         }
     }
 
