@@ -43,7 +43,7 @@ impl PhysicsWorld {
             impulse_joint_set: ImpulseJointSet::new(),
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
-            gravity: vector![0.0, -9.81, 0.0],
+            gravity: vector![0.0, -981.0, 0.0], // Earth gravity: 9.81 m/s² = 981 cm/s²
             integration_parameters: IntegrationParameters::default(),
             entity_handles: HashMap::new(),
         }
@@ -55,9 +55,9 @@ impl PhysicsWorld {
 
         // Random initial velocity for trajectory variation
         let mut rng = rand::thread_rng();
-        let vel_x = rng.gen_range(-1.0..1.0);
-        let vel_z = rng.gen_range(-1.0..1.0);
-        let vel_y = 0.0; // Start with no vertical velocity
+        let vel_x = rng.gen_range(-100.0..100.0);
+        let vel_z = rng.gen_range(-100.0..100.0);
+        let vel_y = rng.gen_range(50.0..150.0); // Initial upward velocity for more dynamic bounces
 
         let rigid_body = RigidBodyBuilder::dynamic()
             .translation(vector![x, 500.0, z]) // Start at 5 meters (more visible than 10m)
@@ -66,11 +66,17 @@ impl PhysicsWorld {
         let handle = self.rigid_body_set.insert(rigid_body);
 
         // Create sphere collider with perfect elasticity
-        // Ball radius is 50 units (0.5m) to match visual representation
+        // Ball radius is 50 units (50cm = 0.5m) to match visual representation
+        // Rapier interprets units as-is, so radius 50 = 50 units (cm in our system)
+        // Volume in m³: (4/3)π(0.5)³ ≈ 0.523599 m³
+        // For 100g (0.1 kg) mass: density = 0.1 kg / 0.523599 m³ ≈ 0.191 kg/m³
+        // However, since Rapier calculates volume from radius directly, and we're using cm,
+        // we need density = mass(kg) / volume(m³) where volume is calculated from radius in meters
+        // If radius = 50 cm = 0.5 m, then density = 0.1 / ((4/3)π(0.5)³) = 0.191 kg/m³
         let collider = ColliderBuilder::ball(50.0)
             .restitution(1.0) // Perfect elasticity
             .friction(0.0)
-            .density(1.0)
+            .density(0.191) // 100g ball: 0.1 kg / 0.523599 m³ ≈ 0.191 kg/m³
             .build();
         self.collider_set
             .insert_with_parent(collider, handle, &mut self.rigid_body_set);
@@ -115,11 +121,11 @@ impl PhysicsWorld {
             if entity_id.starts_with("ball_") {
                 if let Some(body) = self.rigid_body_set.get_mut(*handle) {
                     let mut linvel = *body.linvel();
-                    // Small random perturbation to velocity for trajectory variation
+                    // Random perturbation to velocity for trajectory variation
                     if linvel.y < 0.1 && linvel.y > -0.1 {
-                        // Near ground, add random horizontal component
-                        linvel.x += rng.gen_range(-0.5..0.5);
-                        linvel.z += rng.gen_range(-0.5..0.5);
+                        // Near ground, add random horizontal component to maintain speed
+                        linvel.x += rng.gen_range(-20.0..20.0);
+                        linvel.z += rng.gen_range(-20.0..20.0);
                         body.set_linvel(linvel, true);
                     }
                 }
