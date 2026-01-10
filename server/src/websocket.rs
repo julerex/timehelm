@@ -60,16 +60,19 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
 
                             // Broadcast join to all players
                             let all_players = game.get_all_players();
+                            let all_entities = game.get_all_entities();
                             let player_count = all_players.len();
                             let world_state = GameMessage::WorldState {
                                 players: all_players,
+                                entities: all_entities,
                             };
                             let player_id_ref = &player.id;
                             tracing::debug!(
                                 "Player {player_id_ref} joined, total players: {player_count}"
                             );
-                            let _world_json = serde_json::to_string(&world_state).unwrap();
-                            // In a real implementation, broadcast to all connected clients
+                            if let Ok(world_json) = serde_json::to_string(&world_state) {
+                                let _ = tx.send(world_json).await;
+                            }
                         }
                         Ok(GameMessage::Move {
                             player_id: pid,

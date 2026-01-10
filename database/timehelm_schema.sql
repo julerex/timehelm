@@ -71,3 +71,36 @@ ON CONFLICT (id) DO NOTHING;
 CREATE TRIGGER update_game_state_updated_at BEFORE UPDATE ON game_state
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Entity types table
+CREATE TABLE IF NOT EXISTS entity_types (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Insert default entity types
+INSERT INTO entity_types (name) VALUES ('human'), ('ball')
+ON CONFLICT (name) DO NOTHING;
+
+-- Entities table
+CREATE TABLE IF NOT EXISTS entities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_type_id INTEGER NOT NULL REFERENCES entity_types(id),
+    position_x INTEGER NOT NULL DEFAULT 0,
+    position_y INTEGER NOT NULL DEFAULT 0,
+    position_z INTEGER NOT NULL DEFAULT 0,
+    rotation_x INTEGER NOT NULL DEFAULT 0,
+    rotation_y INTEGER NOT NULL DEFAULT 0,
+    rotation_z INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Trigger to auto-update updated_at for entities
+CREATE TRIGGER update_entities_updated_at BEFORE UPDATE ON entities
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Indexes for entity queries
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type_id);
+CREATE INDEX IF NOT EXISTS idx_entities_updated_at ON entities(updated_at);
+

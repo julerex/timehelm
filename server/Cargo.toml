@@ -15,7 +15,7 @@ oauth2 = "*"
 reqwest = { version = "*", features = ["json"] }
 jsonwebtoken = { version = "*", features = ["rust_crypto"] }
 chrono = { version = "*", features = ["serde"] }
-uuid = { version = "*", features = ["v4", "serde"] }
+uuid = { version = "*", features = ["v4", "v5", "serde"] }
 tracing = "*"
 tracing-subscriber = "*"
 anyhow = "*"
@@ -23,4 +23,5 @@ thiserror = "*"
 sqlx = { version = "*", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "migrate"] }
 dotenv = "*"
 rapier3d = { version = "*", features = ["simd-stable", "serde-serialize"] }
+rand = "*"
 

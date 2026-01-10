@@ -12,9 +12,10 @@ use tower_http::{cors::CorsLayer, services::ServeDir};
 // mod auth;  // Commented out - users/sessions tables not in use
 mod db;
 mod game;
+mod physics;
 mod websocket;
 
-use db::{create_pool, set_game_time_minutes};
+use db::{create_pool, save_all_entities, set_game_time_minutes};
 use game::GameState;
 use websocket::handle_websocket;
 
@@ -53,6 +54,36 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 tracing::debug!("Persisted game time: {game_time} minutes");
             }
+        }
+    });
+
+    // Background task to persist entities every real-world minute
+    let persist_pool_entities = pool.clone();
+    let game_state_for_entities = app_state.game.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let game = game_state_for_entities.read().await;
+            let entities: Vec<_> = game.get_all_entities();
+            drop(game);
+
+            if let Err(e) = save_all_entities(&persist_pool_entities, &entities).await {
+                tracing::error!("Failed to persist entities: {e}");
+            } else {
+                tracing::debug!("Persisted {} entities", entities.len());
+            }
+        }
+    });
+
+    // Physics update loop (60 FPS)
+    let game_state_for_physics = app_state.game.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_nanos(16_666_667)); // ~60 FPS
+        loop {
+            interval.tick().await;
+            let mut game = game_state_for_physics.write().await;
+            game.step_physics(1.0 / 60.0);
         }
     });
 
