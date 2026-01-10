@@ -1,5 +1,15 @@
 import * as THREE from 'three';
 
+// Custom calendar constants
+// 360 days per year, 12 months of 30 days each, 24 hours per day
+const MINUTES_PER_HOUR = 60;
+const HOURS_PER_DAY = 24;
+const MINUTES_PER_DAY = HOURS_PER_DAY * MINUTES_PER_HOUR; // 1440
+const DAYS_PER_MONTH = 30;
+const MONTHS_PER_YEAR = 12;
+const DAYS_PER_YEAR = DAYS_PER_MONTH * MONTHS_PER_YEAR; // 360
+const MINUTES_PER_YEAR = DAYS_PER_YEAR * MINUTES_PER_DAY; // 518,400
+
 export class DayNightCycle {
     private readonly scene: THREE.Scene;
     private readonly ambientLight: THREE.AmbientLight;
@@ -14,7 +24,7 @@ export class DayNightCycle {
     private readonly nightColor = new THREE.Color(0x000022);
 
     // Server-synced time tracking
-    // Game time advances at 1 game minute per real second (60x speed)
+    // Game time = Unix seconds (1 real second = 1 game minute)
     private syncedGameTimeMinutes: number = 0;
     private syncRealTime: number = Date.now();
     private hasSynced: boolean = false;
@@ -42,33 +52,69 @@ export class DayNightCycle {
     // --- Public Methods ---
 
     public update(): void {
-        const gameTime = this.calculateGameTime();
+        const totalMinutes = this.calculateTotalGameMinutes();
+        const timeOfDayHours = this.getTimeOfDayHours(totalMinutes);
 
-        this.updateTimeDisplay(gameTime);
-        this.updateCelestialBodies(gameTime);
-        this.updateLighting(gameTime);
-        this.updateSkyColor(gameTime);
+        this.updateTimeDisplay(totalMinutes);
+        this.updateCelestialBodies(timeOfDayHours);
+        this.updateLighting(timeOfDayHours);
+        this.updateSkyColor(timeOfDayHours);
     }
 
     public getGameTime(): number {
-        return this.calculateGameTime();
+        return this.calculateTotalGameMinutes();
     }
 
     /**
-     * Sync game time from server. Game time is in minutes where 0 = midnight.
+     * Sync game time from server. Game time is total minutes elapsed (Unix seconds).
      * After sync, time advances at 1 game minute per real second.
      */
     public syncTime(gameTimeMinutes: number): void {
         this.syncedGameTimeMinutes = gameTimeMinutes;
         this.syncRealTime = Date.now();
         this.hasSynced = true;
-        console.log(`Time synced: ${gameTimeMinutes} game minutes (${this.formatTime(gameTimeMinutes)})`);
+        const dateTime = this.formatDateTime(gameTimeMinutes);
+        console.log(`Time synced: ${gameTimeMinutes} game minutes (${dateTime})`);
     }
 
-    private formatTime(gameMinutes: number): string {
-        const hours = Math.floor(gameMinutes / 60) % 24;
-        const minutes = Math.floor(gameMinutes) % 60;
-        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    // --- Calendar Calculations ---
+
+    /**
+     * Convert total game minutes to custom calendar date/time.
+     * Calendar: 360 days/year, 12 months of 30 days, 24-hour days.
+     */
+    private getCalendarDate(totalMinutes: number): { year: number; month: number; day: number; hour: number; minute: number } {
+        const year = Math.floor(totalMinutes / MINUTES_PER_YEAR);
+        const minutesInYear = totalMinutes % MINUTES_PER_YEAR;
+        const dayOfYear = Math.floor(minutesInYear / MINUTES_PER_DAY);
+        const month = Math.floor(dayOfYear / DAYS_PER_MONTH) + 1; // 1-12
+        const day = (dayOfYear % DAYS_PER_MONTH) + 1; // 1-30
+        const minutesInDay = totalMinutes % MINUTES_PER_DAY;
+        const hour = Math.floor(minutesInDay / MINUTES_PER_HOUR);
+        const minute = minutesInDay % MINUTES_PER_HOUR;
+        
+        return { year, month, day, hour, minute };
+    }
+
+    /**
+     * Format date/time as YYYY/MM/DD HH:MM
+     */
+    private formatDateTime(totalMinutes: number): string {
+        const { year, month, day, hour, minute } = this.getCalendarDate(totalMinutes);
+        const yearStr = year.toString().padStart(4, '0');
+        const monthStr = month.toString().padStart(2, '0');
+        const dayStr = day.toString().padStart(2, '0');
+        const hourStr = hour.toString().padStart(2, '0');
+        const minuteStr = minute.toString().padStart(2, '0');
+        return `${yearStr}/${monthStr}/${dayStr} ${hourStr}:${minuteStr}`;
+    }
+
+    /**
+     * Get time of day in hours (0-24) for celestial/lighting calculations
+     */
+    private getTimeOfDayHours(totalMinutes: number): number {
+        const minutesInDay = totalMinutes % MINUTES_PER_DAY;
+        return minutesInDay / MINUTES_PER_HOUR;
     }
 
     // --- Private Methods ---
@@ -101,9 +147,12 @@ export class DayNightCycle {
         return new THREE.Mesh(geometry, material);
     }
 
-    private calculateGameTime(): number {
+    /**
+     * Calculate total game minutes elapsed since epoch.
+     * 1 real second = 1 game minute.
+     */
+    private calculateTotalGameMinutes(): number {
         if (!this.hasSynced) {
-            // Fallback: show 00:00 until server sync
             return 0;
         }
 
@@ -111,23 +160,16 @@ export class DayNightCycle {
         const elapsedRealMs = Date.now() - this.syncRealTime;
         
         // 1 game minute = 1 real second, so elapsed game minutes = elapsed real seconds
-        const elapsedGameMinutes = elapsedRealMs / 1000;
+        const elapsedGameMinutes = Math.floor(elapsedRealMs / 1000);
         
-        // Total game minutes since midnight (wraps at 24 hours = 1440 minutes)
-        const totalGameMinutes = (this.syncedGameTimeMinutes + elapsedGameMinutes) % 1440;
-        
-        // Convert to hours (0-23.999...) for compatibility with existing code
-        return totalGameMinutes / 60;
+        return this.syncedGameTimeMinutes + elapsedGameMinutes;
     }
 
-    private updateTimeDisplay(gameTime: number): void {
-        const displayHours = Math.floor(gameTime);
-        const displayMinutes = Math.floor((gameTime % 1) * 60);
-        const timeString = `${displayHours.toString().padStart(2, '0')}:${displayMinutes.toString().padStart(2, '0')}`;
-
+    private updateTimeDisplay(totalMinutes: number): void {
         const timeDisplay = document.getElementById('game-time-display');
         if (timeDisplay) {
-            timeDisplay.textContent = timeString;
+            const dateTimeStr = this.formatDateTime(totalMinutes);
+            timeDisplay.innerHTML = `Minutes Elapsed: ${totalMinutes}<br>${dateTimeStr}`;
         }
     }
 

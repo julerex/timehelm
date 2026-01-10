@@ -54,14 +54,12 @@ impl GameState {
     }
 
     /// Get the current game time in minutes, derived from Unix time.
-    /// Game time = Unix seconds % 1440, so each real second = 1 game minute,
-    /// and a full 24-hour game day cycles every 24 real minutes.
+    /// Game time = Unix seconds (1 real second = 1 game minute).
     pub fn get_game_time_minutes() -> i64 {
-        let unix_seconds = std::time::SystemTime::now()
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs() as i64;
-        unix_seconds % 1440
+            .as_secs() as i64
     }
 
     pub fn add_player(&mut self, player: Player) {
