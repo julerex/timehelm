@@ -57,7 +57,7 @@ impl PhysicsWorld {
         let mut rng = rand::thread_rng();
         let vel_x = rng.gen_range(-100.0..100.0);
         let vel_z = rng.gen_range(-100.0..100.0);
-        let vel_y = rng.gen_range(50.0..150.0); // Initial upward velocity for more dynamic bounces
+        let vel_y = 0.0; // Zero vertical velocity
 
         let rigid_body = RigidBodyBuilder::dynamic()
             .translation(vector![x, 500.0, z]) // Start at 5 meters (more visible than 10m)
