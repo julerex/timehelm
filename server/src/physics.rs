@@ -23,9 +23,11 @@ impl PhysicsWorld {
         let rigid_body_set = RigidBodySet::new();
         let mut collider_set = ColliderSet::new();
 
-        // Create ground plane
-        let ground_collider = ColliderBuilder::cuboid(1000.0, 0.1, 1000.0)
-            .translation(vector![0.0, 0.0, 0.0])
+        // Create ground plane (large cuboid to match visual ground size of 10000 units)
+        // Ground surface is at y=0, so the top of the cuboid is at y=0
+        // Using half-extents: 5000 (half of 10000) for x/z, 0.1 for y (thin ground)
+        let ground_collider = ColliderBuilder::cuboid(5000.0, 0.1, 5000.0)
+            .translation(vector![0.0, -0.1, 0.0]) // Position so top surface is at y=0
             .friction(0.0)
             .restitution(1.0) // Perfect elasticity
             .build();
@@ -58,13 +60,14 @@ impl PhysicsWorld {
         let vel_y = 0.0; // Start with no vertical velocity
 
         let rigid_body = RigidBodyBuilder::dynamic()
-            .translation(vector![x, 1000.0, z])
+            .translation(vector![x, 500.0, z]) // Start at 5 meters (more visible than 10m)
             .linvel(vector![vel_x, vel_y, vel_z])
             .build();
         let handle = self.rigid_body_set.insert(rigid_body);
 
         // Create sphere collider with perfect elasticity
-        let collider = ColliderBuilder::ball(0.5)
+        // Ball radius is 50 units (0.5m) to match visual representation
+        let collider = ColliderBuilder::ball(50.0)
             .restitution(1.0) // Perfect elasticity
             .friction(0.0)
             .density(1.0)

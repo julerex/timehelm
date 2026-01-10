@@ -84,8 +84,9 @@ impl GameState {
         let mut physics = PhysicsWorld::new();
 
         // Create initial bouncy ball
+        // Pole is at (-500, -400), ball is 200 units away at (-300, -400)
         let ball_id = format!("ball_{}", uuid::Uuid::new_v4());
-        physics.create_bouncy_ball(ball_id.clone(), 0.0, 0.0);
+        physics.create_bouncy_ball(ball_id.clone(), -300.0, -400.0);
 
         let mut entities = HashMap::new();
         entities.insert(
@@ -94,9 +95,9 @@ impl GameState {
                 id: ball_id,
                 entity_type: EntityType::Ball,
                 position: Position {
-                    x: 0.0,
-                    y: 1000.0,
-                    z: 0.0,
+                    x: -300.0, // 200 units away from pole at (-500, -400)
+                    y: 500.0,  // Start at 5 meters (more visible than 10m)
+                    z: -400.0,
                 },
                 rotation: Rotation {
                     x: 0.0,

@@ -13,9 +13,12 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
     // Create channel for sending messages to this client
     let (tx, mut rx) = mpsc::channel::<String>(32);
 
+    // Subscribe to broadcast channel for entity updates
+    let mut broadcast_rx = state.broadcast_tx.subscribe();
+
     // Send initial time sync - game time is derived from Unix time
     let game_time = crate::game::GameState::get_game_time_minutes();
-    let time_sync = GameMessage::TimeSync {
+    let time_sync = crate::messages::GameMessage::TimeSync {
         game_time_minutes: game_time,
     };
     if let Ok(json) = serde_json::to_string(&time_sync) {
@@ -35,6 +38,16 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
                             }
                         }
                         None => break,
+                    }
+                }
+                broadcast_msg = broadcast_rx.recv() => {
+                    match broadcast_msg {
+                        Ok(text) => {
+                            if sender.send(Message::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
                     }
                 }
                 _ = ping_interval.tick() => {

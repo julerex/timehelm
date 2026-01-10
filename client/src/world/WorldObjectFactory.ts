@@ -8,13 +8,23 @@ export type TreePresetName = keyof typeof TreePreset;
 export class WorldObjectFactory {
     // --- Public Static Methods ---
 
-    public static createGround(size: number = 10000): THREE.Mesh {
+    public static createGround(size: number = 10000): THREE.Group {
+        const group = new THREE.Group();
+
+        // Base ground plane
         const geometry = new THREE.PlaneGeometry(size, size);
         const material = new THREE.MeshStandardMaterial({ color: 0x90ee90 });
         const ground = new THREE.Mesh(geometry, material);
         ground.rotation.x = -Math.PI / 2;
         ground.receiveShadow = true;
-        return ground;
+        group.add(ground);
+
+        // Add grey gridlines 100 units apart
+        const gridHelper = new THREE.GridHelper(size, size / 100, 0x808080, 0x808080);
+        gridHelper.rotation.x = -Math.PI / 2;
+        group.add(gridHelper);
+
+        return group;
     }
 
     /**
@@ -91,5 +101,42 @@ export class WorldObjectFactory {
         const house = builder.build();
         house.position.set(x, 0, z);
         return house;
+    }
+
+    /**
+     * Creates a pole with red marks every 100 units height
+     * @param x - X position
+     * @param z - Z position
+     * @param height - Total height of the pole (default: 1000 units = 10 meters)
+     */
+    public static createPole(x: number, z: number, height: number = 1000): THREE.Group {
+        const group = new THREE.Group();
+
+        // Main pole (grey/white)
+        const poleGeometry = new THREE.CylinderGeometry(10, 10, height, 8);
+        const poleMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+        const pole = new THREE.Mesh(poleGeometry, poleMaterial);
+        pole.position.y = height / 2;
+        pole.castShadow = true;
+        pole.receiveShadow = true;
+        group.add(pole);
+
+        // Add red marks every 100 units
+        const markHeight = 30; // Height of each mark
+        const markWidth = 40; // Width of each mark (extends outward from pole)
+        const markGeometry = new THREE.BoxGeometry(markWidth, markHeight, markWidth);
+        const markMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+        
+        for (let y = 100; y < height; y += 100) {
+            const mark = new THREE.Mesh(markGeometry, markMaterial);
+            mark.position.y = y;
+            mark.position.x = 20; // Offset from center of pole (pole radius 10 + mark width/2)
+            mark.castShadow = true;
+            mark.receiveShadow = true;
+            group.add(mark);
+        }
+
+        group.position.set(x, 0, z);
+        return group;
     }
 }

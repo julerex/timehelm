@@ -6,7 +6,7 @@ use axum::{
 };
 use sqlx::PgPool;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
 // mod auth;  // Commented out - users/sessions tables not in use
@@ -18,12 +18,14 @@ mod websocket;
 
 use db::{create_pool, save_all_entities, set_game_time_minutes};
 use game::GameState;
+use messages::GameMessage;
 use websocket::handle_websocket;
 
 #[derive(Clone)]
 pub struct AppState {
     pub game: Arc<RwLock<GameState>>,
     pub db: PgPool,
+    pub broadcast_tx: broadcast::Sender<String>,
 }
 
 #[tokio::main]
@@ -37,10 +39,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Connected to database");
 
     let game_state = Arc::new(RwLock::new(GameState::new()));
+    let (broadcast_tx, _) = broadcast::channel::<String>(100);
 
     let app_state = AppState {
         game: game_state,
         db: pool.clone(),
+        broadcast_tx: broadcast_tx.clone(),
     };
 
     // Background task to persist game time every real-world minute
@@ -85,6 +89,28 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             let mut game = game_state_for_physics.write().await;
             game.step_physics(1.0 / 60.0);
+        }
+    });
+
+    // Broadcast entity updates to all clients (10 FPS for network efficiency)
+    let game_state_for_broadcast = app_state.game.clone();
+    let broadcast_tx_for_task = broadcast_tx.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100)); // 10 FPS
+        loop {
+            interval.tick().await;
+            let game = game_state_for_broadcast.read().await;
+            let all_players = game.get_all_players();
+            let all_entities = game.get_all_entities();
+            drop(game);
+
+            let world_state = GameMessage::WorldState {
+                players: all_players,
+                entities: all_entities,
+            };
+            if let Ok(world_json) = serde_json::to_string(&world_state) {
+                let _ = broadcast_tx_for_task.send(world_json);
+            }
         }
     });
 

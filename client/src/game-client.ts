@@ -105,13 +105,14 @@ export class GameClient {
         });
 
         // World objects
-        const tree = WorldObjectFactory.createTree(500, -500);
-        this.scene.add(tree);
-        this.worldObjects.push(tree);
-
         const house = WorldObjectFactory.createHouse(-600, -400);
         this.scene.add(house);
         this.worldObjects.push(house);
+
+        // Pole next to house (100 units to the right)
+        const pole = WorldObjectFactory.createPole(-500, -400);
+        this.scene.add(pole);
+        this.worldObjects.push(pole);
 
         // Initialize height opacity manager
         this.heightOpacityManager = new HeightOpacityManager(this.worldObjects);
