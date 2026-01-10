@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Player, Position, PlayerData, Activity } from './entities/Player';
+import { Entity, EntityData } from './entities/Entity';
 import { CameraController } from './camera/CameraController';
 import { InputManager } from './input/InputManager';
 import { NetworkManager, NetworkEventHandlers } from './network/NetworkManager';
@@ -33,6 +34,9 @@ export class GameClient {
     // Player management
     private players: Map<string, Player> = new Map();
     private myPlayer: Player | null = null;
+
+    // Entity management
+    private entities: Map<string, Entity> = new Map();
 
     // World objects (for height-based opacity filtering)
     private worldObjects: THREE.Object3D[] = [];
@@ -152,7 +156,9 @@ export class GameClient {
 
     private setupNetwork(): void {
         const handlers: NetworkEventHandlers = {
-            onWorldState: this.handleWorldState.bind(this),
+            onWorldState: (players: PlayerData[], entities: EntityData[]) => {
+                this.handleWorldState(players, entities);
+            },
             onPlayerJoin: this.handlePlayerJoin.bind(this),
             onPlayerLeave: this.handlePlayerLeave.bind(this),
             onPlayerMove: this.handlePlayerMove.bind(this),
@@ -173,7 +179,8 @@ export class GameClient {
 
     // --- Network Event Handlers ---
 
-    private handleWorldState(players: PlayerData[]): void {
+    private handleWorldState(players: PlayerData[], entities: EntityData[]): void {
+        // Update players
         for (const playerData of players) {
             if (playerData.id !== this.user.id) {
                 const existingPlayer = this.players.get(playerData.id);
@@ -187,6 +194,26 @@ export class GameClient {
                 }
             }
         }
+
+        // Update entities
+        for (const entityData of entities) {
+            const existingEntity = this.entities.get(entityData.id);
+            if (existingEntity) {
+                existingEntity.position = entityData.position;
+                existingEntity.rotation = entityData.rotation;
+            } else {
+                this.addEntity(entityData);
+            }
+        }
+
+        // Remove entities that are no longer in the world state
+        const entityIds = new Set(entities.map(e => e.id));
+        for (const [entityId] of this.entities.entries()) {
+            if (!entityIds.has(entityId)) {
+                this.removeEntity(entityId);
+            }
+        }
+
         this.updatePlayersList();
     }
 
@@ -242,6 +269,22 @@ export class GameClient {
         if (player) {
             this.scene?.remove(player.mesh);
             this.players.delete(playerId);
+        }
+    }
+
+    // --- Entity Management ---
+
+    private addEntity(entityData: EntityData): void {
+        const entity = Entity.fromData(entityData);
+        this.scene?.add(entity.mesh);
+        this.entities.set(entityData.id, entity);
+    }
+
+    private removeEntity(entityId: string): void {
+        const entity = this.entities.get(entityId);
+        if (entity) {
+            this.scene?.remove(entity.mesh);
+            this.entities.delete(entityId);
         }
     }
 

@@ -1,16 +1,23 @@
 import type { Activity, PlayerData, Position } from '../entities/Player';
 
+export interface EntityData {
+    id: string;
+    entity_type: 'human' | 'ball';
+    position: Position;
+    rotation: { x: number; y: number; z: number };
+}
+
 export type WebSocketMessage =
     | { type: 'Join'; player: PlayerData }
     | { type: 'Leave'; player_id: string }
     | { type: 'Move'; player_id: string; position: Position; rotation: number; is_moving: boolean }
     | { type: 'SetActivity'; player_id: string; activity: Activity }
     | { type: 'ActivityChanged'; player_id: string; activity: Activity }
-    | { type: 'WorldState'; players: PlayerData[] }
+    | { type: 'WorldState'; players: PlayerData[]; entities: EntityData[] }
     | { type: 'TimeSync'; game_time_minutes: number };
 
 export interface NetworkEventHandlers {
-    onWorldState: (players: PlayerData[]) => void;
+    onWorldState: (players: PlayerData[], entities: EntityData[]) => void;
     onPlayerJoin: (player: PlayerData) => void;
     onPlayerLeave: (playerId: string) => void;
     onPlayerMove: (playerId: string, position: Position, rotation: number, isMoving: boolean) => void;
@@ -107,7 +114,7 @@ export class NetworkManager {
     private processMessage(message: WebSocketMessage): void {
         switch (message.type) {
             case 'WorldState':
-                this.handlers.onWorldState(message.players);
+                this.handlers.onWorldState(message.players, message.entities);
                 break;
             case 'Join':
                 this.handlers.onPlayerJoin(message.player);
