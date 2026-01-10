@@ -3,7 +3,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 
-use crate::game::GameMessage;
+use crate::messages::GameMessage;
 use crate::AppState;
 
 pub async fn handle_websocket(socket: WebSocket, state: AppState) {

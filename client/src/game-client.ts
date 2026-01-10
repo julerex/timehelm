@@ -6,6 +6,8 @@ import { InputManager } from './input/InputManager';
 import { NetworkManager, NetworkEventHandlers } from './network/NetworkManager';
 import { DayNightCycle } from './environment/DayNightCycle';
 import { WorldObjectFactory } from './world/WorldObjectFactory';
+import { RandomMovementController } from './ai/RandomMovementController';
+import { HeightOpacityManager } from './world/HeightOpacityManager';
 
 // Re-export types for external use
 export { Player } from './entities/Player';
@@ -17,8 +19,6 @@ export interface User {
     display_name: string;
     avatar_url: string | null;
 }
-
-type RandomMoveAction = 'idle' | 'forward' | 'left' | 'right';
 
 export class GameClient {
     private readonly user: User;
@@ -40,23 +40,10 @@ export class GameClient {
 
     // World objects (for height-based opacity filtering)
     private worldObjects: THREE.Object3D[] = [];
+    private heightOpacityManager: HeightOpacityManager | null = null;
 
-    // Movement configuration (scaled for 60x game time)
-    // 6000 units/game minute = 100 units/frame at 60 FPS
-    private readonly moveSpeed = 100;
-    private readonly rotationSpeed = 0.2;
-
-    // Lawn boundaries (ground size 10000, so half = 5000, minus margin for player body)
-    private readonly lawnBounds = {
-        minX: -4970,
-        maxX: 4970,
-        minZ: -4970,
-        maxZ: 4970
-    };
-
-    // Random movement state
-    private randomMoveTimer = 0;
-    private randomMoveAction: RandomMoveAction = 'idle';
+    // Random movement controller
+    private randomMovement: RandomMovementController | null = null;
 
     constructor(user: User) {
         this.user = user;
@@ -102,6 +89,21 @@ export class GameClient {
         this.scene.add(this.myPlayer.mesh);
         this.players.set(this.user.id, this.myPlayer);
 
+        // Initialize random movement controller
+        // Movement configuration (scaled for 60x game time)
+        // 6000 units/game minute = 100 units/frame at 60 FPS
+        // Lawn boundaries (ground size 10000, so half = 5000, minus margin for player body)
+        this.randomMovement = new RandomMovementController({
+            moveSpeed: 100,
+            rotationSpeed: 0.2,
+            bounds: {
+                minX: -4970,
+                maxX: 4970,
+                minZ: -4970,
+                maxZ: 4970
+            }
+        });
+
         // World objects
         const tree = WorldObjectFactory.createTree(500, -500);
         this.scene.add(tree);
@@ -110,6 +112,9 @@ export class GameClient {
         const house = WorldObjectFactory.createHouse(-600, -400);
         this.scene.add(house);
         this.worldObjects.push(house);
+
+        // Initialize height opacity manager
+        this.heightOpacityManager = new HeightOpacityManager(this.worldObjects);
 
         // Handle window resize
         window.addEventListener('resize', this.handleResize);
@@ -129,9 +134,9 @@ export class GameClient {
             if (key >= '1' && key <= '9') {
                 const level = parseInt(key, 10);
                 const heightThreshold = level * 300; // 300cm = 3m per level
-                this.setHeightOpacity(heightThreshold);
+                this.heightOpacityManager?.setHeightOpacity(heightThreshold);
             } else if (key === '0') {
-                this.setHeightOpacity(null); // Reset to fully opaque
+                this.heightOpacityManager?.setHeightOpacity(null); // Reset to fully opaque
             }
         });
 
@@ -291,27 +296,20 @@ export class GameClient {
     // --- Update Methods ---
 
     private updateMovement(): void {
-        if (!this.myPlayer) return;
+        if (!this.myPlayer || !this.randomMovement) return;
 
+        const config = this.randomMovement.getConfig();
+        const action = this.randomMovement.update();
         let moved = false;
 
-        // Random movement logic
-        this.randomMoveTimer -= 1;
-        if (this.randomMoveTimer <= 0) {
-            // Weighted towards forward movement: 50% forward, 17% idle, 17% left, 17% right
-            const actions: RandomMoveAction[] = ['idle', 'forward', 'forward', 'forward', 'left', 'right'];
-            this.randomMoveAction = actions[Math.floor(Math.random() * actions.length)];
-            this.randomMoveTimer = Math.floor(Math.random() * 60) + 30;
-        }
-
-        if (this.randomMoveAction === 'forward') {
-            this.myPlayer.moveForward(this.moveSpeed, this.lawnBounds);
+        if (action === 'forward') {
+            this.myPlayer.moveForward(config.moveSpeed, config.bounds);
             moved = true;
-        } else if (this.randomMoveAction === 'left') {
-            this.myPlayer.rotate(this.rotationSpeed);
+        } else if (action === 'left') {
+            this.myPlayer.rotate(config.rotationSpeed);
             moved = true;
-        } else if (this.randomMoveAction === 'right') {
-            this.myPlayer.rotate(-this.rotationSpeed);
+        } else if (action === 'right') {
+            this.myPlayer.rotate(-config.rotationSpeed);
             moved = true;
         }
 
@@ -360,62 +358,6 @@ export class GameClient {
         }
     }
 
-    // --- Height-Based Visibility ---
-
-    /**
-     * Sets opacity for objects based on height threshold.
-     * Objects above the threshold become semi-transparent.
-     * Doors and roof elements are made transparent along with walls at the same floor level.
-     * @param heightThreshold - Height in cm above which objects become transparent. null = fully opaque.
-     */
-    private setHeightOpacity(heightThreshold: number | null): void {
-        const hiddenOpacity = 0.15;
-        const visibleOpacity = 1.0;
-
-        // Floor height constants (matching WorldObjectFactory)
-        const foundationHeight = 40;
-        const floorHeight = 270;
-        const floor1Top = foundationHeight + floorHeight;       // 310cm
-        const floor2Top = foundationHeight + floorHeight * 2;   // 580cm
-
-        for (const obj of this.worldObjects) {
-            obj.traverse((child) => {
-                if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
-                    // Get world position of the mesh
-                    const worldPos = new THREE.Vector3();
-                    child.getWorldPosition(worldPos);
-
-                    // Determine target opacity based on type
-                    let targetOpacity: number;
-                    if (heightThreshold === null) {
-                        targetOpacity = visibleOpacity;
-                    } else {
-                        const occlusionType = child.userData.occlusionType as string | undefined;
-                        const floorLevel = child.userData.floorLevel as number | undefined;
-
-                        if (occlusionType === 'door' && floorLevel !== undefined) {
-                            // Doors become transparent when their floor's walls would be transparent
-                            // Floor 1 doors: transparent when threshold < floor1Top (310cm)
-                            // Floor 2 doors: transparent when threshold < floor2Top (580cm)
-                            const floorTop = floorLevel === 1 ? floor1Top : floor2Top;
-                            targetOpacity = heightThreshold < floorTop ? hiddenOpacity : visibleOpacity;
-                        } else if (occlusionType === 'roof') {
-                            // Roof becomes transparent when threshold < floor2Top (when looking at 2nd floor)
-                            targetOpacity = heightThreshold < floor2Top ? hiddenOpacity : visibleOpacity;
-                        } else {
-                            // Default height-based check for walls and other objects
-                            targetOpacity = worldPos.y > heightThreshold ? hiddenOpacity : visibleOpacity;
-                        }
-                    }
-
-                    // Update material opacity
-                    child.material.transparent = true;
-                    child.material.opacity = targetOpacity;
-                    child.material.needsUpdate = true;
-                }
-            });
-        }
-    }
 
     // --- Event Handlers ---
 

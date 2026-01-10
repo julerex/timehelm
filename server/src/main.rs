@@ -12,6 +12,7 @@ use tower_http::{cors::CorsLayer, services::ServeDir};
 // mod auth;  // Commented out - users/sessions tables not in use
 mod db;
 mod game;
+mod messages;
 mod physics;
 mod websocket;
 
