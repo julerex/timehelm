@@ -1,6 +1,22 @@
+/**
+ * Day/night cycle module.
+ * 
+ * Manages lighting, sky color, and celestial body positions based on game time.
+ * Game time: 1 real second = 1 game minute.
+ */
+
 import * as THREE from 'three';
 import { GameCalendar } from '../time/Calendar';
 
+/**
+ * Day/night cycle controller.
+ * 
+ * Manages:
+ * - Ambient and directional lighting
+ * - Sky color transitions (day/sunset/night)
+ * - Sun and moon positions
+ * - Time synchronization with server
+ */
 export class DayNightCycle {
     private readonly scene: THREE.Scene;
     private readonly ambientLight: THREE.AmbientLight;

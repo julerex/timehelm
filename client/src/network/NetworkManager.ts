@@ -1,12 +1,29 @@
+/**
+ * Network manager module.
+ * 
+ * Handles WebSocket communication with the game server.
+ * Manages connection, reconnection, and message routing.
+ */
+
 import type { Activity, PlayerData, Position } from '../entities/Player';
 
+/**
+ * Entity data structure for network messages.
+ */
 export interface EntityData {
+    /** Unique entity identifier */
     id: string;
+    /** Type of entity */
     entity_type: 'human' | 'ball';
+    /** Current position */
     position: Position;
+    /** Rotation in Euler angles */
     rotation: { x: number; y: number; z: number };
 }
 
+/**
+ * WebSocket message types.
+ */
 export type WebSocketMessage =
     | { type: 'Join'; player: PlayerData }
     | { type: 'Leave'; player_id: string }
@@ -16,15 +33,33 @@ export type WebSocketMessage =
     | { type: 'WorldState'; players: PlayerData[]; entities: EntityData[] }
     | { type: 'TimeSync'; game_time_minutes: number };
 
+/**
+ * Network event handler callbacks.
+ */
 export interface NetworkEventHandlers {
+    /** Called when world state is received from server */
     onWorldState: (players: PlayerData[], entities: EntityData[]) => void;
+    /** Called when a player joins */
     onPlayerJoin: (player: PlayerData) => void;
+    /** Called when a player leaves */
     onPlayerLeave: (playerId: string) => void;
+    /** Called when a player moves */
     onPlayerMove: (playerId: string, position: Position, rotation: number, isMoving: boolean) => void;
+    /** Called when a player's activity changes */
     onActivityChanged: (playerId: string, activity: Activity) => void;
+    /** Called when game time is synchronized */
     onTimeSync: (gameTimeMinutes: number) => void;
 }
 
+/**
+ * Network manager class.
+ * 
+ * Handles WebSocket connection to game server:
+ * - Connection management
+ * - Automatic reconnection
+ * - Message sending and receiving
+ * - Event routing to handlers
+ */
 export class NetworkManager {
     private ws: WebSocket | null = null;
     private handlers: NetworkEventHandlers;

@@ -1,3 +1,10 @@
+/**
+ * Main game client orchestrator.
+ * 
+ * Manages Three.js scene, players, entities, networking, camera, input,
+ * day/night cycle, and world objects. Coordinates all game systems.
+ */
+
 import * as THREE from 'three';
 import { Player, Position, PlayerData, Activity } from './entities/Player';
 import { Entity, EntityData } from './entities/Entity';
@@ -13,13 +20,32 @@ import { HeightOpacityManager } from './world/HeightOpacityManager';
 export { Player } from './entities/Player';
 export type { Position, PlayerData, Activity } from './entities/Player';
 
+/**
+ * User information interface.
+ */
 export interface User {
+    /** Unique user identifier */
     id: string;
+    /** Username */
     username: string;
+    /** Display name */
     display_name: string;
+    /** Optional avatar URL */
     avatar_url: string | null;
 }
 
+/**
+ * Main game client class.
+ * 
+ * Orchestrates all game systems including:
+ * - Three.js scene and rendering
+ * - Player and entity management
+ * - Network communication
+ * - Camera control
+ * - Input handling
+ * - Day/night cycle
+ * - World objects
+ */
 export class GameClient {
     private readonly user: User;
 
@@ -45,12 +71,22 @@ export class GameClient {
     // Random movement controller
     private randomMovement: RandomMovementController | null = null;
 
+    /**
+     * Create a new game client.
+     * 
+     * @param user - User information for the local player
+     */
     constructor(user: User) {
         this.user = user;
     }
 
     // --- Public Methods ---
 
+    /**
+     * Initialize the game client.
+     * 
+     * Sets up scene, input, camera, network, and starts the animation loop.
+     */
     public init(): void {
         this.setupScene();
         this.setupInput();
@@ -59,6 +95,11 @@ export class GameClient {
         this.animate();
     }
 
+    /**
+     * Clean up resources and disconnect from server.
+     * 
+     * Should be called when the game client is being destroyed.
+     */
     public dispose(): void {
         this.inputManager?.dispose();
         this.networkManager?.disconnect();
@@ -66,25 +107,38 @@ export class GameClient {
 
     // --- Setup Methods ---
 
+    /**
+     * Set up the Three.js scene, renderer, and initial world objects.
+     * 
+     * Creates:
+     * - Scene with sky blue background
+     * - WebGL renderer with shadows
+     * - Day/night cycle lighting
+     * - Ground plane
+     * - Local player
+     * - World objects (house, pole)
+     * - Random movement controller
+     * - Height opacity manager
+     */
     private setupScene(): void {
-        // Scene
+        // Create Three.js scene with sky blue background
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x87ceeb);
 
-        // Renderer
+        // Create WebGL renderer with antialiasing and shadows
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = true;
         document.getElementById('game-container')?.appendChild(this.renderer.domElement);
 
-        // Day/Night cycle (handles lighting)
+        // Initialize day/night cycle (handles lighting and sky color)
         this.dayNightCycle = new DayNightCycle(this.scene);
 
-        // Ground
+        // Create ground plane
         const ground = WorldObjectFactory.createGround();
         this.scene.add(ground);
 
-        // Create my player
+        // Create local player
         this.myPlayer = new Player(this.user.id, this.user.username);
         this.scene.add(this.myPlayer.mesh);
         this.players.set(this.user.id, this.myPlayer);
@@ -104,7 +158,7 @@ export class GameClient {
             }
         });
 
-        // World objects
+        // Create world objects
         const house = WorldObjectFactory.createHouse(-600, -400);
         this.scene.add(house);
         this.worldObjects.push(house);
@@ -114,24 +168,32 @@ export class GameClient {
         this.scene.add(pole);
         this.worldObjects.push(pole);
 
-        // Initialize height opacity manager
+        // Initialize height opacity manager for floor visibility controls
         this.heightOpacityManager = new HeightOpacityManager(this.worldObjects);
 
-        // Handle window resize
+        // Handle window resize events
         window.addEventListener('resize', this.handleResize);
     }
 
+    /**
+     * Set up input handling.
+     * 
+     * Registers keyboard, mouse, and wheel event handlers for:
+     * - Camera controls (toggle anchor, rotation, zoom)
+     * - Height-based opacity controls (1-9 keys)
+     */
     private setupInput(): void {
         this.inputManager = new InputManager();
 
-        // Camera toggle and height visibility
+        // Camera toggle and height visibility controls
         this.inputManager.onKeyPress((key) => {
+            // Toggle camera anchor mode (C key)
             if (key === 'c') {
                 this.cameraController?.toggleAnchor();
                 this.updateCameraStatusDisplay();
             }
 
-            // Height-based opacity: 1-9 hide above (n * 3m), 0 resets
+            // Height-based opacity: 1-9 hide objects above (n * 3m), 0 resets
             if (key >= '1' && key <= '9') {
                 const level = parseInt(key, 10);
                 const heightThreshold = level * 300; // 300cm = 3m per level
@@ -141,17 +203,22 @@ export class GameClient {
             }
         });
 
-        // Camera rotation via mouse drag
+        // Camera rotation via right mouse drag
         this.inputManager.onMouseDrag((deltaX, deltaY) => {
             this.cameraController?.adjustRotation(deltaX * 0.01, deltaY * 0.01);
         });
 
-        // Camera zoom
+        // Camera zoom via mouse wheel
         this.inputManager.onWheel((delta) => {
             this.cameraController?.adjustZoom(delta);
         });
     }
 
+    /**
+     * Set up camera controller.
+     * 
+     * Creates perspective camera and sets initial position based on player.
+     */
     private setupCamera(): void {
         this.cameraController = new CameraController(window.innerWidth / window.innerHeight);
 
@@ -160,6 +227,16 @@ export class GameClient {
         }
     }
 
+    /**
+     * Set up network connection and message handlers.
+     * 
+     * Connects to WebSocket server and registers handlers for:
+     * - World state updates
+     * - Player join/leave events
+     * - Player movement updates
+     * - Activity changes
+     * - Time synchronization
+     */
     private setupNetwork(): void {
         const handlers: NetworkEventHandlers = {
             onWorldState: (players: PlayerData[], entities: EntityData[]) => {
@@ -175,7 +252,7 @@ export class GameClient {
         this.networkManager = new NetworkManager(handlers);
         this.networkManager.connect();
 
-        // Send initial join after a brief delay to ensure connection is established
+        // Send initial join message after a brief delay to ensure connection is established
         setTimeout(() => {
             if (this.myPlayer && this.networkManager?.isConnected()) {
                 this.networkManager.sendJoin(this.myPlayer.toData());
@@ -185,6 +262,14 @@ export class GameClient {
 
     // --- Network Event Handlers ---
 
+    /**
+     * Handle world state update from server.
+     * 
+     * Updates all players and entities, and removes entities that are no longer in the world.
+     * 
+     * @param players - Array of all player data
+     * @param entities - Array of all entity data
+     */
     private handleWorldState(players: PlayerData[], entities: EntityData[]): void {
         // Update players
         for (const playerData of players) {
@@ -223,6 +308,11 @@ export class GameClient {
         this.updatePlayersList();
     }
 
+    /**
+     * Handle player join event.
+     * 
+     * @param playerData - Data for the joining player
+     */
     private handlePlayerJoin(playerData: PlayerData): void {
         if (playerData.id !== this.user.id) {
             this.addRemotePlayer(playerData);
@@ -230,11 +320,24 @@ export class GameClient {
         }
     }
 
+    /**
+     * Handle player leave event.
+     * 
+     * @param playerId - ID of the player who left
+     */
     private handlePlayerLeave(playerId: string): void {
         this.removePlayer(playerId);
         this.updatePlayersList();
     }
 
+    /**
+     * Handle player movement update.
+     * 
+     * @param playerId - ID of the moving player
+     * @param position - New position
+     * @param rotation - New rotation
+     * @param isMoving - Whether the player is moving
+     */
     private handlePlayerMove(
         playerId: string,
         position: Position,
@@ -251,6 +354,12 @@ export class GameClient {
         }
     }
 
+    /**
+     * Handle player activity change.
+     * 
+     * @param playerId - ID of the player
+     * @param activity - New activity
+     */
     private handleActivityChanged(playerId: string, activity: Activity): void {
         const player = this.players.get(playerId);
         if (player) {
@@ -258,6 +367,11 @@ export class GameClient {
         }
     }
 
+    /**
+     * Handle game time synchronization from server.
+     * 
+     * @param gameTimeMinutes - Current game time in minutes
+     */
     private handleTimeSync(gameTimeMinutes: number): void {
         this.dayNightCycle?.syncTime(gameTimeMinutes);
     }
@@ -296,6 +410,11 @@ export class GameClient {
 
     // --- Update Methods ---
 
+    /**
+     * Update player movement based on random movement controller.
+     * 
+     * Sends movement updates to the server when the player moves.
+     */
     private updateMovement(): void {
         if (!this.myPlayer || !this.randomMovement) return;
 
@@ -326,9 +445,14 @@ export class GameClient {
         }
     }
 
+    /**
+     * Update animations for all players.
+     * 
+     * Detects movement for remote players and updates their animations.
+     */
     private updateAnimations(): void {
         for (const player of this.players.values()) {
-            // Detect movement for remote players
+            // Detect movement for remote players based on position changes
             if (player.id !== this.user.id) {
                 player.detectMovementFromPosition();
             }
@@ -370,17 +494,32 @@ export class GameClient {
 
     // --- Animation Loop ---
 
+    /**
+     * Main animation loop.
+     * 
+     * Called every frame to update:
+     * - Day/night cycle
+     * - Player movement
+     * - Animations
+     * - Camera
+     * - Rendering
+     */
     private animate = (): void => {
         requestAnimationFrame(this.animate);
 
+        // Update day/night cycle (lighting, sky color, celestial bodies)
         this.dayNightCycle?.update();
+        // Update player movement
         this.updateMovement();
+        // Update player animations
         this.updateAnimations();
 
+        // Update camera based on player and input
         if (this.cameraController && this.inputManager) {
             this.cameraController.update(this.myPlayer, this.inputManager);
         }
 
+        // Render the scene
         if (this.renderer && this.scene && this.cameraController) {
             this.renderer.render(this.scene, this.cameraController.getCamera());
         }

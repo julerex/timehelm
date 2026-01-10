@@ -1,3 +1,8 @@
+//! Twitter/X OAuth 2.0 authentication module.
+//!
+//! **Note:** Currently commented out in main.rs as users/sessions tables are not in use.
+//! This module provides OAuth authentication via Twitter/X.
+
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -13,17 +18,25 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Authentication state containing OAuth client and database connection.
 #[derive(Clone)]
 pub struct AuthState {
+    /// Twitter/X OAuth 2.0 client
     oauth_client: BasicClient,
+    /// PostgreSQL connection pool
     db: PgPool,
 }
 
+/// User information structure.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct User {
+    /// Unique user identifier (UUID string)
     pub id: String,
+    /// Twitter/X username
     pub username: String,
+    /// Display name
     pub display_name: String,
+    /// Optional avatar/profile image URL
     pub avatar_url: Option<String>,
 }
 

@@ -1,12 +1,29 @@
+/**
+ * Player entity module.
+ * 
+ * Handles player representation, movement, animations, and activity display.
+ */
+
 import * as THREE from 'three';
 
+/**
+ * 3D position in the game world.
+ * Units are in centimeters (1 unit = 1 cm).
+ */
 export interface Position {
+    /** X coordinate (horizontal, east-west) */
     x: number;
+    /** Y coordinate (vertical, height) */
     y: number;
+    /** Z coordinate (horizontal, north-south) */
     z: number;
 }
 
-/// Daily routine activities that characters can be engaged in
+/**
+ * Daily routine activities that characters can be engaged in.
+ * 
+ * Activities affect behavior, animations, and may influence game mechanics.
+ */
 export type Activity =
     | 'idle'
     | 'sleeping'
@@ -40,15 +57,34 @@ export const ACTIVITY_DISPLAY_TEXT: Record<Activity, string> = {
     commuting: 'Commuting 🚶',
 };
 
+/**
+ * Player data structure for network serialization.
+ */
 export interface PlayerData {
+    /** Unique player identifier */
     id: string;
+    /** Player username */
     username: string;
+    /** Current position */
     position: Position;
+    /** Rotation around Y-axis (radians) */
     rotation: number;
+    /** Whether the player is currently moving */
     is_moving?: boolean;
+    /** Current activity */
     activity?: Activity;
 }
 
+/**
+ * Player entity class.
+ * 
+ * Represents a player character in the game world with:
+ * - 3D mesh (body, head, limbs)
+ * - Position and rotation
+ * - Movement state
+ * - Activity display
+ * - Name label
+ */
 export class Player {
     public readonly id: string;
     public readonly username: string;
@@ -66,6 +102,12 @@ export class Player {
     private _activityCanvas: HTMLCanvasElement;
     private _activityTexture: THREE.CanvasTexture;
 
+    /**
+     * Create a new player.
+     * 
+     * @param id - Unique player identifier
+     * @param username - Player's display username
+     */
     constructor(id: string, username: string) {
         this.id = id;
         this.username = username;
@@ -122,6 +164,12 @@ export class Player {
 
     // --- Public Methods ---
 
+    /**
+     * Create a player from network data.
+     * 
+     * @param data - Player data from server
+     * @returns New Player instance
+     */
     public static fromData(data: PlayerData): Player {
         const player = new Player(data.id, data.username);
         player.position = data.position;
@@ -131,6 +179,11 @@ export class Player {
         return player;
     }
 
+    /**
+     * Convert player to network data format.
+     * 
+     * @returns Player data for network serialization
+     */
     public toData(): PlayerData {
         return {
             id: this.id,
@@ -142,6 +195,12 @@ export class Player {
         };
     }
 
+    /**
+     * Move the player forward by the specified speed.
+     * 
+     * @param speed - Movement speed in units per frame
+     * @param bounds - Optional movement boundaries to clamp position
+     */
     public moveForward(speed: number, bounds?: { minX: number; maxX: number; minZ: number; maxZ: number }): void {
         this.mesh.translateZ(-speed);
         
@@ -158,15 +217,32 @@ export class Player {
         };
     }
 
+    /**
+     * Rotate the player by the specified delta.
+     * 
+     * @param delta - Rotation delta in radians
+     */
     public rotate(delta: number): void {
         this._rotation += delta;
         this.mesh.rotation.y = this._rotation;
     }
 
+    /**
+     * Update player animation.
+     * 
+     * Currently no animation is implemented - character stays in static pose.
+     * 
+     * @param _deltaTime - Time delta in seconds (unused)
+     */
     public updateAnimation(_deltaTime: number = 1): void {
         // No walking animation - character stays in static pose
     }
 
+    /**
+     * Detect movement by comparing current position with last position.
+     * 
+     * Used for remote players to determine if they're moving based on position changes.
+     */
     public detectMovementFromPosition(): void {
         const pos = this.mesh.position;
         if (this._lastPosition) {

@@ -1,10 +1,34 @@
+/**
+ * Input manager module.
+ * 
+ * Handles keyboard, mouse, and wheel input events.
+ * Provides callback-based event system for game controls.
+ */
+
+/**
+ * Mouse position interface.
+ */
 export interface MousePosition {
+    /** X coordinate */
     x: number;
+    /** Y coordinate */
     y: number;
 }
 
+/**
+ * Callback type for key press events.
+ */
 export type InputEventCallback = (key: string) => void;
 
+/**
+ * Input manager class.
+ * 
+ * Manages all input events:
+ * - Keyboard key presses
+ * - Mouse drag (right mouse button)
+ * - Mouse wheel
+ * - Context menu prevention
+ */
 export class InputManager {
     private keys: Record<string, boolean> = {};
     private isRightMouseDown: boolean = false;

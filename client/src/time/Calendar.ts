@@ -1,3 +1,13 @@
+/**
+ * Calendar module for game time calculations.
+ * 
+ * Custom calendar system:
+ * - 360 days per year
+ * - 12 months of 30 days each
+ * - 24 hours per day
+ * - 60 minutes per hour
+ */
+
 // Custom calendar constants
 // 360 days per year, 12 months of 30 days each, 24 hours per day
 const MINUTES_PER_HOUR = 60;
@@ -8,17 +18,27 @@ const MONTHS_PER_YEAR = 12;
 const DAYS_PER_YEAR = DAYS_PER_MONTH * MONTHS_PER_YEAR; // 360
 const MINUTES_PER_YEAR = DAYS_PER_YEAR * MINUTES_PER_DAY; // 518,400
 
+/**
+ * Calendar date structure.
+ */
 export interface CalendarDate {
+    /** Year number */
     year: number;
+    /** Month number (1-12) */
     month: number;
+    /** Day number (1-30) */
     day: number;
+    /** Hour (0-23) */
     hour: number;
+    /** Minute (0-59) */
     minute: number;
 }
 
 /**
  * Calendar utility for the game's custom calendar system.
+ * 
  * Calendar: 360 days/year, 12 months of 30 days, 24-hour days.
+ * Provides date/time conversion and formatting functions.
  */
 export class GameCalendar {
     /**

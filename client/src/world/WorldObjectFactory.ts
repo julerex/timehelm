@@ -1,10 +1,27 @@
+/**
+ * World object factory module.
+ * 
+ * Provides factory methods for creating world objects like:
+ * - Ground plane
+ * - Trees (procedural and simple)
+ * - Houses
+ * - Poles
+ */
+
 import * as THREE from 'three';
 import { Tree, TreePreset } from '@dgreenheck/ez-tree';
 import { HouseBuilder } from './HouseBuilder';
 
-// Available tree presets from ez-tree
+/**
+ * Available tree presets from ez-tree library.
+ */
 export type TreePresetName = keyof typeof TreePreset;
 
+/**
+ * Factory class for creating world objects.
+ * 
+ * All objects use centimeters as units (1 unit = 1 cm).
+ */
 export class WorldObjectFactory {
     // --- Public Static Methods ---
 

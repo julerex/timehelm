@@ -1,4 +1,8 @@
-// Main entry point - re-exports for clean API
+/**
+ * Main entry point - re-exports for clean API.
+ * 
+ * Provides a centralized export point for all game client modules.
+ */
 
 // Core game client
 export { GameClient } from './game-client';

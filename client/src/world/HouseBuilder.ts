@@ -1,5 +1,24 @@
+/**
+ * House builder module.
+ * 
+ * Procedurally generates a realistic two-story house with:
+ * - Foundation
+ * - Two floors with interior walls
+ * - Doors and windows
+ * - Roof with chimney
+ * - Porch
+ * 
+ * All dimensions are in centimeters (1 unit = 1 cm).
+ */
+
 import * as THREE from 'three';
 
+/**
+ * House builder class.
+ * 
+ * Builds a complete two-story house with realistic dimensions and layout.
+ * House footprint: 12m x 10m (1200cm x 1000cm).
+ */
 export class HouseBuilder {
     private readonly group: THREE.Group;
 
@@ -45,6 +64,19 @@ export class HouseBuilder {
         this.floorMaterial = new THREE.MeshStandardMaterial({ color: 0xdeb887 }); // Burlywood
     }
 
+    /**
+     * Build the complete house.
+     * 
+     * Constructs all components in order:
+     * - Foundation
+     * - Exterior and interior walls
+     * - Floors
+     * - Doors and windows
+     * - Roof and chimney
+     * - Porch
+     * 
+     * @returns Complete house as a Three.js group
+     */
     public build(): THREE.Group {
         this.addFoundation();
         this.addFirstFloorExteriorWalls();

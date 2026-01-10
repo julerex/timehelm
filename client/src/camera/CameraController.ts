@@ -1,12 +1,34 @@
+/**
+ * Camera controller module.
+ * 
+ * Manages camera position, rotation, and zoom.
+ * Supports both anchored mode (follows player) and free mode (manual control).
+ */
+
 import * as THREE from 'three';
 import type { Player } from '../entities/Player';
 import type { InputManager } from '../input/InputManager';
 
+/**
+ * Camera rotation state.
+ */
 interface CameraRotation {
+    /** Horizontal rotation (theta) */
     theta: number;
+    /** Vertical rotation (phi) */
     phi: number;
 }
 
+/**
+ * Camera controller class.
+ * 
+ * Manages perspective camera with:
+ * - Anchored mode: Camera follows player
+ * - Free mode: Camera can be moved independently with WASD
+ * - Mouse drag rotation
+ * - Mouse wheel zoom
+ * - Arrow keys / Q/E for horizontal rotation
+ */
 export class CameraController {
     private readonly camera: THREE.PerspectiveCamera;
     private rotation: CameraRotation = { theta: 0, phi: 0.5 };

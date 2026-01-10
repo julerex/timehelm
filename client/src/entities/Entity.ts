@@ -1,13 +1,31 @@
+/**
+ * Entity module for non-player game objects.
+ * 
+ * Handles entities like balls and other physics objects.
+ */
+
 import * as THREE from 'three';
 import type { Position } from './Player';
 
+/**
+ * Entity data structure for network serialization.
+ */
 export interface EntityData {
+    /** Unique entity identifier */
     id: string;
+    /** Type of entity */
     entity_type: 'human' | 'ball';
+    /** Current position */
     position: Position;
+    /** Rotation in Euler angles (radians) */
     rotation: { x: number; y: number; z: number };
 }
 
+/**
+ * Entity class for non-player game objects.
+ * 
+ * Represents physics objects like balls that are synchronized from the server.
+ */
 export class Entity {
     public readonly id: string;
     public readonly entityType: 'human' | 'ball';
@@ -44,6 +62,12 @@ export class Entity {
 
     // --- Public Methods ---
 
+    /**
+     * Create an entity from network data.
+     * 
+     * @param data - Entity data from server
+     * @returns New Entity instance
+     */
     public static fromData(data: EntityData): Entity {
         const entity = new Entity(data.id, data.entity_type);
         entity.position = data.position;

@@ -1,8 +1,16 @@
+//! Physics simulation module using Rapier3D.
+//!
+//! Manages physics bodies, collisions, and entity dynamics.
+//! Units: centimeters (1 unit = 1 cm).
+
 use rand::Rng;
 use rapier3d::prelude::*;
 use std::collections::HashMap;
 
-/// Physics world manager
+/// Physics simulation world.
+///
+/// Manages rigid bodies, colliders, and physics simulation.
+/// Handles both dynamic objects (balls) and kinematic objects (humans).
 pub struct PhysicsWorld {
     pub rigid_body_set: RigidBodySet,
     pub collider_set: ColliderSet,
@@ -19,6 +27,10 @@ pub struct PhysicsWorld {
 }
 
 impl PhysicsWorld {
+    /// Create a new physics world with ground plane.
+    ///
+    /// Initializes physics simulation components and creates a ground collider.
+    /// Ground is a large plane (10000x10000 units) with perfect elasticity.
     pub fn new() -> Self {
         let rigid_body_set = RigidBodySet::new();
         let mut collider_set = ColliderSet::new();
@@ -49,7 +61,18 @@ impl PhysicsWorld {
         }
     }
 
-    /// Create a bouncy ball entity
+    /// Create a bouncy ball entity with physics simulation.
+    ///
+    /// Creates a dynamic rigid body (sphere) that responds to gravity and collisions.
+    /// Ball has perfect elasticity (restitution = 1.0) and no friction.
+    ///
+    /// # Arguments
+    /// * `entity_id` - Unique identifier for the entity
+    /// * `x` - Initial X position (centimeters)
+    /// * `z` - Initial Z position (centimeters)
+    ///
+    /// # Returns
+    /// Rigid body handle for physics updates
     pub fn create_bouncy_ball(&mut self, entity_id: String, x: f32, z: f32) -> RigidBodyHandle {
         use rand::Rng;
 
@@ -85,7 +108,19 @@ impl PhysicsWorld {
         handle
     }
 
-    /// Create a human entity (static or kinematic)
+    /// Create a human entity with kinematic physics body.
+    ///
+    /// Creates a kinematic rigid body (position-controlled, not physics-controlled).
+    /// Uses a capsule collider for human shape.
+    ///
+    /// # Arguments
+    /// * `entity_id` - Unique identifier for the entity
+    /// * `x` - Initial X position (centimeters)
+    /// * `y` - Initial Y position (centimeters)
+    /// * `z` - Initial Z position (centimeters)
+    ///
+    /// # Returns
+    /// Rigid body handle for position updates
     pub fn create_human(&mut self, entity_id: String, x: f32, y: f32, z: f32) -> RigidBodyHandle {
         let rigid_body = RigidBodyBuilder::kinematic_position_based()
             .translation(vector![x, y, z])
@@ -104,7 +139,16 @@ impl PhysicsWorld {
         handle
     }
 
-    /// Update human position (for kinematic bodies)
+    /// Update human position (for kinematic bodies).
+    ///
+    /// Sets the position of a kinematic human body directly.
+    /// Used when player position is updated from network input.
+    ///
+    /// # Arguments
+    /// * `entity_id` - Entity identifier
+    /// * `x` - New X position (centimeters)
+    /// * `y` - New Y position (centimeters)
+    /// * `z` - New Z position (centimeters)
     pub fn update_human_position(&mut self, entity_id: &str, x: f32, y: f32, z: f32) {
         if let Some(handle) = self.entity_handles.get(entity_id) {
             if let Some(body) = self.rigid_body_set.get_mut(*handle) {
@@ -113,7 +157,13 @@ impl PhysicsWorld {
         }
     }
 
-    /// Step the physics simulation
+    /// Step the physics simulation forward by one time step.
+    ///
+    /// Updates all physics bodies, handles collisions, and applies gravity.
+    /// Also adds random velocity perturbations to balls for visual variety.
+    ///
+    /// # Arguments
+    /// * `_dt` - Delta time in seconds (unused, but kept for API consistency)
     pub fn step(&mut self, _dt: f64) {
         // Add randomness to ball velocities on each step (simulates random bounce effects)
         let mut rng = rand::thread_rng();
@@ -150,7 +200,13 @@ impl PhysicsWorld {
         );
     }
 
-    /// Get entity position
+    /// Get entity position from physics world.
+    ///
+    /// # Arguments
+    /// * `entity_id` - Entity identifier
+    ///
+    /// # Returns
+    /// Position tuple (x, y, z) in centimeters, or None if entity not found
     pub fn get_entity_position(&self, entity_id: &str) -> Option<(f32, f32, f32)> {
         let handle = self.entity_handles.get(entity_id)?;
         let body = self.rigid_body_set.get(*handle)?;
@@ -158,7 +214,13 @@ impl PhysicsWorld {
         Some((translation.x, translation.y, translation.z))
     }
 
-    /// Get entity rotation (as Euler angles)
+    /// Get entity rotation as Euler angles.
+    ///
+    /// # Arguments
+    /// * `entity_id` - Entity identifier
+    ///
+    /// # Returns
+    /// Rotation tuple (x, y, z) in radians, or None if entity not found
     pub fn get_entity_rotation(&self, entity_id: &str) -> Option<(f32, f32, f32)> {
         let handle = self.entity_handles.get(entity_id)?;
         let body = self.rigid_body_set.get(*handle)?;
@@ -167,7 +229,12 @@ impl PhysicsWorld {
         Some((euler.0, euler.1, euler.2))
     }
 
-    /// Remove an entity from physics
+    /// Remove an entity from the physics world.
+    ///
+    /// Removes the rigid body and all associated colliders.
+    ///
+    /// # Arguments
+    /// * `entity_id` - Entity identifier to remove
     pub fn remove_entity(&mut self, entity_id: &str) {
         if let Some(handle) = self.entity_handles.remove(entity_id) {
             // Remove the rigid body (this will also remove associated colliders)
