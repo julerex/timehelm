@@ -44,44 +44,24 @@ pub struct Position {
 #[derive(Clone, Debug)]
 pub struct GameState {
     pub players: HashMap<String, Player>,
-    /// Game time in minutes when the server started tracking (from DB)
-    game_time_at_start: i64,
-    /// Real time (ms since epoch) when the server started tracking
-    real_time_at_start: i64,
 }
 
 impl GameState {
     pub fn new() -> Self {
         Self {
             players: HashMap::new(),
-            game_time_at_start: 0,
-            real_time_at_start: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64,
         }
     }
 
-    /// Initialize game time from database value
-    pub fn init_game_time(&mut self, game_time_minutes: i64) {
-        self.game_time_at_start = game_time_minutes;
-        self.real_time_at_start = std::time::SystemTime::now()
+    /// Get the current game time in minutes, derived from Unix time.
+    /// Game time = Unix seconds % 1440, so each real second = 1 game minute,
+    /// and a full 24-hour game day cycles every 24 real minutes.
+    pub fn get_game_time_minutes() -> i64 {
+        let unix_seconds = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as i64;
-    }
-
-    /// Get the current game time in minutes (advances at 1 game minute per real second)
-    pub fn get_game_time_minutes(&self) -> i64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let elapsed_real_ms = now - self.real_time_at_start;
-        // 1 game minute = 1 real second (1000ms)
-        let elapsed_game_minutes = elapsed_real_ms / 1000;
-        // Wrap at 24 hours = 1440 minutes
-        (self.game_time_at_start + elapsed_game_minutes) % 1440
+            .as_secs() as i64;
+        unix_seconds % 1440
     }
 
     pub fn add_player(&mut self, player: Player) {

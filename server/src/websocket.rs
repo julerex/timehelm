@@ -13,8 +13,8 @@ pub async fn handle_websocket(socket: WebSocket, state: AppState) {
     // Create channel for sending messages to this client
     let (tx, mut rx) = mpsc::channel::<String>(32);
 
-    // Send initial time sync from server's authoritative game time
-    let game_time = state.game.read().await.get_game_time_minutes();
+    // Send initial time sync - game time is derived from Unix time
+    let game_time = crate::game::GameState::get_game_time_minutes();
     let time_sync = GameMessage::TimeSync {
         game_time_minutes: game_time,
     };

@@ -32,3 +32,5 @@ deploy:
 	./build.sh
 	fly deploy
 
+fly-db-connect:
+	fly mpg connect $(PG_CLUSTER_ID)	
