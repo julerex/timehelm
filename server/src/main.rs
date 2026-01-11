@@ -127,8 +127,9 @@ async fn main() -> anyhow::Result<()> {
         loop {
             interval.tick().await;
             let mut game = game_state_for_physics.write().await;
-            // Step physics with delta time of 1/60 second
-            game.step_physics(1.0 / 60.0);
+            // Step physics with delta time of 1.0 game second
+            // Each real-time step (1/60 second) represents 1 game second (60x time scale)
+            game.step_physics(1.0);
         }
     });
 
