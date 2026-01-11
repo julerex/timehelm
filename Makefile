@@ -34,3 +34,6 @@ deploy:
 
 fly-db-connect:
 	fly mpg connect $(PG_CLUSTER_ID)	
+
+fly-logs:
+	fly logs --app timehelm

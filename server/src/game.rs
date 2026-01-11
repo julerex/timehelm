@@ -172,6 +172,8 @@ impl GameState {
             },
         );
 
+        let entity_count = entities.len();
+        tracing::info!("GameState initialized with {} entities", entity_count);
         Self {
             players: HashMap::new(),
             entities,

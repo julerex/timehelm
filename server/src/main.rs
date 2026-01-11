@@ -149,11 +149,16 @@ async fn main() -> anyhow::Result<()> {
 
             let world_state = GameMessage::WorldState {
                 players: all_players,
-                entities: all_entities,
+                entities: all_entities.clone(),
             };
             // Serialize and broadcast to all WebSocket clients
             if let Ok(world_json) = serde_json::to_string(&world_state) {
                 let _ = broadcast_tx_for_task.send(world_json);
+            } else {
+                tracing::warn!("Failed to serialize world state");
+            }
+            if !all_entities.is_empty() {
+                tracing::debug!("Broadcasting {} entities", all_entities.len());
             }
         }
     });

@@ -271,6 +271,15 @@ export class GameClient {
      * @param entities - Array of all entity data
      */
     private handleWorldState(players: PlayerData[], entities: EntityData[]): void {
+        // Debug: Log entity information
+        if (entities.length > 0) {
+            console.log(`[WorldState] Received ${entities.length} entities:`, entities.map(e => ({
+                id: e.id,
+                type: e.entity_type,
+                position: e.position
+            })));
+        }
+        
         // Update players
         for (const playerData of players) {
             if (playerData.id !== this.user.id) {
@@ -293,6 +302,7 @@ export class GameClient {
                 existingEntity.position = entityData.position;
                 existingEntity.rotation = entityData.rotation;
             } else {
+                console.log(`[WorldState] Adding new entity: ${entityData.id} (${entityData.entity_type}) at`, entityData.position);
                 this.addEntity(entityData);
             }
         }
@@ -396,8 +406,13 @@ export class GameClient {
 
     private addEntity(entityData: EntityData): void {
         const entity = Entity.fromData(entityData);
-        this.scene?.add(entity.mesh);
-        this.entities.set(entityData.id, entity);
+        if (this.scene) {
+            this.scene.add(entity.mesh);
+            this.entities.set(entityData.id, entity);
+            console.log(`[Entity] Added entity ${entityData.id} to scene. Mesh position:`, entity.mesh.position, 'Entity count:', this.entities.size);
+        } else {
+            console.error('[Entity] Cannot add entity - scene is null!');
+        }
     }
 
     private removeEntity(entityId: string): void {
