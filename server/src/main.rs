@@ -23,8 +23,10 @@ mod physics;
 mod websocket;
 
 use db::{create_pool, save_all_entities, set_game_time_minutes};
-use game::GameState;
+use game::{Entity, EntityType, GameState, Position, Rotation};
 use messages::GameMessage;
+use rand::Rng;
+use uuid::Uuid;
 use websocket::handle_websocket;
 
 /// Application state shared across all request handlers.
@@ -53,6 +55,7 @@ pub struct AppState {
 ///    - Entity persistence (every 60 seconds)
 ///    - Physics simulation (60 FPS)
 ///    - World state broadcasting (10 FPS)
+///    - Bouncy ball spawning (every 60 seconds)
 /// 4. HTTP/WebSocket server
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -152,6 +155,42 @@ async fn main() -> anyhow::Result<()> {
             if let Ok(world_json) = serde_json::to_string(&world_state) {
                 let _ = broadcast_tx_for_task.send(world_json);
             }
+        }
+    });
+
+    // Background task: Spawn a new bouncy ball at a random point on the ground every real-time minute
+    // Ground is 10000x10000 units, so random positions are within ±5000 for x and z
+    let game_state_for_ball_spawn = app_state.game.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            // Generate random position on the ground
+            // Create RNG inside loop to avoid Send issues
+            let x = rand::thread_rng().gen_range(-5000.0..5000.0);
+            let z = rand::thread_rng().gen_range(-5000.0..5000.0);
+            // Ball starts at y=500 (5 meters) for visibility, physics will handle falling
+            let y = 500.0;
+
+            // Create new ball entity
+            let ball_id = format!("ball_{}", Uuid::new_v4());
+            let ball_entity = Entity {
+                id: ball_id.clone(),
+                entity_type: EntityType::Ball,
+                position: Position { x, y, z },
+                rotation: Rotation {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            };
+
+            // Add entity to game state (this will also create the physics body)
+            let mut game = game_state_for_ball_spawn.write().await;
+            game.add_entity(ball_entity);
+            drop(game);
+
+            tracing::info!("Spawned new bouncy ball at ({x}, {z})");
         }
     });
 
