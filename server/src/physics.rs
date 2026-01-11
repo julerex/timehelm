@@ -32,18 +32,23 @@ impl PhysicsWorld {
     /// Initializes physics simulation components and creates a ground collider.
     /// Ground is a large plane (10000x10000 units) with perfect elasticity.
     pub fn new() -> Self {
-        let rigid_body_set = RigidBodySet::new();
+        let mut rigid_body_set = RigidBodySet::new();
         let mut collider_set = ColliderSet::new();
 
         // Create ground plane (large cuboid to match visual ground size of 10000 units)
         // Ground surface is at y=0, so the top of the cuboid is at y=0
         // Using half-extents: 5000 (half of 10000) for x/z, 0.1 for y (thin ground)
+        // Create a static rigid body for the ground
+        let ground_body = RigidBodyBuilder::fixed()
+            .translation(vector![0.0, -0.1, 0.0])
+            .build();
+        let ground_handle = rigid_body_set.insert(ground_body);
+
         let ground_collider = ColliderBuilder::cuboid(5000.0, 0.1, 5000.0)
-            .translation(vector![0.0, -0.1, 0.0]) // Position so top surface is at y=0
             .friction(0.0)
             .restitution(1.0) // Perfect elasticity
             .build();
-        collider_set.insert(ground_collider);
+        collider_set.insert_with_parent(ground_collider, ground_handle, &mut rigid_body_set);
 
         // Create boundary walls around the perimeter to contain bouncing balls
         // Ground is 10000x10000 units, so boundaries are at ±5000
@@ -53,52 +58,64 @@ impl PhysicsWorld {
         let ground_half_size = 5000.0;
 
         // East wall (positive X) - inner edge at x = ground_half_size
-        let east_wall = ColliderBuilder::cuboid(wall_thickness, wall_height, ground_half_size)
+        let east_wall_body = RigidBodyBuilder::fixed()
             .translation(vector![
                 ground_half_size + wall_thickness / 2.0,
                 wall_height,
                 0.0
             ])
+            .build();
+        let east_wall_handle = rigid_body_set.insert(east_wall_body);
+        let east_wall = ColliderBuilder::cuboid(wall_thickness, wall_height, ground_half_size)
             .friction(0.0)
             .restitution(1.0) // Perfect elasticity
             .build();
-        collider_set.insert(east_wall);
+        collider_set.insert_with_parent(east_wall, east_wall_handle, &mut rigid_body_set);
 
         // West wall (negative X) - inner edge at x = -ground_half_size
-        let west_wall = ColliderBuilder::cuboid(wall_thickness, wall_height, ground_half_size)
+        let west_wall_body = RigidBodyBuilder::fixed()
             .translation(vector![
                 -ground_half_size - wall_thickness / 2.0,
                 wall_height,
                 0.0
             ])
+            .build();
+        let west_wall_handle = rigid_body_set.insert(west_wall_body);
+        let west_wall = ColliderBuilder::cuboid(wall_thickness, wall_height, ground_half_size)
             .friction(0.0)
             .restitution(1.0) // Perfect elasticity
             .build();
-        collider_set.insert(west_wall);
+        collider_set.insert_with_parent(west_wall, west_wall_handle, &mut rigid_body_set);
 
         // North wall (positive Z) - inner edge at z = ground_half_size
-        let north_wall = ColliderBuilder::cuboid(ground_half_size, wall_height, wall_thickness)
+        let north_wall_body = RigidBodyBuilder::fixed()
             .translation(vector![
                 0.0,
                 wall_height,
                 ground_half_size + wall_thickness / 2.0
             ])
+            .build();
+        let north_wall_handle = rigid_body_set.insert(north_wall_body);
+        let north_wall = ColliderBuilder::cuboid(ground_half_size, wall_height, wall_thickness)
             .friction(0.0)
             .restitution(1.0) // Perfect elasticity
             .build();
-        collider_set.insert(north_wall);
+        collider_set.insert_with_parent(north_wall, north_wall_handle, &mut rigid_body_set);
 
         // South wall (negative Z) - inner edge at z = -ground_half_size
-        let south_wall = ColliderBuilder::cuboid(ground_half_size, wall_height, wall_thickness)
+        let south_wall_body = RigidBodyBuilder::fixed()
             .translation(vector![
                 0.0,
                 wall_height,
                 -ground_half_size - wall_thickness / 2.0
             ])
+            .build();
+        let south_wall_handle = rigid_body_set.insert(south_wall_body);
+        let south_wall = ColliderBuilder::cuboid(ground_half_size, wall_height, wall_thickness)
             .friction(0.0)
             .restitution(1.0) // Perfect elasticity
             .build();
-        collider_set.insert(south_wall);
+        collider_set.insert_with_parent(south_wall, south_wall_handle, &mut rigid_body_set);
 
         Self {
             rigid_body_set,
@@ -271,7 +288,31 @@ impl PhysicsWorld {
         let handle = self.entity_handles.get(entity_id)?;
         let body = self.rigid_body_set.get(*handle)?;
         let translation = body.translation();
-        Some((translation.x, translation.y, translation.z))
+        let x = translation.x;
+        let y = translation.y;
+        let z = translation.z;
+
+        // Validate positions to prevent corrupted values from being sent to clients
+        // If position is outside reasonable bounds, return None to skip update
+        if x.is_finite()
+            && y.is_finite()
+            && z.is_finite()
+            && x.abs() < 100000.0
+            && y.abs() < 100000.0
+            && z.abs() < 100000.0
+        {
+            Some((x, y, z))
+        } else {
+            // Position is corrupted (NaN, Inf, or extremely large)
+            tracing::warn!(
+                "Invalid position for entity {}: ({}, {}, {})",
+                entity_id,
+                x,
+                y,
+                z
+            );
+            None
+        }
     }
 
     /// Get entity rotation as Euler angles.

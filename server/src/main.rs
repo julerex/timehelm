@@ -154,11 +154,18 @@ async fn main() -> anyhow::Result<()> {
             // Serialize and broadcast to all WebSocket clients
             if let Ok(world_json) = serde_json::to_string(&world_state) {
                 let _ = broadcast_tx_for_task.send(world_json);
+                if !all_entities.is_empty() {
+                    tracing::info!(
+                        "Broadcasting {} entities: {:?}",
+                        all_entities.len(),
+                        all_entities
+                            .iter()
+                            .map(|e| (e.id.clone(), e.entity_type.as_str()))
+                            .collect::<Vec<_>>()
+                    );
+                }
             } else {
                 tracing::warn!("Failed to serialize world state");
-            }
-            if !all_entities.is_empty() {
-                tracing::debug!("Broadcasting {} entities", all_entities.len());
             }
         }
     });
