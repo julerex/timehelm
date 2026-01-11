@@ -37,14 +37,15 @@ impl PhysicsWorld {
 
         // Create ground plane (large cuboid to match visual ground size of 10000 units)
         // Ground surface is at y=0, so the top of the cuboid is at y=0
-        // Using half-extents: 5000 (half of 10000) for x/z, 0.1 for y (thin ground)
+        // Using half-extents: 5000 (half of 10000) for x/z, 10.0 for y (20cm thick ground)
         // Create a static rigid body for the ground
+        // Position ground body at y = -10.0 so the top surface is at y = 0.0
         let ground_body = RigidBodyBuilder::fixed()
-            .translation(vector![0.0, -0.1, 0.0])
+            .translation(vector![0.0, -10.0, 0.0])
             .build();
         let ground_handle = rigid_body_set.insert(ground_body);
 
-        let ground_collider = ColliderBuilder::cuboid(5000.0, 0.1, 5000.0)
+        let ground_collider = ColliderBuilder::cuboid(5000.0, 10.0, 5000.0)
             .friction(0.0)
             .restitution(1.0) // Perfect elasticity
             .build();
@@ -183,6 +184,11 @@ impl PhysicsWorld {
             .build();
         self.collider_set
             .insert_with_parent(collider, handle, &mut self.rigid_body_set);
+
+        // Enable continuous collision detection (CCD) on the rigid body to prevent tunneling
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            body.enable_ccd(true);
+        }
 
         self.entity_handles.insert(entity_id, handle);
         handle

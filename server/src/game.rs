@@ -3,6 +3,7 @@
 //! Handles player and entity state, game time, and physics integration.
 
 use crate::physics::PhysicsWorld;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -327,7 +328,33 @@ impl GameState {
         for entity in self.entities.values_mut() {
             // Update position from physics
             if let Some((x, y, z)) = self.physics.get_entity_position(&entity.id) {
-                entity.position = Position { x, y, z };
+                // Reset balls that have fallen too far below ground (y < -1000)
+                // This prevents balls from falling through the world indefinitely
+                if matches!(entity.entity_type, EntityType::Ball) && y < -1000.0 {
+                    tracing::warn!(
+                        "Ball {} fell below ground (y={}), resetting to y=500",
+                        entity.id,
+                        y
+                    );
+                    // Reset ball position to above ground with random x/z
+                    let mut rng = rand::thread_rng();
+                    let new_x = rng.gen_range(-5000.0..5000.0);
+                    let new_z = rng.gen_range(-5000.0..5000.0);
+                    let new_y = 500.0;
+
+                    // Remove old physics body and create new one
+                    self.physics.remove_entity(&entity.id);
+                    self.physics
+                        .create_bouncy_ball(entity.id.clone(), new_x, new_z);
+
+                    entity.position = Position {
+                        x: new_x,
+                        y: new_y,
+                        z: new_z,
+                    };
+                } else {
+                    entity.position = Position { x, y, z };
+                }
             }
             // Update rotation from physics
             if let Some((rx, ry, rz)) = self.physics.get_entity_rotation(&entity.id) {
