@@ -6,6 +6,8 @@ This file provides context for AI coding assistants working on the Time Helm pro
 
 Time Helm is an open-source, persistent-world MMO sandbox social simulation game. Think "The Sims Online" meets low-poly 3D with reality-centric mechanics.
 
+**Production URL:** https://timehelm.net/
+
 **Key game concepts:**
 - 1 real minute = 1 game hour (60x time scale)
 - 360 game-days per game-year
@@ -50,6 +52,9 @@ cd client && npm install && npm run dev
 Access at http://localhost:5173 (Vite proxies API/WebSocket to backend on :8080)
 
 ### Using Make
+
+**IMPORTANT:** Always check the `Makefile` for available commands before running manual commands. The Makefile contains the canonical commands for common tasks.
+
 ```bash
 make install      # Install all dependencies
 make dev-server   # Run Rust server
@@ -57,7 +62,10 @@ make dev-client   # Run Vite dev server
 make lint         # Lint both client and server
 make build        # Production build
 make deploy       # Build and deploy to fly.io
+make fly-logs     # View production server logs (requires flyctl)
 ```
+
+**Production URL:** The deployed application is available at https://timehelm.net/
 
 ## Project Structure
 
@@ -249,3 +257,7 @@ make deploy  # Builds frontend, deploys to fly.io
 ```
 
 Requires fly.io CLI (`flyctl`) and secrets configured. See README.md for full setup.
+
+**Production:** The deployed application is available at https://timehelm.net/
+
+**Viewing Logs:** Use `make fly-logs` to view production server logs. Always check the Makefile for the correct command syntax.
