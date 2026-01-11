@@ -38,7 +38,6 @@ export class WorldObjectFactory {
 
         // Add grey gridlines 100 units apart
         const gridHelper = new THREE.GridHelper(size, size / 100, 0x808080, 0x808080);
-        gridHelper.rotation.x = -Math.PI / 2;
         group.add(gridHelper);
 
         return group;
