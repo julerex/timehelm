@@ -55,7 +55,10 @@ impl PhysicsWorld {
             impulse_joint_set: ImpulseJointSet::new(),
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
-            gravity: vector![0.0, -981.0, 0.0], // Earth gravity: 9.81 m/s² = 981 cm/s²
+            // Earth gravity scaled for 60x time scale (1 real second = 60 game seconds)
+            // Base gravity: 9.81 m/s² = 981 cm/s²
+            // Scaled by 60² = 3600 (since acceleration = distance/time²)
+            gravity: vector![0.0, -981.0 * 3600.0, 0.0], // 3,531,600 cm/s² in game time
             integration_parameters: IntegrationParameters::default(),
             entity_handles: HashMap::new(),
         }
@@ -77,9 +80,10 @@ impl PhysicsWorld {
         use rand::Rng;
 
         // Random initial velocity for trajectory variation
+        // Scaled by 60 for 60x time scale (1 real second = 60 game seconds)
         let mut rng = rand::thread_rng();
-        let vel_x = rng.gen_range(-100.0..100.0);
-        let vel_z = rng.gen_range(-100.0..100.0);
+        let vel_x = rng.gen_range(-100.0..100.0) * 60.0;
+        let vel_z = rng.gen_range(-100.0..100.0) * 60.0;
         let vel_y = 0.0; // Zero vertical velocity
 
         let rigid_body = RigidBodyBuilder::dynamic()
@@ -172,10 +176,11 @@ impl PhysicsWorld {
                 if let Some(body) = self.rigid_body_set.get_mut(*handle) {
                     let mut linvel = *body.linvel();
                     // Random perturbation to velocity for trajectory variation
-                    if linvel.y < 0.1 && linvel.y > -0.1 {
+                    // Scaled by 60 for 60x time scale
+                    if linvel.y < 6.0 && linvel.y > -6.0 {
                         // Near ground, add random horizontal component to maintain speed
-                        linvel.x += rng.gen_range(-20.0..20.0);
-                        linvel.z += rng.gen_range(-20.0..20.0);
+                        linvel.x += rng.gen_range(-20.0..20.0) * 60.0;
+                        linvel.z += rng.gen_range(-20.0..20.0) * 60.0;
                         body.set_linvel(linvel, true);
                     }
                 }
