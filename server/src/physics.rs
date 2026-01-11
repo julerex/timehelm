@@ -45,6 +45,61 @@ impl PhysicsWorld {
             .build();
         collider_set.insert(ground_collider);
 
+        // Create boundary walls around the perimeter to contain bouncing balls
+        // Ground is 10000x10000 units, so boundaries are at ±5000
+        // Walls are 2000 units tall (20 meters) to contain high bounces
+        let wall_height = 2000.0;
+        let wall_thickness = 100.0; // 1 meter thick walls
+        let ground_half_size = 5000.0;
+
+        // East wall (positive X) - inner edge at x = ground_half_size
+        let east_wall = ColliderBuilder::cuboid(wall_thickness, wall_height, ground_half_size)
+            .translation(vector![
+                ground_half_size + wall_thickness / 2.0,
+                wall_height,
+                0.0
+            ])
+            .friction(0.0)
+            .restitution(1.0) // Perfect elasticity
+            .build();
+        collider_set.insert(east_wall);
+
+        // West wall (negative X) - inner edge at x = -ground_half_size
+        let west_wall = ColliderBuilder::cuboid(wall_thickness, wall_height, ground_half_size)
+            .translation(vector![
+                -ground_half_size - wall_thickness / 2.0,
+                wall_height,
+                0.0
+            ])
+            .friction(0.0)
+            .restitution(1.0) // Perfect elasticity
+            .build();
+        collider_set.insert(west_wall);
+
+        // North wall (positive Z) - inner edge at z = ground_half_size
+        let north_wall = ColliderBuilder::cuboid(ground_half_size, wall_height, wall_thickness)
+            .translation(vector![
+                0.0,
+                wall_height,
+                ground_half_size + wall_thickness / 2.0
+            ])
+            .friction(0.0)
+            .restitution(1.0) // Perfect elasticity
+            .build();
+        collider_set.insert(north_wall);
+
+        // South wall (negative Z) - inner edge at z = -ground_half_size
+        let south_wall = ColliderBuilder::cuboid(ground_half_size, wall_height, wall_thickness)
+            .translation(vector![
+                0.0,
+                wall_height,
+                -ground_half_size - wall_thickness / 2.0
+            ])
+            .friction(0.0)
+            .restitution(1.0) // Perfect elasticity
+            .build();
+        collider_set.insert(south_wall);
+
         Self {
             rigid_body_set,
             collider_set,
