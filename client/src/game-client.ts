@@ -168,8 +168,8 @@ export class GameClient {
         this.scene.add(pole);
         this.worldObjects.push(pole);
 
-        // Load and place bed next to house (to the right side, 200 units from house center)
-        WorldObjectFactory.loadBed(-300, -400)
+        // Load and place bed at (2500, 2500)
+        WorldObjectFactory.loadBed(2500, 2500)
             .then((bed) => {
                 if (this.scene) {
                     this.scene.add(bed);
