@@ -1,5 +1,2 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
 node scripts/write-commit-time.mjs
 npx --no-install lint-staged
