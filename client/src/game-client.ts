@@ -168,6 +168,18 @@ export class GameClient {
         this.scene.add(pole);
         this.worldObjects.push(pole);
 
+        // Load and place bed next to house (to the right side, 200 units from house center)
+        WorldObjectFactory.loadBed(-300, -400)
+            .then((bed) => {
+                if (this.scene) {
+                    this.scene.add(bed);
+                    this.worldObjects.push(bed);
+                }
+            })
+            .catch((error) => {
+                console.error('Failed to load bed:', error);
+            });
+
         // Initialize height opacity manager for floor visibility controls
         this.heightOpacityManager = new HeightOpacityManager(this.worldObjects);
 

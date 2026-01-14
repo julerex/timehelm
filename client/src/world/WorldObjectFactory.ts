@@ -6,9 +6,11 @@
  * - Trees (procedural and simple)
  * - Houses
  * - Poles
+ * - Furniture (loaded from GLB files)
  */
 
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { Tree, TreePreset } from '@dgreenheck/ez-tree';
 import { HouseBuilder } from './HouseBuilder';
 
@@ -154,5 +156,41 @@ export class WorldObjectFactory {
 
         group.position.set(x, 0, z);
         return group;
+    }
+
+    /**
+     * Loads a bed model from GLB file and places it at the specified position.
+     * @param x - X position
+     * @param z - Z position
+     * @returns Promise that resolves to the loaded bed group
+     */
+    public static async loadBed(x: number, z: number): Promise<THREE.Group> {
+        const loader = new GLTFLoader();
+        
+        return new Promise((resolve, reject) => {
+            loader.load(
+                '/assets/bedDouble.glb',
+                (gltf) => {
+                    const bed = gltf.scene;
+                    
+                    // Enable shadows on all meshes
+                    bed.traverse((child) => {
+                        if (child instanceof THREE.Mesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+                    
+                    // Position the bed
+                    bed.position.set(x, 0, z);
+                    
+                    resolve(bed);
+                },
+                undefined,
+                (error) => {
+                    reject(error);
+                }
+            );
+        });
     }
 }
