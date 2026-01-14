@@ -59,7 +59,10 @@ pub async fn get_entity_type_id(pool: &PgPool, name: &str) -> anyhow::Result<i32
 /// Entity data structure for database operations.
 ///
 /// Contains entity information in a format suitable for database storage.
-/// Positions and rotations are stored as integers (centimeters).
+/// Positions and rotations are stored as integers.
+///
+/// Note: The simulation uses meters, but positions are stored in the DB as
+/// centimeters (integers) for compactness/precision.
 pub struct EntityData {
     /// Entity identifier (can be UUID string or any string)
     pub id: String,
@@ -141,12 +144,14 @@ pub async fn save_all_entities(
     entities: &[crate::game::Entity],
 ) -> anyhow::Result<()> {
     for entity in entities {
+        // Simulation is in meters; DB storage is centimeters as integers.
+        let to_db_cm = |meters: f32| (meters * 100.0).round() as i32;
         let data = EntityData {
             id: entity.id.clone(),
             entity_type_name: entity.entity_type.as_str().to_string(),
-            position_x: entity.position.x as i32,
-            position_y: entity.position.y as i32,
-            position_z: entity.position.z as i32,
+            position_x: to_db_cm(entity.position.x),
+            position_y: to_db_cm(entity.position.y),
+            position_z: to_db_cm(entity.position.z),
             rotation_x: entity.rotation.x as i32,
             rotation_y: entity.rotation.y as i32,
             rotation_z: entity.rotation.z as i32,

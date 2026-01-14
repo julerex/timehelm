@@ -37,8 +37,8 @@ use websocket::handle_websocket;
 pub struct AppState {
     /// Thread-safe game state containing players, entities, and physics simulation
     pub game: Arc<RwLock<GameState>>,
-    /// PostgreSQL database connection pool
-    pub db: PgPool,
+    /// PostgreSQL database connection pool (optional for local dev)
+    pub db: Option<PgPool>,
     /// Broadcast channel sender for distributing world state updates to WebSocket clients
     pub broadcast_tx: broadcast::Sender<String>,
 }
@@ -61,10 +61,19 @@ async fn main() -> anyhow::Result<()> {
     // Initialize tracing for structured logging
     tracing_subscriber::fmt::init();
 
-    // Connect to PostgreSQL database
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = create_pool(&database_url).await?;
-    tracing::info!("Connected to database");
+    // Connect to PostgreSQL database (optional for local dev).
+    // If DATABASE_URL is not set, the server still runs, but persistence is disabled.
+    let pool = match std::env::var("DATABASE_URL") {
+        Ok(database_url) => {
+            let pool = create_pool(&database_url).await?;
+            tracing::info!("Connected to database");
+            Some(pool)
+        }
+        Err(_) => {
+            tracing::warn!("DATABASE_URL is not set; starting without persistence enabled");
+            None
+        }
+    };
 
     // Initialize game state with thread-safe access
     let game_state = Arc::new(RwLock::new(GameState::new()));
@@ -78,42 +87,44 @@ async fn main() -> anyhow::Result<()> {
         broadcast_tx: broadcast_tx.clone(),
     };
 
-    // Background task: Persist game time to database every real-world minute
-    // Game time is derived from Unix timestamp (1 real second = 1 game minute)
-    let persist_pool = pool.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            let game_time = GameState::get_game_time_minutes();
-            if let Err(e) = set_game_time_minutes(&persist_pool, game_time).await {
-                tracing::error!("Failed to persist game time: {e}");
-            } else {
-                tracing::debug!("Persisted game time: {game_time} minutes");
+    if let Some(pool) = pool.clone() {
+        // Background task: Persist game time to database every real-world minute
+        // Game time is derived from Unix timestamp (1 real second = 1 game minute)
+        let persist_pool = pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let game_time = GameState::get_game_time_minutes();
+                if let Err(e) = set_game_time_minutes(&persist_pool, game_time).await {
+                    tracing::error!("Failed to persist game time: {e}");
+                } else {
+                    tracing::debug!("Persisted game time: {game_time} minutes");
+                }
             }
-        }
-    });
+        });
 
-    // Background task: Persist all entities to database every real-world minute
-    // This ensures entity positions and states are saved periodically
-    let persist_pool_entities = pool.clone();
-    let game_state_for_entities = app_state.game.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            // Read lock to get all entities, then drop lock before database write
-            let game = game_state_for_entities.read().await;
-            let entities: Vec<_> = game.get_all_entities();
-            drop(game);
+        // Background task: Persist all entities to database every real-world minute
+        // This ensures entity positions and states are saved periodically
+        let persist_pool_entities = pool.clone();
+        let game_state_for_entities = app_state.game.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                // Read lock to get all entities, then drop lock before database write
+                let game = game_state_for_entities.read().await;
+                let entities: Vec<_> = game.get_all_entities();
+                drop(game);
 
-            if let Err(e) = save_all_entities(&persist_pool_entities, &entities).await {
-                tracing::error!("Failed to persist entities: {e}");
-            } else {
-                tracing::debug!("Persisted {} entities", entities.len());
+                if let Err(e) = save_all_entities(&persist_pool_entities, &entities).await {
+                    tracing::error!("Failed to persist entities: {e}");
+                } else {
+                    tracing::debug!("Persisted {} entities", entities.len());
+                }
             }
-        }
-    });
+        });
+    }
 
     // Background task: Physics simulation update loop running at 60 FPS
     // Updates physics world and syncs entity positions from physics simulation

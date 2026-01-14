@@ -8,7 +8,11 @@
  * - Roof with chimney
  * - Porch
  * 
- * All dimensions are in centimeters (1 unit = 1 cm).
+ * World units are meters (1 unit = 1 m).
+ *
+ * NOTE: This builder is currently authored in centimeters for readability of
+ * traditional architectural dimensions, then the final group is scaled by 0.01
+ * to convert to meters.
  */
 
 import * as THREE from 'three';
@@ -22,7 +26,7 @@ import * as THREE from 'three';
 export class HouseBuilder {
     private readonly group: THREE.Group;
 
-    // Realistic house dimensions (1 unit = 1 cm)
+    // Realistic house dimensions (authored in centimeters, converted to meters via group scale)
     // Total footprint: 12m x 10m (1200cm x 1000cm)
     private readonly width = 1200;      // 12 meters wide
     private readonly depth = 1000;      // 10 meters deep
@@ -93,6 +97,9 @@ export class HouseBuilder {
         this.addRoof();
         this.addChimney();
         this.addPorch();
+
+        // Convert authored-centimeter dimensions to world meters.
+        this.group.scale.set(0.01, 0.01, 0.01);
 
         return this.group;
     }

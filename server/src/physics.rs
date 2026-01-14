@@ -1,7 +1,7 @@
 //! Physics simulation module using Rapier3D.
 //!
 //! Manages physics bodies, collisions, and entity dynamics.
-//! Units: centimeters (1 unit = 1 cm).
+//! Units: meters (1 unit = 1 m).
 
 use rand::Rng;
 use rapier3d::prelude::*;
@@ -35,87 +35,91 @@ impl PhysicsWorld {
         let mut rigid_body_set = RigidBodySet::new();
         let mut collider_set = ColliderSet::new();
 
-        // Create ground plane (large cuboid to match visual ground size of 10000 units)
-        // Ground surface is at y=0, so the top of the cuboid is at y=0
-        // Using half-extents: 5000 (half of 10000) for x/z, 10.0 for y (20cm thick ground)
+        // Create ground plane (large cuboid to match visual ground size of 100m x 100m)
+        // Ground surface is at y=0, so the top of the cuboid is at y=0.
+        // Using half-extents: 50 (half of 100) for x/z, 0.1 for y (0.2m thick ground).
         // Create a static rigid body for the ground
-        // Position ground body at y = -10.0 so the top surface is at y = 0.0
+        // Position ground body at y = -0.1 so the top surface is at y = 0.0
         let ground_body = RigidBodyBuilder::fixed()
-            .translation(vector![0.0, -10.0, 0.0])
+            .translation(vector![0.0, -0.1, 0.0])
             .build();
         let ground_handle = rigid_body_set.insert(ground_body);
 
-        let ground_collider = ColliderBuilder::cuboid(5000.0, 10.0, 5000.0)
+        let ground_collider = ColliderBuilder::cuboid(50.0, 0.1, 50.0)
             .friction(0.0)
             .restitution(1.0) // Perfect elasticity
             .build();
         collider_set.insert_with_parent(ground_collider, ground_handle, &mut rigid_body_set);
 
-        // Create boundary walls around the perimeter to contain bouncing balls
-        // Ground is 10000x10000 units, so boundaries are at ±5000
-        // Walls are 2000 units tall (20 meters) to contain high bounces
-        let wall_height = 2000.0;
-        let wall_thickness = 100.0; // 1 meter thick walls
-        let ground_half_size = 5000.0;
+        // Create boundary walls around the perimeter to contain bouncing balls.
+        // Ground is 100m x 100m, so boundaries are at ±50.
+        // Walls are 20 meters tall to contain high bounces.
+        let wall_half_height = 10.0;
+        let wall_half_thickness = 0.5; // 1 meter thick walls
+        let ground_half_size = 50.0;
 
         // East wall (positive X) - inner edge at x = ground_half_size
         let east_wall_body = RigidBodyBuilder::fixed()
             .translation(vector![
-                ground_half_size + wall_thickness / 2.0,
-                wall_height,
+                ground_half_size + wall_half_thickness,
+                wall_half_height,
                 0.0
             ])
             .build();
         let east_wall_handle = rigid_body_set.insert(east_wall_body);
-        let east_wall = ColliderBuilder::cuboid(wall_thickness, wall_height, ground_half_size)
-            .friction(0.0)
-            .restitution(1.0) // Perfect elasticity
-            .build();
+        let east_wall =
+            ColliderBuilder::cuboid(wall_half_thickness, wall_half_height, ground_half_size)
+                .friction(0.0)
+                .restitution(1.0) // Perfect elasticity
+                .build();
         collider_set.insert_with_parent(east_wall, east_wall_handle, &mut rigid_body_set);
 
         // West wall (negative X) - inner edge at x = -ground_half_size
         let west_wall_body = RigidBodyBuilder::fixed()
             .translation(vector![
-                -ground_half_size - wall_thickness / 2.0,
-                wall_height,
+                -ground_half_size - wall_half_thickness,
+                wall_half_height,
                 0.0
             ])
             .build();
         let west_wall_handle = rigid_body_set.insert(west_wall_body);
-        let west_wall = ColliderBuilder::cuboid(wall_thickness, wall_height, ground_half_size)
-            .friction(0.0)
-            .restitution(1.0) // Perfect elasticity
-            .build();
+        let west_wall =
+            ColliderBuilder::cuboid(wall_half_thickness, wall_half_height, ground_half_size)
+                .friction(0.0)
+                .restitution(1.0) // Perfect elasticity
+                .build();
         collider_set.insert_with_parent(west_wall, west_wall_handle, &mut rigid_body_set);
 
         // North wall (positive Z) - inner edge at z = ground_half_size
         let north_wall_body = RigidBodyBuilder::fixed()
             .translation(vector![
                 0.0,
-                wall_height,
-                ground_half_size + wall_thickness / 2.0
+                wall_half_height,
+                ground_half_size + wall_half_thickness
             ])
             .build();
         let north_wall_handle = rigid_body_set.insert(north_wall_body);
-        let north_wall = ColliderBuilder::cuboid(ground_half_size, wall_height, wall_thickness)
-            .friction(0.0)
-            .restitution(1.0) // Perfect elasticity
-            .build();
+        let north_wall =
+            ColliderBuilder::cuboid(ground_half_size, wall_half_height, wall_half_thickness)
+                .friction(0.0)
+                .restitution(1.0) // Perfect elasticity
+                .build();
         collider_set.insert_with_parent(north_wall, north_wall_handle, &mut rigid_body_set);
 
         // South wall (negative Z) - inner edge at z = -ground_half_size
         let south_wall_body = RigidBodyBuilder::fixed()
             .translation(vector![
                 0.0,
-                wall_height,
-                -ground_half_size - wall_thickness / 2.0
+                wall_half_height,
+                -ground_half_size - wall_half_thickness
             ])
             .build();
         let south_wall_handle = rigid_body_set.insert(south_wall_body);
-        let south_wall = ColliderBuilder::cuboid(ground_half_size, wall_height, wall_thickness)
-            .friction(0.0)
-            .restitution(1.0) // Perfect elasticity
-            .build();
+        let south_wall =
+            ColliderBuilder::cuboid(ground_half_size, wall_half_height, wall_half_thickness)
+                .friction(0.0)
+                .restitution(1.0) // Perfect elasticity
+                .build();
         collider_set.insert_with_parent(south_wall, south_wall_handle, &mut rigid_body_set);
 
         Self {
@@ -128,9 +132,9 @@ impl PhysicsWorld {
             impulse_joint_set: ImpulseJointSet::new(),
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
-            // Earth gravity: 9.81 m/s² = 981 cm/s²
-            // Physics steps represent game time (1 step = 1 game second), so use normal gravity
-            gravity: vector![0.0, -981.0, 0.0], // 981 cm/s²
+            // Earth gravity: 9.81 m/s²
+            // Physics steps represent game time (1 step = 1 game second), so use normal gravity.
+            gravity: vector![0.0, -9.81, 0.0],
             integration_parameters: IntegrationParameters {
                 // Each physics step represents 1 game second (60x time scale)
                 // Real-time step is 1/60 second, but we simulate 1 game second per step
@@ -148,8 +152,8 @@ impl PhysicsWorld {
     ///
     /// # Arguments
     /// * `entity_id` - Unique identifier for the entity
-    /// * `x` - Initial X position (centimeters)
-    /// * `z` - Initial Z position (centimeters)
+    /// * `x` - Initial X position (meters)
+    /// * `z` - Initial Z position (meters)
     ///
     /// # Returns
     /// Rigid body handle for physics updates
@@ -157,27 +161,22 @@ impl PhysicsWorld {
         use rand::Rng;
 
         // Random initial velocity for trajectory variation
-        // Velocities are in game-time units (cm/game-second)
+        // Velocities are in game-time units (m/game-second)
         let mut rng = rand::thread_rng();
-        let vel_x = rng.gen_range(-100.0..100.0);
-        let vel_z = rng.gen_range(-100.0..100.0);
+        let vel_x = rng.gen_range(-1.0..1.0);
+        let vel_z = rng.gen_range(-1.0..1.0);
         let vel_y = 0.0; // Zero vertical velocity
 
         let rigid_body = RigidBodyBuilder::dynamic()
-            .translation(vector![x, 500.0, z]) // Start at 5 meters (more visible than 10m)
+            .translation(vector![x, 5.0, z]) // Start at 5 meters for visibility
             .linvel(vector![vel_x, vel_y, vel_z])
             .build();
         let handle = self.rigid_body_set.insert(rigid_body);
 
         // Create sphere collider with perfect elasticity
-        // Ball radius is 50 units (50cm = 0.5m) to match visual representation
-        // Rapier interprets units as-is, so radius 50 = 50 units (cm in our system)
-        // Volume in m³: (4/3)π(0.5)³ ≈ 0.523599 m³
-        // For 100g (0.1 kg) mass: density = 0.1 kg / 0.523599 m³ ≈ 0.191 kg/m³
-        // However, since Rapier calculates volume from radius directly, and we're using cm,
-        // we need density = mass(kg) / volume(m³) where volume is calculated from radius in meters
-        // If radius = 50 cm = 0.5 m, then density = 0.1 / ((4/3)π(0.5)³) = 0.191 kg/m³
-        let collider = ColliderBuilder::ball(50.0)
+        // Ball radius is 0.5m to match visual representation
+        // For 100g (0.1 kg) mass: density = 0.1 kg / ((4/3)π(0.5)³) ≈ 0.191 kg/m³
+        let collider = ColliderBuilder::ball(0.5)
             .restitution(1.0) // Perfect elasticity
             .friction(0.0)
             .density(0.191) // 100g ball: 0.1 kg / 0.523599 m³ ≈ 0.191 kg/m³
@@ -201,9 +200,9 @@ impl PhysicsWorld {
     ///
     /// # Arguments
     /// * `entity_id` - Unique identifier for the entity
-    /// * `x` - Initial X position (centimeters)
-    /// * `y` - Initial Y position (centimeters)
-    /// * `z` - Initial Z position (centimeters)
+    /// * `x` - Initial X position (meters)
+    /// * `y` - Initial Y position (meters)
+    /// * `z` - Initial Z position (meters)
     ///
     /// # Returns
     /// Rigid body handle for position updates
@@ -232,9 +231,9 @@ impl PhysicsWorld {
     ///
     /// # Arguments
     /// * `entity_id` - Entity identifier
-    /// * `x` - New X position (centimeters)
-    /// * `y` - New Y position (centimeters)
-    /// * `z` - New Z position (centimeters)
+    /// * `x` - New X position (meters)
+    /// * `y` - New Y position (meters)
+    /// * `z` - New Z position (meters)
     pub fn update_human_position(&mut self, entity_id: &str, x: f32, y: f32, z: f32) {
         if let Some(handle) = self.entity_handles.get(entity_id) {
             if let Some(body) = self.rigid_body_set.get_mut(*handle) {
@@ -258,11 +257,11 @@ impl PhysicsWorld {
                 if let Some(body) = self.rigid_body_set.get_mut(*handle) {
                     let mut linvel = *body.linvel();
                     // Random perturbation to velocity for trajectory variation
-                    // Velocities are in game-time units (cm/game-second)
-                    if linvel.y < 6.0 && linvel.y > -6.0 {
+                    // Velocities are in game-time units (m/game-second)
+                    if linvel.y < 0.06 && linvel.y > -0.06 {
                         // Near ground, add random horizontal component to maintain speed
-                        linvel.x += rng.gen_range(-20.0..20.0);
-                        linvel.z += rng.gen_range(-20.0..20.0);
+                        linvel.x += rng.gen_range(-0.2..0.2);
+                        linvel.z += rng.gen_range(-0.2..0.2);
                         body.set_linvel(linvel, true);
                     }
                 }
@@ -293,7 +292,7 @@ impl PhysicsWorld {
     /// * `entity_id` - Entity identifier
     ///
     /// # Returns
-    /// Position tuple (x, y, z) in centimeters, or None if entity not found
+    /// Position tuple (x, y, z) in meters, or None if entity not found
     pub fn get_entity_position(&self, entity_id: &str) -> Option<(f32, f32, f32)> {
         let handle = self.entity_handles.get(entity_id)?;
         let body = self.rigid_body_set.get(*handle)?;
@@ -307,9 +306,9 @@ impl PhysicsWorld {
         if x.is_finite()
             && y.is_finite()
             && z.is_finite()
-            && x.abs() < 100000.0
-            && y.abs() < 100000.0
-            && z.abs() < 100000.0
+            && x.abs() < 1000.0
+            && y.abs() < 1000.0
+            && z.abs() < 1000.0
         {
             Some((x, y, z))
         } else {

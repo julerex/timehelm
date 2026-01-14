@@ -8,6 +8,9 @@ node_modules/
 dist/
 *.log
 
+# Local dev logs
+.devlogs/
+
 # Environment
 .env
 .env.local

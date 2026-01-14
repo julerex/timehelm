@@ -32,19 +32,19 @@ interface CameraRotation {
 export class CameraController {
     private readonly camera: THREE.PerspectiveCamera;
     private rotation: CameraRotation = { theta: 0, phi: 0.5 };
-    private distance: number = 1000;
+    private distance: number = 10;
     private anchored: boolean = false;
     private focusPoint: THREE.Vector3 | null = null;
 
     // Configuration
-    private readonly minDistance: number = 200;
-    private readonly maxDistance: number = 5000;
+    private readonly minDistance: number = 2;
+    private readonly maxDistance: number = 50;
     private readonly rotationSpeed: number = 0.02;
-    private readonly freeMoveSpeed: number = 50;
+    private readonly freeMoveSpeed: number = 0.5;
 
     constructor(aspectRatio: number) {
-        this.camera = new THREE.PerspectiveCamera(75, aspectRatio, 10, 100000);
-        this.camera.position.set(0, 500, 1000);
+        this.camera = new THREE.PerspectiveCamera(75, aspectRatio, 0.1, 10000);
+        this.camera.position.set(0, 5, 10);
         this.camera.lookAt(0, 0, 0);
     }
 
@@ -147,7 +147,7 @@ export class CameraController {
         this.camera.position.set(targetX + x, targetY + y, targetZ + z);
 
         // Look at the target point
-        const target = new THREE.Vector3(targetX, targetY + 150, targetZ);
+        const target = new THREE.Vector3(targetX, targetY + 1.5, targetZ);
         this.camera.lookAt(target);
     }
 
@@ -158,6 +158,6 @@ export class CameraController {
 
     public setInitialPosition(player: Player): void {
         const pos = player.mesh.position;
-        this.camera.position.set(pos.x, pos.y + 500, pos.z + 1000);
+        this.camera.position.set(pos.x, pos.y + 5, pos.z + 10);
     }
 }

@@ -8,7 +8,7 @@ import * as THREE from 'three';
 
 /**
  * 3D position in the game world.
- * Units are in centimeters (1 unit = 1 cm).
+ * Units are in meters (1 unit = 1 m).
  */
 export interface Position {
     /** X coordinate (horizontal, east-west) */
@@ -269,46 +269,46 @@ export class Player {
         const group = new THREE.Group();
 
         // Body (torso)
-        const bodyGeometry = new THREE.BoxGeometry(60, 80, 40);
+        const bodyGeometry = new THREE.BoxGeometry(0.6, 0.8, 0.4);
         const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
         const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-        body.position.y = 110;
+        body.position.y = 1.1;
         body.castShadow = true;
         group.add(body);
 
         // Head
-        const headGeometry = new THREE.BoxGeometry(40, 40, 40);
+        const headGeometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
         const headMaterial = new THREE.MeshStandardMaterial({ color: 0xffdbac });
         const head = new THREE.Mesh(headGeometry, headMaterial);
-        head.position.y = 170;
+        head.position.y = 1.7;
         head.castShadow = true;
         group.add(head);
 
         // Legs
-        const legGeometry = new THREE.BoxGeometry(20, 70, 20);
+        const legGeometry = new THREE.BoxGeometry(0.2, 0.7, 0.2);
         const legMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
 
         const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
-        leftLeg.position.set(-15, 35, 0);
+        leftLeg.position.set(-0.15, 0.35, 0);
         leftLeg.castShadow = true;
         group.add(leftLeg);
 
         const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
-        rightLeg.position.set(15, 35, 0);
+        rightLeg.position.set(0.15, 0.35, 0);
         rightLeg.castShadow = true;
         group.add(rightLeg);
 
         // Arms
-        const armGeometry = new THREE.BoxGeometry(20, 70, 20);
+        const armGeometry = new THREE.BoxGeometry(0.2, 0.7, 0.2);
         const armMaterial = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
 
         const leftArm = new THREE.Mesh(armGeometry, armMaterial);
-        leftArm.position.set(-40, 110, 0);
+        leftArm.position.set(-0.4, 1.1, 0);
         leftArm.castShadow = true;
         group.add(leftArm);
 
         const rightArm = new THREE.Mesh(armGeometry, armMaterial);
-        rightArm.position.set(40, 110, 0);
+        rightArm.position.set(0.4, 1.1, 0);
         rightArm.castShadow = true;
         group.add(rightArm);
 
@@ -329,8 +329,8 @@ export class Player {
         const texture = new THREE.CanvasTexture(canvas);
         const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
         const sprite = new THREE.Sprite(spriteMaterial);
-        sprite.position.y = 250;
-        sprite.scale.set(200, 50, 100);
+        sprite.position.y = 2.5;
+        sprite.scale.set(2.0, 0.5, 1.0);
         group.add(sprite);
 
         // Activity info box (above name label)
@@ -345,8 +345,8 @@ export class Player {
         const activityTexture = new THREE.CanvasTexture(activityCanvas);
         const activitySpriteMaterial = new THREE.SpriteMaterial({ map: activityTexture });
         const activitySprite = new THREE.Sprite(activitySpriteMaterial);
-        activitySprite.position.y = 310;
-        activitySprite.scale.set(240, 36, 100);
+        activitySprite.position.y = 3.1;
+        activitySprite.scale.set(2.4, 0.36, 1.0);
         group.add(activitySprite);
 
         return { group, leftLeg, rightLeg, leftArm, rightArm, activityCanvas, activityTexture };

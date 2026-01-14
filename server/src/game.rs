@@ -54,7 +54,7 @@ pub struct Player {
     pub id: String,
     /// Player's display username
     pub username: String,
-    /// Current position in 3D space (units are centimeters)
+    /// Current position in 3D space (units are meters)
     pub position: Position,
     /// Rotation around Y-axis (in radians)
     pub rotation: f32,
@@ -68,7 +68,7 @@ pub struct Player {
 
 /// 3D position in the game world.
 ///
-/// Units are in centimeters (1 unit = 1 cm).
+/// Units are in meters (1 unit = 1 m).
 /// Y-axis is vertical (height).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Position {
@@ -109,7 +109,7 @@ pub struct Entity {
     pub id: String,
     /// Type of entity
     pub entity_type: EntityType,
-    /// Current position in 3D space (units are centimeters)
+    /// Current position in 3D space (units are meters)
     pub position: Position,
     /// Rotation in Euler angles (radians)
     pub rotation: Rotation,
@@ -152,7 +152,7 @@ impl GameState {
         // Create initial bouncy ball
         // Pole is at (-500, -400), ball is 200 units away at (-300, -400)
         let ball_id = format!("ball_{}", uuid::Uuid::new_v4());
-        physics.create_bouncy_ball(ball_id.clone(), -300.0, -400.0);
+        physics.create_bouncy_ball(ball_id.clone(), -3.0, -4.0);
 
         let mut entities = HashMap::new();
         entities.insert(
@@ -161,9 +161,9 @@ impl GameState {
                 id: ball_id,
                 entity_type: EntityType::Ball,
                 position: Position {
-                    x: -300.0, // 200 units away from pole at (-500, -400)
-                    y: 500.0,  // Start at 5 meters (500cm) for visibility
-                    z: -400.0,
+                    x: -3.0, // 2m away from pole at (-5, -4)
+                    y: 5.0,  // Start at 5 meters for visibility
+                    z: -4.0,
                 },
                 rotation: Rotation {
                     x: 0.0,
@@ -328,19 +328,19 @@ impl GameState {
         for entity in self.entities.values_mut() {
             // Update position from physics
             if let Some((x, y, z)) = self.physics.get_entity_position(&entity.id) {
-                // Reset balls that have fallen too far below ground (y < -1000)
+                // Reset balls that have fallen too far below ground (y < -10m)
                 // This prevents balls from falling through the world indefinitely
-                if matches!(entity.entity_type, EntityType::Ball) && y < -1000.0 {
+                if matches!(entity.entity_type, EntityType::Ball) && y < -10.0 {
                     tracing::warn!(
-                        "Ball {} fell below ground (y={}), resetting to y=500",
+                        "Ball {} fell below ground (y={}), resetting to y=5",
                         entity.id,
                         y
                     );
                     // Reset ball position to above ground with random x/z
                     let mut rng = rand::thread_rng();
-                    let new_x = rng.gen_range(-5000.0..5000.0);
-                    let new_z = rng.gen_range(-5000.0..5000.0);
-                    let new_y = 500.0;
+                    let new_x = rng.gen_range(-50.0..50.0);
+                    let new_z = rng.gen_range(-50.0..50.0);
+                    let new_y = 5.0;
 
                     // Remove old physics body and create new one
                     self.physics.remove_entity(&entity.id);

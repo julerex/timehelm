@@ -88,7 +88,7 @@ export class Entity {
 
     private createBallMesh(): THREE.Mesh {
         // Create a bouncy ball - a sphere with a bright color
-        const geometry = new THREE.SphereGeometry(50, 32, 32); // 50 unit radius (0.5m in game units)
+        const geometry = new THREE.SphereGeometry(0.5, 32, 32); // 0.5m radius
         const material = new THREE.MeshStandardMaterial({
             color: 0xff0000, // Bright red
             roughness: 0.3,

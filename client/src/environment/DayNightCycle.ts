@@ -25,7 +25,7 @@ export class DayNightCycle {
     private readonly moonMesh: THREE.Mesh;
 
     // Configuration
-    private readonly sunRadius: number = 5000;
+    private readonly sunRadius: number = 50;
     private readonly dayColor = new THREE.Color(0x87ceeb);
     private readonly sunsetColor = new THREE.Color(0xff4500);
     private readonly nightColor = new THREE.Color(0x000022);
@@ -88,14 +88,14 @@ export class DayNightCycle {
 
     private createSunLight(): THREE.DirectionalLight {
         const light = new THREE.DirectionalLight(0xffffff, 1.0);
-        light.position.set(0, 10000, 0);
+        light.position.set(0, 100, 0);
         light.castShadow = true;
 
         // Shadow camera setup
-        light.shadow.camera.left = -5000;
-        light.shadow.camera.right = 5000;
-        light.shadow.camera.top = 5000;
-        light.shadow.camera.bottom = -5000;
+        light.shadow.camera.left = -50;
+        light.shadow.camera.right = 50;
+        light.shadow.camera.top = 50;
+        light.shadow.camera.bottom = -50;
         light.shadow.mapSize.width = 2048;
         light.shadow.mapSize.height = 2048;
 
@@ -103,13 +103,13 @@ export class DayNightCycle {
     }
 
     private createSunMesh(): THREE.Mesh {
-        const geometry = new THREE.SphereGeometry(200, 32, 32);
+        const geometry = new THREE.SphereGeometry(2, 32, 32);
         const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
         return new THREE.Mesh(geometry, material);
     }
 
     private createMoonMesh(): THREE.Mesh {
-        const geometry = new THREE.SphereGeometry(150, 32, 32);
+        const geometry = new THREE.SphereGeometry(1.5, 32, 32);
         const material = new THREE.MeshBasicMaterial({ color: 0xcccccc });
         return new THREE.Mesh(geometry, material);
     }

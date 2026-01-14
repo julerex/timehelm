@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 
 // Floor height constants (matching WorldObjectFactory/HouseBuilder)
-const FOUNDATION_HEIGHT = 40;
-const FLOOR_HEIGHT = 270;
-const FLOOR1_TOP = FOUNDATION_HEIGHT + FLOOR_HEIGHT;       // 310cm
-const FLOOR2_TOP = FOUNDATION_HEIGHT + FLOOR_HEIGHT * 2;   // 580cm
+// Units: meters
+const FOUNDATION_HEIGHT = 0.4;
+const FLOOR_HEIGHT = 2.7;
+const FLOOR1_TOP = FOUNDATION_HEIGHT + FLOOR_HEIGHT;       // 3.1m
+const FLOOR2_TOP = FOUNDATION_HEIGHT + FLOOR_HEIGHT * 2;   // 5.8m
 
 const HIDDEN_OPACITY = 0.15;
 const VISIBLE_OPACITY = 1.0;
@@ -25,7 +26,7 @@ export class HeightOpacityManager {
      * Sets opacity for objects based on height threshold.
      * Objects above the threshold become semi-transparent.
      * Doors and roof elements are made transparent along with walls at the same floor level.
-     * @param heightThreshold - Height in cm above which objects become transparent. null = fully opaque.
+     * @param heightThreshold - Height in meters above which objects become transparent. null = fully opaque.
      */
     public setHeightOpacity(heightThreshold: number | null): void {
         for (const obj of this.worldObjects) {
@@ -45,8 +46,8 @@ export class HeightOpacityManager {
 
                         if (occlusionType === 'door' && floorLevel !== undefined) {
                             // Doors become transparent when their floor's walls would be transparent
-                            // Floor 1 doors: transparent when threshold < floor1Top (310cm)
-                            // Floor 2 doors: transparent when threshold < floor2Top (580cm)
+                            // Floor 1 doors: transparent when threshold < floor1Top (3.1m)
+                            // Floor 2 doors: transparent when threshold < floor2Top (5.8m)
                             const floorTop = floorLevel === 1 ? FLOOR1_TOP : FLOOR2_TOP;
                             targetOpacity = heightThreshold < floorTop ? HIDDEN_OPACITY : VISIBLE_OPACITY;
                         } else if (occlusionType === 'roof') {
