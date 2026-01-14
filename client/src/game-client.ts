@@ -162,15 +162,15 @@ export class GameClient {
         this.scene.add(house);
         this.worldObjects.push(house);
 
-        // Pole next to house (~1m to the right)
-        const pole = WorldObjectFactory.createPole(-5, -4);
+        // Pole outside the house (front yard)
+        // House is centered at (-6, -4) with ~12.6m x 10.6m foundation footprint, so z > ~1.3 is safely outside.
+        const pole = WorldObjectFactory.createPole(-5, 4);
         this.scene.add(pole);
         this.worldObjects.push(pole);
 
-        // Load and place bed near the house so it's immediately visible.
-        // House is centered at (-6, -4) with a 12m x 10m footprint (units are meters).
-        // Place the bed on the first-floor level (foundationHeight ~ 0.4m, floor at ~0.41m).
-        WorldObjectFactory.loadBed(-7.5, -2.5, 0.42)
+        // Load and place bed outside the house (front yard) so it's immediately visible.
+        // Outside placement: keep y=0 so it rests on the ground plane instead of the interior floor.
+        WorldObjectFactory.loadBed(-7.5, 3.5, 0)
             .then((bed) => {
                 if (this.scene) {
                     this.scene.add(bed);
@@ -210,10 +210,10 @@ export class GameClient {
                 this.updateCameraStatusDisplay();
             }
 
-            // Height-based opacity: 1-9 hide objects above (n * 3m), 0 resets
+            // Height-based opacity: 1-9 set cutoff in meters, 0 resets
             if (key >= '1' && key <= '9') {
                 const level = parseInt(key, 10);
-                const heightThreshold = level * 3; // 3m per level
+                const heightThreshold = level; // meters
                 this.heightOpacityManager?.setHeightOpacity(heightThreshold);
             } else if (key === '0') {
                 this.heightOpacityManager?.setHeightOpacity(null); // Reset to fully opaque

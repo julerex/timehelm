@@ -1,22 +1,27 @@
 import * as THREE from 'three';
 
-// Floor height constants (matching WorldObjectFactory/HouseBuilder)
-// Units: meters
-const FOUNDATION_HEIGHT = 0.4;
-const FLOOR_HEIGHT = 2.7;
-const FLOOR1_TOP = FOUNDATION_HEIGHT + FLOOR_HEIGHT;       // 3.1m
-const FLOOR2_TOP = FOUNDATION_HEIGHT + FLOOR_HEIGHT * 2;   // 5.8m
-
-const HIDDEN_OPACITY = 0.15;
+const HIDDEN_OPACITY = 0.35;
 const VISIBLE_OPACITY = 1.0;
+
+type OpacityMaterial = THREE.Material & {
+    opacity: number;
+    transparent: boolean;
+    needsUpdate: boolean;
+    userData: Record<string, unknown>;
+};
 
 /**
  * Manages height-based opacity for world objects.
  * Objects above a threshold become semi-transparent.
- * Doors and roof elements are made transparent along with walls at the same floor level.
+ *
+ * Implementation detail:
+ * - We treat "above the cutoff" as: the mesh's world-space bounding box extends above the cutoff.
+ *   This gives a better "cutaway" feel than using the mesh origin, while keeping doors (short)
+ *   opaque when the cutoff is above them.
  */
 export class HeightOpacityManager {
     private readonly worldObjects: THREE.Object3D[];
+    private readonly tmpBox = new THREE.Box3();
 
     constructor(worldObjects: THREE.Object3D[]) {
         this.worldObjects = worldObjects;
@@ -25,44 +30,61 @@ export class HeightOpacityManager {
     /**
      * Sets opacity for objects based on height threshold.
      * Objects above the threshold become semi-transparent.
-     * Doors and roof elements are made transparent along with walls at the same floor level.
      * @param heightThreshold - Height in meters above which objects become transparent. null = fully opaque.
      */
     public setHeightOpacity(heightThreshold: number | null): void {
         for (const obj of this.worldObjects) {
             obj.traverse((child) => {
-                if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshStandardMaterial) {
-                    // Get world position of the mesh
-                    const worldPos = new THREE.Vector3();
-                    child.getWorldPosition(worldPos);
+                if (!(child instanceof THREE.Mesh)) return;
 
-                    // Determine target opacity based on type
-                    let targetOpacity: number;
-                    if (heightThreshold === null) {
-                        targetOpacity = VISIBLE_OPACITY;
-                    } else {
-                        const occlusionType = child.userData.occlusionType as string | undefined;
-                        const floorLevel = child.userData.floorLevel as number | undefined;
+                const materials = Array.isArray(child.material) ? child.material : [child.material];
+                if (materials.length === 0) return;
 
-                        if (occlusionType === 'door' && floorLevel !== undefined) {
-                            // Doors become transparent when their floor's walls would be transparent
-                            // Floor 1 doors: transparent when threshold < floor1Top (3.1m)
-                            // Floor 2 doors: transparent when threshold < floor2Top (5.8m)
-                            const floorTop = floorLevel === 1 ? FLOOR1_TOP : FLOOR2_TOP;
-                            targetOpacity = heightThreshold < floorTop ? HIDDEN_OPACITY : VISIBLE_OPACITY;
-                        } else if (occlusionType === 'roof') {
-                            // Roof becomes transparent when threshold < floor2Top (when looking at 2nd floor)
-                            targetOpacity = heightThreshold < FLOOR2_TOP ? HIDDEN_OPACITY : VISIBLE_OPACITY;
-                        } else {
-                            // Default height-based check for walls and other objects
-                            targetOpacity = worldPos.y > heightThreshold ? HIDDEN_OPACITY : VISIBLE_OPACITY;
-                        }
+                // Determine target opacity (per mesh) based on world-space height.
+                let applyHidden = false;
+                if (heightThreshold !== null) {
+                    // Ensure matrixWorld is current before we transform the local bbox.
+                    child.updateWorldMatrix(true, false);
+
+                    const geom = child.geometry;
+                    if (geom?.boundingBox === null) {
+                        geom.computeBoundingBox();
+                    }
+                    if (geom?.boundingBox) {
+                        this.tmpBox.copy(geom.boundingBox).applyMatrix4(child.matrixWorld);
+                        applyHidden = this.tmpBox.max.y > heightThreshold;
+                    }
+                }
+
+                for (const material of materials) {
+                    if (!material) continue;
+                    const mat = material as Partial<OpacityMaterial>;
+                    if (typeof mat.opacity !== 'number' || typeof mat.transparent !== 'boolean') continue;
+
+                    // Cache original state once so we can restore on reset.
+                    const userData = (material.userData ??= {});
+                    if (userData.__heightOpacityOriginalOpacity === undefined) {
+                        userData.__heightOpacityOriginalOpacity = mat.opacity;
+                    }
+                    if (userData.__heightOpacityOriginalTransparent === undefined) {
+                        userData.__heightOpacityOriginalTransparent = mat.transparent;
                     }
 
-                    // Update material opacity
-                    child.material.transparent = true;
-                    child.material.opacity = targetOpacity;
-                    child.material.needsUpdate = true;
+                    const originalOpacity = userData.__heightOpacityOriginalOpacity as number;
+                    const originalTransparent = userData.__heightOpacityOriginalTransparent as boolean;
+
+                    if (heightThreshold === null) {
+                        mat.opacity = originalOpacity;
+                        mat.transparent = originalTransparent || originalOpacity < VISIBLE_OPACITY;
+                    } else if (applyHidden) {
+                        mat.opacity = Math.min(originalOpacity, HIDDEN_OPACITY);
+                        mat.transparent = true;
+                    } else {
+                        mat.opacity = originalOpacity;
+                        mat.transparent = originalTransparent || originalOpacity < VISIBLE_OPACITY;
+                    }
+
+                    mat.needsUpdate = true;
                 }
             });
         }

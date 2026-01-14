@@ -127,7 +127,9 @@ export class WorldObjectFactory {
         const group = new THREE.Group();
 
         // Main pole (grey/white)
-        const poleGeometry = new THREE.CylinderGeometry(0.1, 0.1, height, 8);
+        // Slightly thicker pole for visibility
+        const poleRadius = 0.2;
+        const poleGeometry = new THREE.CylinderGeometry(poleRadius, poleRadius, height, 12);
         const poleMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc });
         const pole = new THREE.Mesh(poleGeometry, poleMaterial);
         pole.position.y = height / 2;
@@ -135,16 +137,15 @@ export class WorldObjectFactory {
         pole.receiveShadow = true;
         group.add(pole);
 
-        // Add red marks every 1 meter
-        const markHeight = 0.3; // Height of each mark
-        const markWidth = 0.4; // Width of each mark (extends outward from pole)
-        const markGeometry = new THREE.BoxGeometry(markWidth, markHeight, markWidth);
+        // Add red cylindrical marks (bands) every 1 meter
+        const markHeight = 0.12; // band thickness (meters)
+        const markRadius = poleRadius + 0.03; // slightly larger so it sits outside the pole surface
+        const markGeometry = new THREE.CylinderGeometry(markRadius, markRadius, markHeight, 16);
         const markMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
         
         for (let y = 1; y < height; y += 1) {
             const mark = new THREE.Mesh(markGeometry, markMaterial);
             mark.position.y = y;
-            mark.position.x = 0.3; // Offset from center of pole (pole radius 0.1 + mark width/2)
             mark.castShadow = true;
             mark.receiveShadow = true;
             group.add(mark);
