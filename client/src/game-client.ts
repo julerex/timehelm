@@ -174,6 +174,10 @@ export class GameClient {
                 if (this.scene) {
                     this.scene.add(bed);
                     this.worldObjects.push(bed);
+                    console.log('Bed loaded successfully at position:', bed.position);
+                    console.log('Bed bounding box:', new THREE.Box3().setFromObject(bed));
+                } else {
+                    console.error('Scene is null, cannot add bed');
                 }
             })
             .catch((error) => {

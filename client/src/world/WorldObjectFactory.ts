@@ -173,6 +173,11 @@ export class WorldObjectFactory {
                 (gltf) => {
                     const bed = gltf.scene;
                     
+                    // Scale the bed to match game units (1 unit = 1 cm)
+                    // GLB models are typically in meters, so multiply by 100 to convert to cm
+                    const scaleFactor = 100;
+                    bed.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                    
                     // Enable shadows on all meshes
                     bed.traverse((child) => {
                         if (child instanceof THREE.Mesh) {
@@ -184,10 +189,15 @@ export class WorldObjectFactory {
                     // Position the bed
                     bed.position.set(x, 0, z);
                     
+                    console.log('[WorldObjectFactory] Bed loaded at position:', bed.position, 'scale:', bed.scale);
+                    
                     resolve(bed);
                 },
-                undefined,
+                (progress) => {
+                    console.log('[WorldObjectFactory] Loading bed progress:', progress);
+                },
                 (error) => {
+                    console.error('[WorldObjectFactory] Failed to load bed:', error);
                     reject(error);
                 }
             );
