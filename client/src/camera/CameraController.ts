@@ -33,6 +33,7 @@ export class CameraController {
     private readonly camera: THREE.PerspectiveCamera;
     private rotation: CameraRotation = { theta: 0, phi: 0.5 };
     private distance: number = 10;
+    private targetDistance: number = 10;
     private anchored: boolean = false;
     private focusPoint: THREE.Vector3 | null = null;
 
@@ -41,6 +42,8 @@ export class CameraController {
     private readonly maxDistance: number = 50;
     private readonly rotationSpeed: number = 0.02;
     private readonly freeMoveSpeed: number = 0.5;
+    private readonly zoomSpeed: number = 0.0025;
+    private readonly zoomLerp: number = 0.18;
 
     constructor(aspectRatio: number) {
         this.camera = new THREE.PerspectiveCamera(75, aspectRatio, 0.1, 10000);
@@ -75,8 +78,11 @@ export class CameraController {
     }
 
     public adjustZoom(delta: number): void {
-        this.distance += delta;
-        this.distance = Math.max(this.minDistance, Math.min(this.maxDistance, this.distance));
+        // Use exponential scaling for consistent feel across small/large wheel deltas:
+        // delta > 0 => zoom out (increase distance), delta < 0 => zoom in.
+        const factor = Math.exp(delta * this.zoomSpeed);
+        this.targetDistance *= factor;
+        this.targetDistance = Math.max(this.minDistance, Math.min(this.maxDistance, this.targetDistance));
     }
 
     public adjustRotation(deltaTheta: number, deltaPhi: number): void {
@@ -89,6 +95,9 @@ export class CameraController {
 
     public update(player: Player | null, input: InputManager): void {
         if (!player) return;
+
+        // Smoothly approach the zoom target each frame.
+        this.distance = THREE.MathUtils.lerp(this.distance, this.targetDistance, this.zoomLerp);
 
         // Handle arrow keys and Q/E for horizontal camera rotation
         if (input.isKeyPressed('arrowleft') || input.isKeyPressed('q')) {
@@ -159,5 +168,8 @@ export class CameraController {
     public setInitialPosition(player: Player): void {
         const pos = player.mesh.position;
         this.camera.position.set(pos.x, pos.y + 5, pos.z + 10);
+        // Keep zoom state consistent with initial placement.
+        this.distance = this.camera.position.distanceTo(new THREE.Vector3(pos.x, pos.y, pos.z));
+        this.targetDistance = this.distance;
     }
 }

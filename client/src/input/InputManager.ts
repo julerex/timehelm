@@ -87,7 +87,8 @@ export class InputManager {
         document.addEventListener('mousedown', this.handleMouseDown);
         document.addEventListener('mousemove', this.handleMouseMove);
         document.addEventListener('mouseup', this.handleMouseUp);
-        document.addEventListener('wheel', this.handleWheel);
+        // Note: wheel listeners are often passive by default in browsers; set passive:false so we can prevent scrolling.
+        document.addEventListener('wheel', this.handleWheel, { passive: false });
         document.addEventListener('contextmenu', this.handleContextMenu);
     }
 
@@ -131,8 +132,22 @@ export class InputManager {
     };
 
     private handleWheel = (e: WheelEvent): void => {
+        // Prevent the page from scrolling while zooming the camera.
+        e.preventDefault();
+
+        // Normalize wheel delta to roughly "pixels" across devices:
+        // - DOM_DELTA_PIXEL (0): already pixels
+        // - DOM_DELTA_LINE (1): convert lines to pixels
+        // - DOM_DELTA_PAGE (2): convert pages to viewport height
+        let delta = e.deltaY;
+        if (e.deltaMode === 1) {
+            delta *= 16;
+        } else if (e.deltaMode === 2) {
+            delta *= window.innerHeight;
+        }
+
         for (const callback of this.onWheelCallbacks) {
-            callback(e.deltaY);
+            callback(delta);
         }
     };
 
