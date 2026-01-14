@@ -140,25 +140,35 @@ export class GameClient {
 
         // Create local player
         this.myPlayer = new Player(this.user.id, this.user.username);
+        // Spawn the local avatar inside the house, and keep them constrained to the house interior.
+        const houseCenterX = -6;
+        const houseCenterZ = -4;
+        // First-floor level: foundationHeight ~ 0.4m, floor at ~0.41m.
+        this.myPlayer.position = { x: houseCenterX, y: 0.42, z: houseCenterZ };
         this.scene.add(this.myPlayer.mesh);
         this.players.set(this.user.id, this.myPlayer);
 
         // Initialize random movement controller
         // Movement configuration (scaled for 60x game time)
-        // Lawn boundaries (ground size 100m, so half = 50m, minus margin for player body)
+        // Constrain movement to the house interior footprint (12m x 10m), minus a safety margin to avoid clipping walls.
+        const houseInteriorMarginM = 0.8;
+        const houseHalfWidthM = 6;
+        const houseHalfDepthM = 5;
+        const boundsHalfWidthM = Math.max(0.1, houseHalfWidthM - houseInteriorMarginM);
+        const boundsHalfDepthM = Math.max(0.1, houseHalfDepthM - houseInteriorMarginM);
         this.randomMovement = new RandomMovementController({
             moveSpeed: 1,
             rotationSpeed: 0.2,
             bounds: {
-                minX: -49.7,
-                maxX: 49.7,
-                minZ: -49.7,
-                maxZ: 49.7
+                minX: houseCenterX - boundsHalfWidthM,
+                maxX: houseCenterX + boundsHalfWidthM,
+                minZ: houseCenterZ - boundsHalfDepthM,
+                maxZ: houseCenterZ + boundsHalfDepthM
             }
         });
 
         // Create world objects
-        const house = WorldObjectFactory.createHouse(-6, -4);
+        const house = WorldObjectFactory.createHouse(houseCenterX, houseCenterZ);
         this.scene.add(house);
         this.worldObjects.push(house);
 
