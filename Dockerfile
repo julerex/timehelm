@@ -23,9 +23,8 @@ WORKDIR /app
 # Copy package files
 COPY client/package.json client/package-lock.json* ./
 RUN npm install
-# Copy client source code and vite config
+# Copy client source code (includes vite.config.ts with ship.html entry)
 COPY client ./
-COPY vite.config.ts ./
 RUN npm run build
 
 # Runtime stage
