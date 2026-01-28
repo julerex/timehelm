@@ -6,11 +6,13 @@
 
 use axum::{
     extract::{State, WebSocketUpgrade},
-    response::Response,
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
     routing::get,
     Router,
 };
 use sqlx::PgPool;
+use std::fs;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::{cors::CorsLayer, services::ServeDir};
@@ -183,6 +185,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // WebSocket endpoint for game client connections
         .route("/ws", get(websocket_handler))
+        // Ship game endpoint - serves the Phaser 2D game
+        .route("/ship", get(ship_handler))
         // Auth routes commented out - users/sessions tables not in use
         // .route("/auth/twitter", get(auth::twitter_login))
         // .route("/auth/twitter/callback", get(auth::twitter_callback))
@@ -214,4 +218,20 @@ async fn main() -> anyhow::Result<()> {
 /// for message processing and game state synchronization.
 async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(|socket| handle_websocket(socket, state))
+}
+
+/// Ship game handler.
+///
+/// Serves the ship.html file for the Phaser 2D game.
+async fn ship_handler() -> Result<Html<String>, Response> {
+    match fs::read_to_string("client/dist/ship.html") {
+        Ok(html) => Ok(Html(html)),
+        Err(_) => {
+            // Fallback: try reading from source during development
+            match fs::read_to_string("client/ship.html") {
+                Ok(html) => Ok(Html(html)),
+                Err(_) => Err((StatusCode::NOT_FOUND, "Ship game not found").into_response()),
+            }
+        }
+    }
 }
