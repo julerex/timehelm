@@ -2,73 +2,181 @@
  * Ship Game - A 2D Phaser game
  * 
  * Entry point for the ship game accessible at /ship
+ * A cruise ship game where you can move between different decks
  */
 
 import Phaser from 'phaser';
 
 /**
- * Main game scene for the ship game
+ * Deck names for the cruise ship
+ */
+const DECK_NAMES = [
+    'Sun Deck',
+    'Pool Deck',
+    'Promenade Deck',
+    'Main Deck',
+    'Lower Deck',
+    'Engine Deck'
+];
+
+/**
+ * Main game scene for the cruise ship game
  */
 class ShipScene extends Phaser.Scene {
-    private ship: Phaser.GameObjects.Sprite | null = null;
+    private player: Phaser.GameObjects.Sprite | null = null;
     private cursors: Phaser.Types.Input.Keyboard.CursorKeys | null = null;
     private wasdKeys: Record<string, Phaser.Input.Keyboard.Key> | null = null;
+    private pageUpKey: Phaser.Input.Keyboard.Key | null = null;
+    private pageDownKey: Phaser.Input.Keyboard.Key | null = null;
+    private currentDeck = 0;
+    private deckDisplay: Phaser.GameObjects.Text | null = null;
+    private deckLayers: Phaser.GameObjects.Container[] = [];
+    private pageUpPressed = false;
+    private pageDownPressed = false;
     private readonly shipSpeed = 200;
+    private readonly totalDecks = DECK_NAMES.length;
 
     constructor() {
         super({ key: 'ShipScene' });
     }
 
     create(): void {
-        // Set background color
-        this.cameras.main.setBackgroundColor('#1a1a2e');
+        // Set background color (ocean blue)
+        this.cameras.main.setBackgroundColor('#0a1929');
 
-        // Create a simple ship sprite (using a rectangle for now)
-        // In a real game, you'd load an image asset
+        // Create deck layers
+        this.createDeckLayers();
+
+        // Create player sprite (person walking on deck)
         const graphics = this.add.graphics();
         graphics.fillStyle(0x00ff00);
-        graphics.fillTriangle(0, -20, -15, 15, 15, 15);
-        graphics.generateTexture('ship', 30, 30);
+        graphics.fillCircle(0, 0, 10);
+        graphics.fillStyle(0x0000ff);
+        graphics.fillRect(-5, 5, 10, 15);
+        graphics.generateTexture('player', 20, 25);
         graphics.destroy();
 
-        // Create ship sprite at center
-        this.ship = this.add.sprite(400, 300, 'ship');
-        this.ship.setOrigin(0.5, 0.5);
+        // Create player sprite at center of current deck
+        this.player = this.add.sprite(400, 300, 'player');
+        this.player.setOrigin(0.5, 0.5);
 
         // Set up keyboard input
         this.cursors = this.input.keyboard?.createCursorKeys() || null;
 
-        // Add WASD keys as alternative
+        // Add WASD keys for horizontal movement
         if (this.input.keyboard) {
-            this.wasdKeys = this.input.keyboard.addKeys('W,S,A,D') as Record<string, Phaser.Input.Keyboard.Key>;
+            this.wasdKeys = this.input.keyboard.addKeys('A,D') as Record<string, Phaser.Input.Keyboard.Key>;
+            // Page Up/Down for deck switching
+            this.pageUpKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.PAGE_UP);
+            this.pageDownKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.PAGE_DOWN);
         }
 
-        // Add instructions text
-        const instructions = this.add.text(10, 10, 'Ship Game\nArrow Keys or WASD to move', {
-            fontSize: '16px',
+        // Create deck display text
+        this.deckDisplay = this.add.text(10, 10, '', {
+            fontSize: '18px',
             color: '#ffffff',
             backgroundColor: '#000000',
-            padding: { x: 10, y: 5 }
+            padding: { x: 15, y: 10 }
+        });
+        this.deckDisplay.setScrollFactor(0);
+        this.updateDeckDisplay();
+
+        // Add instructions text
+        const instructions = this.add.text(10, 70, 'Cruise Ship Game\nLeft/Right or A/D to move\nPage Up/Down to change decks', {
+            fontSize: '14px',
+            color: '#ffffff',
+            backgroundColor: '#000000',
+            padding: { x: 10, y: 8 }
         });
         instructions.setScrollFactor(0);
+
+        // Show current deck
+        this.showDeck(this.currentDeck);
+    }
+
+    createDeckLayers(): void {
+        // Create visual layers for each deck
+        for (let i = 0; i < this.totalDecks; i++) {
+            const container = this.add.container(0, 0);
+            
+            // Create deck floor (different colors for each deck)
+            const deckColor = 0x2a4a6a + (i * 0x101010);
+            const floor = this.add.rectangle(400, 550, 800, 100, deckColor);
+            floor.setAlpha(0.7);
+            container.add(floor);
+
+            // Add deck number label
+            const label = this.add.text(50, 520, `Deck ${i + 1}: ${DECK_NAMES[i]}`, {
+                fontSize: '16px',
+                color: '#ffffff',
+                backgroundColor: '#000000',
+                padding: { x: 8, y: 4 }
+            });
+            container.add(label);
+
+            // Add some decorative elements (windows, railings, etc.)
+            for (let j = 0; j < 10; j++) {
+                const window = this.add.rectangle(100 + j * 70, 500, 40, 30, 0x87ceeb);
+                window.setAlpha(0.5);
+                container.add(window);
+            }
+
+            // Initially hide all decks except the first
+            container.setVisible(i === 0);
+            this.deckLayers.push(container);
+        }
+    }
+
+    updateDeckDisplay(): void {
+        if (this.deckDisplay) {
+            this.deckDisplay.setText(`Deck ${this.currentDeck + 1}/${this.totalDecks}: ${DECK_NAMES[this.currentDeck]}`);
+        }
+    }
+
+    showDeck(deckIndex: number): void {
+        // Hide all decks
+        this.deckLayers.forEach((layer, index) => {
+            layer.setVisible(index === deckIndex);
+        });
+        this.updateDeckDisplay();
+    }
+
+    changeDeck(direction: number): void {
+        const newDeck = this.currentDeck + direction;
+        if (newDeck >= 0 && newDeck < this.totalDecks) {
+            this.currentDeck = newDeck;
+            this.showDeck(this.currentDeck);
+        }
     }
 
     update(): void {
-        if (!this.ship || !this.cursors) {
+        if (!this.player || !this.cursors) {
             return;
+        }
+
+        // Handle deck switching (only trigger once per key press)
+        if (this.pageUpKey?.isDown && !this.pageUpPressed) {
+            this.pageUpPressed = true;
+            this.changeDeck(-1);
+        } else if (!this.pageUpKey?.isDown) {
+            this.pageUpPressed = false;
+        }
+
+        if (this.pageDownKey?.isDown && !this.pageDownPressed) {
+            this.pageDownPressed = true;
+            this.changeDeck(1);
+        } else if (!this.pageDownKey?.isDown) {
+            this.pageDownPressed = false;
         }
 
         const delta = this.game.loop.delta;
 
-        // Calculate movement
+        // Calculate horizontal movement only
         let velocityX = 0;
-        let velocityY = 0;
 
-        // Check arrow keys or WASD
+        // Check arrow keys or WASD (only left/right)
         const left = this.cursors.left?.isDown || this.wasdKeys?.A?.isDown || false;
         const right = this.cursors.right?.isDown || this.wasdKeys?.D?.isDown || false;
-        const up = this.cursors.up?.isDown || this.wasdKeys?.W?.isDown || false;
-        const down = this.cursors.down?.isDown || this.wasdKeys?.S?.isDown || false;
 
         if (left) {
             velocityX = -this.shipSpeed;
@@ -76,35 +184,20 @@ class ShipScene extends Phaser.Scene {
             velocityX = this.shipSpeed;
         }
 
-        if (up) {
-            velocityY = -this.shipSpeed;
-        } else if (down) {
-            velocityY = this.shipSpeed;
-        }
-
-        // Normalize diagonal movement
-        if (velocityX !== 0 && velocityY !== 0) {
-            const length = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
-            velocityX = (velocityX / length) * this.shipSpeed;
-            velocityY = (velocityY / length) * this.shipSpeed;
-        }
-
-        // Update ship position
+        // Update player position
         const deltaSeconds = delta / 1000;
-        this.ship.x += velocityX * deltaSeconds;
-        this.ship.y += velocityY * deltaSeconds;
+        this.player.x += velocityX * deltaSeconds;
 
-        // Rotate ship to face movement direction
-        if (velocityX !== 0 || velocityY !== 0) {
-            const angle = Math.atan2(velocityY, velocityX) * (180 / Math.PI) + 90;
-            this.ship.rotation = Phaser.Math.DegToRad(angle);
+        // Rotate player to face movement direction
+        if (velocityX < 0) {
+            this.player.setFlipX(true);
+        } else if (velocityX > 0) {
+            this.player.setFlipX(false);
         }
 
-        // Keep ship within bounds
+        // Keep player within bounds (horizontal only)
         const width = this.cameras.main.width;
-        const height = this.cameras.main.height;
-        this.ship.x = Phaser.Math.Clamp(this.ship.x, 0, width);
-        this.ship.y = Phaser.Math.Clamp(this.ship.y, 0, height);
+        this.player.x = Phaser.Math.Clamp(this.player.x, 20, width - 20);
     }
 }
 

@@ -224,14 +224,19 @@ async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) 
 ///
 /// Serves the ship.html file for the Phaser 2D game.
 async fn ship_handler() -> Result<Html<String>, Response> {
-    match fs::read_to_string("client/dist/ship.html") {
-        Ok(html) => Ok(Html(html)),
-        Err(_) => {
-            // Fallback: try reading from source during development
-            match fs::read_to_string("client/ship.html") {
-                Ok(html) => Ok(Html(html)),
-                Err(_) => Err((StatusCode::NOT_FOUND, "Ship game not found").into_response()),
-            }
+    // Try multiple possible paths depending on where the server is run from
+    let paths = [
+        "client/dist/ship.html",    // From project root
+        "../client/dist/ship.html", // From server/ directory
+        "client/ship.html",         // Source file from project root
+        "../client/ship.html",      // Source file from server/ directory
+    ];
+
+    for path in &paths {
+        if let Ok(html) = fs::read_to_string(path) {
+            return Ok(Html(html));
         }
     }
+
+    Err((StatusCode::NOT_FOUND, "Ship game not found").into_response())
 }
