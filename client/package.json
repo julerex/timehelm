@@ -6,21 +6,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "inspect:glb": "node scripts/inspect-glb.mjs",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@dgreenheck/ez-tree": "^1.0.0",
-    "phaser": "^3.90.0",
-    "three": "^0.182.0"
-  },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
-    "@gltf-transform/core": "^4.2.1",
-    "@gltf-transform/extensions": "^4.2.1",
-    "@types/three": "^0.182.0",
     "eslint": "^9.17.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.19.0",

@@ -4,15 +4,9 @@
 //! Handles WebSocket connections, game state management, physics simulation,
 //! and periodic persistence of game data to PostgreSQL.
 
-use axum::{
-    extract::{State, WebSocketUpgrade},
-    http::StatusCode,
-    response::{Html, IntoResponse, Response},
-    routing::get,
-    Router,
-};
+use axum::extract::WebSocketUpgrade;
+use axum::{extract::State, response::Response, routing::get, Router};
 use sqlx::PgPool;
-use std::fs;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::{cors::CorsLayer, services::ServeDir};
@@ -185,13 +179,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // WebSocket endpoint for game client connections
         .route("/ws", get(websocket_handler))
-        // Ship game endpoint - serves the Phaser 2D game
-        .route("/ship", get(ship_handler))
-        // Auth routes commented out - users/sessions tables not in use
-        // .route("/auth/twitter", get(auth::twitter_login))
-        // .route("/auth/twitter/callback", get(auth::twitter_callback))
-        // .route("/api/me", get(auth::get_current_user))
-        // Serve static files from client/dist (fallback for all non-API routes)
+        // Serve static files from client/dist (index.html = ship game at root)
         .fallback_service(ServeDir::new("client/dist").append_index_html_on_directories(true))
         // Enable CORS for all origins (development)
         .layer(CorsLayer::permissive())
@@ -218,25 +206,4 @@ async fn main() -> anyhow::Result<()> {
 /// for message processing and game state synchronization.
 async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(|socket| handle_websocket(socket, state))
-}
-
-/// Ship game handler.
-///
-/// Serves the ship.html file for the Phaser 2D game.
-async fn ship_handler() -> Result<Html<String>, Response> {
-    // Try multiple possible paths depending on where the server is run from
-    let paths = [
-        "client/dist/ship.html",    // From project root
-        "../client/dist/ship.html", // From server/ directory
-        "client/ship.html",         // Source file from project root
-        "../client/ship.html",      // Source file from server/ directory
-    ];
-
-    for path in &paths {
-        if let Ok(html) = fs::read_to_string(path) {
-            return Ok(Html(html));
-        }
-    }
-
-    Err((StatusCode::NOT_FOUND, "Ship game not found").into_response())
 }

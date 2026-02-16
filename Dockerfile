@@ -16,6 +16,22 @@ COPY server ./server
 WORKDIR /app/server
 RUN cargo build --release
 
+# Build stage for ship game (Bevy WASM)
+FROM rust:1.92 as ship-builder
+
+WORKDIR /app
+RUN rustup target add wasm32-unknown-unknown
+RUN cargo install wasm-bindgen-cli
+
+COPY ship-game ./ship-game
+RUN RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build --manifest-path ship-game/Cargo.toml --target wasm32-unknown-unknown --release
+
+RUN mkdir -p /app/ship-out && \
+    wasm-bindgen --no-typescript --target web \
+        --out-dir /app/ship-out \
+        --out-name ship \
+        /app/ship-game/target/wasm32-unknown-unknown/release/ship_game.wasm
+
 # Build stage for frontend
 FROM node:20 as frontend-builder
 
@@ -25,6 +41,8 @@ COPY client/package.json client/package-lock.json* ./
 RUN npm install
 # Copy client source code (includes vite.config.ts with ship.html entry)
 COPY client ./
+# Copy ship game WASM outputs to public (Vite copies public to dist)
+COPY --from=ship-builder /app/ship-out ./public/ship
 RUN npm run build
 
 # Runtime stage

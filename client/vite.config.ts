@@ -16,13 +16,7 @@ export default defineConfig({
         }
     },
     build: {
-        outDir: 'dist',
-        rollupOptions: {
-            input: {
-                main: './index.html',
-                ship: './ship.html'
-            }
-        }
+        outDir: 'dist'
     }
 });
 

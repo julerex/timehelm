@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+echo "Building ship game (Bevy WASM)..."
+./scripts/build-ship.sh
+
 echo "Building frontend..."
 cd client
 npm install

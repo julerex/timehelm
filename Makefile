@@ -1,4 +1,12 @@
-.PHONY: dev build deploy install lint lint-client lint-server fmt
+.PHONY: dev build deploy install lint lint-client lint-server fmt build-ship run-ship
+
+build-ship:
+	./scripts/build-ship.sh
+
+# Run the ship game locally. Builds WASM, then starts Vite. Open in browser:
+#   http://localhost:5173/
+run-ship: build-ship
+	cd client && npm run dev
 
 install:
 	npm install
@@ -25,6 +33,7 @@ dev-client:
 	cd client && npm run dev
 
 build:
+	./scripts/build-ship.sh
 	cd client && npm install && npm run build
 	cd server && cargo build --release
 

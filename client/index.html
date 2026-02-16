@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Time Helm - MMO</title>
+    <title>Time Helm</title>
     <style>
         * {
             margin: 0;
@@ -13,85 +13,26 @@
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             overflow: hidden;
+            background: #0a1929;
         }
-        #game-container {
+        #ship-game-container {
             width: 100vw;
             height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
-        #ui-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
+        #ship-game-canvas {
             width: 100%;
             height: 100%;
-            pointer-events: none;
-            z-index: 100;
-        }
-        #login-screen {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.8);
-            padding: 2rem;
-            border-radius: 8px;
-            text-align: center;
-            pointer-events: all;
-        }
-        #login-screen h1 {
-            color: white;
-            margin-bottom: 1rem;
-        }
-        #login-screen button {
-            background: #1DA1F2;
-            color: white;
-            border: none;
-            padding: 0.75rem 2rem;
-            font-size: 1rem;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        #login-screen button:hover {
-            background: #1a8cd8;
-        }
-        #hud {
-            position: absolute;
-            top: 1rem;
-            left: 1rem;
-            color: white;
-            background: rgba(0, 0, 0, 0.5);
-            padding: 1rem;
-            border-radius: 4px;
-            display: none;
-        }
-        #hud.visible {
             display: block;
-        }
-        #hud h3 {
-            margin-bottom: 0.5rem;
-        }
-        #players-list {
-            list-style: none;
-            margin-top: 0.5rem;
-        }
-        #players-list li {
-            padding: 0.25rem 0;
         }
     </style>
 </head>
 <body>
-    <div id="game-container"></div>
-    <div id="ui-overlay">
-        <div id="hud">
-            <div id="game-time-display" style="font-size: 1.2rem; font-weight: bold; margin-bottom: 0.5rem;">00:00</div>
-            <div id="camera-status" style="font-size: 0.8rem; margin-bottom: 1rem; color: #aaa;">Camera: Anchored (Press 'C' to toggle)</div>
-            <div id="commit-time-display" style="font-size: 0.75rem; margin-bottom: 1rem; color: #aaa;">Commit time: unknown</div>
-            <h3>Players Online</h3>
-            <ul id="players-list"></ul>
-        </div>
+    <div id="ship-game-container">
+        <canvas id="ship-game-canvas"></canvas>
     </div>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/ship/run.js"></script>
 </body>
 </html>
-

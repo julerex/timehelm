@@ -4,21 +4,17 @@ This file provides context for AI coding assistants working on the Time Helm pro
 
 ## Project Overview
 
-Time Helm is an open-source, persistent-world MMO sandbox social simulation game. Think "The Sims Online" meets low-poly 3D with reality-centric mechanics.
+Time Helm is an open-source game. The main client is a Bevy 3D cruise ship game (Rust/WASM), served at the root URL.
 
 **Production URL:** https://timehelm.net/
 
-**Key game concepts:**
-- 1 real minute = 1 game hour (60x time scale)
-- 360 game-days per game-year
-- Players control characters indirectly via schedules and conditions
-- Character behavior influenced by emotional state
+
 
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| Frontend | TypeScript, Three.js, Vite |
+| Frontend | Bevy 3D (Rust/WASM), Vite |
 | Backend | Rust, Axum, Tokio |
 | Database | PostgreSQL (with SQLx) |
 | Auth | Twitter/X OAuth 2.0 |
@@ -49,7 +45,7 @@ cd server && cargo run
 cd client && npm install && npm run dev
 ```
 
-Access at http://localhost:5173 (Vite proxies API/WebSocket to backend on :8080)
+Access at http://localhost:5173 (ship game at root; Vite proxies API/WebSocket to backend on :8080)
 
 ### Using Make
 
@@ -71,61 +67,28 @@ make fly-logs     # View production server logs (requires flyctl)
 
 ```
 timehelm/
-├── client/                 # TypeScript/Three.js frontend
-│   ├── src/
-│   │   ├── main.ts              # Entry point
-│   │   ├── game-client.ts       # Main game orchestrator
-│   │   ├── camera/              # Camera control
-│   │   ├── entities/            # Player and game entities
-│   │   ├── environment/         # Day/night cycle, weather
-│   │   ├── input/               # Keyboard/mouse handling
-│   │   ├── network/             # WebSocket communication
-│   │   └── world/               # World objects (trees, houses, etc.)
-│   └── index.html
+├── client/                 # Frontend (Vite serves ship game at root)
+│   ├── index.html         # Ship game entry (loads Bevy WASM from /ship/)
+│   ├── public/ship/       # Bevy WASM output (built by scripts/build-ship.sh)
+│   └── src/vite-env.d.ts  # Vite type declarations
+├── ship-game/              # Bevy 3D cruise ship game (Rust/WASM)
+│   ├── src/lib.rs
+│   └── Cargo.toml
 ├── server/                 # Rust/Axum backend
 │   ├── src/
-│   │   ├── main.rs              # Server entry, routes
-│   │   ├── auth.rs              # OAuth handling
-│   │   ├── game.rs              # Game state, player management
-│   │   ├── websocket.rs         # WebSocket message handling
-│   │   └── db.rs                # Database operations
-│   └── migrations/              # SQL migrations (auto-run on start)
-├── vite.config.ts          # Dev server config with proxy
-├── Makefile                # Common development commands
-└── fly.toml                # Deployment config
+│   │   ├── main.rs        # Server entry, routes
+│   │   ├── game.rs        # Game state, player management
+│   │   ├── websocket.rs   # WebSocket message handling
+│   │   └── db.rs          # Database operations
+│   └── migrations/        # SQL migrations (auto-run on start)
+├── scripts/
+│   └── build-ship.sh      # Build Bevy ship game to WASM
+├── vite.config.ts         # Dev server config with proxy (lives in client/)
+├── Makefile               # Common development commands (includes make build-ship)
+└── fly.toml               # Deployment config
 ```
 
 ## Coding Conventions
-
-### TypeScript (Client)
-
-- **Classes for major components** - `GameClient`, `Player`, `CameraController`, etc.
-- **Readonly for immutable properties** - `private readonly user: User`
-- **Null initialization with type annotation** - `private scene: THREE.Scene | null = null`
-- **Section comments** - Use `// --- Section Name ---` to organize methods
-- **Explicit exports** - Re-export types from index files when needed
-- **No explicit return types required** (ESLint rule disabled)
-- **Prefix unused params with underscore** - `(_unused) => {}`
-
-Example structure:
-```typescript
-export class MyComponent {
-    private readonly config: Config;
-    private state: State | null = null;
-
-    constructor(config: Config) {
-        this.config = config;
-    }
-
-    // --- Public Methods ---
-    public init(): void { }
-    public dispose(): void { }
-
-    // --- Private Methods ---
-    private setupX(): void { }
-    private handleY(): void { }
-}
-```
 
 ### Rust (Server)
 
@@ -211,33 +174,7 @@ npm run lint:server    # Clippy + fmt check
 
 ## Key Patterns
 
-### Client-Server Communication
-
-Messages use tagged JSON via WebSocket:
-```typescript
-// Client sends
-{ "type": "Join", "player": { "id": "...", "username": "...", ... } }
-{ "type": "Move", "player_id": "...", "position": {...}, "rotation": 0.5, "is_moving": true }
-
-// Server broadcasts
-{ "type": "WorldState", "players": [...] }
-{ "type": "PlayerJoin", "player": {...} }
-{ "type": "PlayerLeave", "player_id": "..." }
-```
-
-### Adding World Objects
-
-Use `WorldObjectFactory` in `client/src/world/WorldObjectFactory.ts`:
-```typescript
-const tree = WorldObjectFactory.createTree(x, z);
-this.scene.add(tree);
-```
-
-### Game Time
-
-Movement speed is scaled for 60x time:
-- `moveSpeed = 100` units/frame at 60 FPS = 6000 units/game-minute
-- Day/night cycle managed by `DayNightCycle` class
+The server supports WebSocket connections and game state broadcasting for future multiplayer. The ship game (Bevy WASM) is the main client and loads at the root URL.
 
 ## Environment Variables
 
@@ -261,3 +198,20 @@ Requires fly.io CLI (`flyctl`) and secrets configured. See README.md for full se
 **Production:** The deployed application is available at https://timehelm.net/
 
 **Viewing Logs:** Use `make fly-logs` to view production server logs. Always check the Makefile for the correct command syntax.
+
+**Ship game (Bevy 3D):** Use `make run-ship` to build and run locally. Open `http://localhost:5173/` in your browser.
+
+**Browser checks in Cursor:** To verify the ship game visually:
+1. Run `make run-ship` in a terminal (Vite will start).
+2. In Cursor: **View → Simple Browser** (or Cmd/Ctrl+Shift+P → "Simple Browser: Show").
+3. Enter `http://localhost:5173/` in the Simple Browser address bar.
+
+The ship game loads WASM; first load may take a few seconds. Use A/D or arrow keys to move, Page Up/Down to switch decks.
+
+### Cursor / cargo proxy error
+
+When running `cargo` (build, test, fmt, clippy) inside Cursor you may see:
+
+`error: unknown proxy name: 'Cursor-2.x-x86_64'; valid proxy names...`
+
+The **Makefile** (see test/format/clippy targets) works around this by running **`unset ARGV0 && cargo ...`** before invoking cargo. Prefer **`make test`**, **`make format`**, **`make clippy`** when in Cursor, or run `unset ARGV0 && cargo <subcommand>` so cargo uses the real toolchain instead of the Cursor proxy.
