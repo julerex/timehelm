@@ -14,7 +14,7 @@ Time Helm is an open-source game. The main client is a Bevy 3D cruise ship game 
 
 | Component | Technology |
 |-----------|------------|
-| Frontend | Bevy 3D (Rust/WASM), Vite |
+| Frontend | Bevy 3D (Rust/WASM), served by Rust server |
 | Backend | Rust, Axum, Tokio |
 | Database | PostgreSQL (with SQLx) |
 | Auth | Twitter/X OAuth 2.0 |
@@ -25,7 +25,6 @@ Time Helm is an open-source game. The main client is a Bevy 3D cruise ship game 
 
 ### Prerequisites
 - Rust (stable)
-- Node.js 18+
 - PostgreSQL 14+ (or use Docker)
 
 ### Running Locally
@@ -35,28 +34,22 @@ Time Helm is an open-source game. The main client is a Bevy 3D cruise ship game 
 docker run --name timehelm-db -e POSTGRES_PASSWORD=password -e POSTGRES_DB=timehelm -p 5432:5432 -d postgres:15
 ```
 
-**Terminal 2 - Backend:**
+**Terminal 2 - Server (serves ship game at root):**
 ```bash
-cd server && cargo run
+make run-ship
 ```
 
-**Terminal 3 - Frontend:**
-```bash
-cd client && npm install && npm run dev
-```
-
-Access at http://localhost:5173 (ship game at root; Vite proxies API/WebSocket to backend on :8080)
+Access at http://localhost:8080/
 
 ### Using Make
 
 **IMPORTANT:** Always check the `Makefile` for available commands before running manual commands. The Makefile contains the canonical commands for common tasks.
 
 ```bash
-make install      # Install all dependencies
-make dev-server   # Run Rust server
-make dev-client   # Run Vite dev server
-make lint         # Lint both client and server
-make build        # Production build
+make install      # Install dependencies (npm for husky, cargo for server)
+make run-ship     # Build ship WASM + run server (dev)
+make dev-server   # Run Rust server only
+make build        # Production build (ship WASM + server)
 make deploy       # Build and deploy to fly.io
 make fly-logs     # View production server logs (requires flyctl)
 ```
@@ -67,23 +60,24 @@ make fly-logs     # View production server logs (requires flyctl)
 
 ```
 timehelm/
-├── client/                 # Frontend (Vite serves ship game at root)
+├── client/public/          # Static files (Rust server serves these)
 │   ├── index.html         # Ship game entry (loads Bevy WASM from /ship/)
-│   ├── public/ship/       # Bevy WASM output (built by scripts/build-ship.sh)
-│   └── src/vite-env.d.ts  # Vite type declarations
+│   └── ship/              # Bevy WASM output (built by scripts/build-ship.sh)
+│       ├── run.js         # Loader script
+│       ├── ship.js        # wasm-bindgen glue
+│       └── ship_bg.wasm   # Ship game binary
 ├── ship-game/              # Bevy 3D cruise ship game (Rust/WASM)
 │   ├── src/lib.rs
 │   └── Cargo.toml
-├── server/                 # Rust/Axum backend
+├── server/                 # Rust/Axum backend (serves static files + WebSocket)
 │   ├── src/
-│   │   ├── main.rs        # Server entry, routes
+│   │   ├── main.rs        # Server entry, routes, static serving
 │   │   ├── game.rs        # Game state, player management
 │   │   ├── websocket.rs   # WebSocket message handling
 │   │   └── db.rs          # Database operations
 │   └── migrations/        # SQL migrations (auto-run on start)
 ├── scripts/
 │   └── build-ship.sh      # Build Bevy ship game to WASM
-├── vite.config.ts         # Dev server config with proxy (lives in client/)
 ├── Makefile               # Common development commands (includes make build-ship)
 └── fly.toml               # Deployment config
 ```
@@ -162,14 +156,11 @@ cd server && cargo test
 ## Linting
 
 Pre-commit hooks run automatically via Husky + lint-staged:
-- **Client:** ESLint + TypeScript type checking
 - **Server:** `cargo fmt --check` + `cargo clippy`
 
 Manual lint:
 ```bash
-npm run lint           # Both client and server
-npm run lint:client    # ESLint only
-npm run lint:server    # Clippy + fmt check
+make lint              # Server only
 ```
 
 ## Key Patterns
@@ -190,7 +181,7 @@ TWITTER_CLIENT_SECRET=your_client_secret
 ## Deployment
 
 ```bash
-make deploy  # Builds frontend, deploys to fly.io
+make deploy  # Builds ship WASM and server, deploys to fly.io
 ```
 
 Requires fly.io CLI (`flyctl`) and secrets configured. See README.md for full setup.
@@ -199,12 +190,12 @@ Requires fly.io CLI (`flyctl`) and secrets configured. See README.md for full se
 
 **Viewing Logs:** Use `make fly-logs` to view production server logs. Always check the Makefile for the correct command syntax.
 
-**Ship game (Bevy 3D):** Use `make run-ship` to build and run locally. Open `http://localhost:5173/` in your browser.
+**Ship game (Bevy 3D):** Use `make run-ship` to build and run locally. Open `http://localhost:8080/` in your browser.
 
 **Browser checks in Cursor:** To verify the ship game visually:
-1. Run `make run-ship` in a terminal (Vite will start).
+1. Run `make run-ship` in a terminal (Rust server will start).
 2. In Cursor: **View → Simple Browser** (or Cmd/Ctrl+Shift+P → "Simple Browser: Show").
-3. Enter `http://localhost:5173/` in the Simple Browser address bar.
+3. Enter `http://localhost:8080/` in the Simple Browser address bar.
 
 The ship game loads WASM; first load may take a few seconds. Use A/D or arrow keys to move, Page Up/Down to switch decks.
 

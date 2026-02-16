@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "prepare": "husky",
-    "lint": "npm run lint:client && npm run lint:server",
-    "lint:client": "npm run --prefix client lint",
+    "lint": "npm run lint:server",
     "lint:server": "cd server && cargo clippy -- -D warnings && cargo fmt --check"
   },
   "devDependencies": {
@@ -14,10 +13,6 @@
     "lint-staged": "^15.2.11"
   },
   "lint-staged": {
-    "client/**/*.{ts,tsx}": [
-      "./client/node_modules/.bin/eslint --fix --config client/eslint.config.js",
-      "bash -c 'npm run --prefix client typecheck'"
-    ],
     "server/**/*.rs": [
       "bash -c 'cd server && cargo fmt --check'",
       "bash -c 'cd server && cargo clippy -- -D warnings'"

@@ -1,4 +1,4 @@
-# Build stage for Rust
+# Build stage for Rust server
 FROM rust:1.92 as rust-builder
 
 WORKDIR /app
@@ -26,24 +26,11 @@ RUN cargo install wasm-bindgen-cli
 COPY ship-game ./ship-game
 RUN RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build --manifest-path ship-game/Cargo.toml --target wasm32-unknown-unknown --release
 
-RUN mkdir -p /app/ship-out && \
+RUN mkdir -p /app/client-public/ship && \
     wasm-bindgen --no-typescript --target web \
-        --out-dir /app/ship-out \
+        --out-dir /app/client-public/ship \
         --out-name ship \
         /app/ship-game/target/wasm32-unknown-unknown/release/ship_game.wasm
-
-# Build stage for frontend
-FROM node:20 as frontend-builder
-
-WORKDIR /app
-# Copy package files
-COPY client/package.json client/package-lock.json* ./
-RUN npm install
-# Copy client source code (includes vite.config.ts with ship.html entry)
-COPY client ./
-# Copy ship game WASM outputs to public (Vite copies public to dist)
-COPY --from=ship-builder /app/ship-out ./public/ship
-RUN npm run build
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -57,12 +44,12 @@ WORKDIR /app
 # Copy the binary from builder
 COPY --from=rust-builder /app/server/target/release/timehelm-server /app/server
 
-# Copy frontend build
-COPY --from=frontend-builder /app/dist /app/client/dist
+# Copy static files: client/public (index.html, run.js) + ship WASM
+COPY client/public ./client/public
+COPY --from=ship-builder /app/client-public/ship ./client/public/ship
 
 # Expose port
 EXPOSE 8080
 
 # Run the server
 CMD ["/app/server"]
-

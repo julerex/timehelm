@@ -179,8 +179,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // WebSocket endpoint for game client connections
         .route("/ws", get(websocket_handler))
-        // Serve static files from client/dist (index.html = ship game at root)
-        .fallback_service(ServeDir::new("client/dist").append_index_html_on_directories(true))
+        // Serve static files from client/public (index.html = ship game at root)
+        .fallback_service(ServeDir::new(static_dir()).append_index_html_on_directories(true))
         // Enable CORS for all origins (development)
         .layer(CorsLayer::permissive())
         .with_state(app_state);
@@ -198,6 +198,22 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Returns the path to the static files directory (client/public).
+/// Tries multiple locations for local dev vs Docker/production.
+fn static_dir() -> std::path::PathBuf {
+    let candidates = [
+        "client/public",    // From project root
+        "../client/public", // From server/ directory
+    ];
+    for path in candidates {
+        let p = std::path::Path::new(path);
+        if p.join("index.html").exists() {
+            return p.to_path_buf();
+        }
+    }
+    candidates[0].into()
 }
 
 /// WebSocket connection handler.

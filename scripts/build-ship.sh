@@ -19,7 +19,7 @@ if ! command -v wasm-bindgen &>/dev/null; then
     cargo install wasm-bindgen-cli
 fi
 
-# Create output directory (public/ for Vite dev+build; also used by build to copy to dist)
+# Create output directory for ship WASM (server serves from client/public/)
 OUT_DIR="$PROJECT_ROOT/client/public/ship"
 mkdir -p "$OUT_DIR"
 
