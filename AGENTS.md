@@ -46,7 +46,7 @@ Access at http://localhost:8080/
 **IMPORTANT:** Always check the `Makefile` for available commands before running manual commands. The Makefile contains the canonical commands for common tasks.
 
 ```bash
-make install      # Install dependencies (npm for husky, cargo for server)
+make install      # Install dependencies (cargo for server)
 make run-ship     # Build ship WASM + run server (dev)
 make dev-server   # Run Rust server only
 make build        # Production build (ship WASM + server)
@@ -155,10 +155,7 @@ cd server && cargo test
 
 ## Linting
 
-Pre-commit hooks run automatically via Husky + lint-staged:
 - **Server:** `cargo fmt --check` + `cargo clippy`
-
-Manual lint:
 ```bash
 make lint              # Server only
 ```

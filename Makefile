@@ -9,7 +9,6 @@ run-ship: build-ship
 	cd server && cargo run
 
 install:
-	npm install
 	cd server && cargo build
 
 lint: lint-server

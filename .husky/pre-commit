@@ -1,2 +1,0 @@
-node scripts/write-commit-time.mjs
-npx --no-install lint-staged

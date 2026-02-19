@@ -4,18 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "husky",
     "lint": "npm run lint:server",
     "lint:server": "cd server && cargo clippy -- -D warnings && cargo fmt --check"
-  },
-  "devDependencies": {
-    "husky": "^9.1.7",
-    "lint-staged": "^15.2.11"
-  },
-  "lint-staged": {
-    "server/**/*.rs": [
-      "bash -c 'cd server && cargo fmt --check'",
-      "bash -c 'cd server && cargo clippy -- -D warnings'"
-    ]
   }
 }
