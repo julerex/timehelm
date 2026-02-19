@@ -6,7 +6,9 @@ target/
 # Node
 node_modules/
 dist/
-client/public/ship/
+# Ship WASM build artifacts (run.js is the loader, must be committed)
+client/public/ship/*
+!client/public/ship/run.js
 *.log
 
 # Local dev logs
