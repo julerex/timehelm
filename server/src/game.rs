@@ -143,38 +143,10 @@ pub struct GameState {
 
 impl GameState {
     /// Create a new game state with initial entities.
-    ///
-    /// Initializes physics world and creates a bouncy ball entity
-    /// positioned near the pole at (-500, -400).
     pub fn new() -> Self {
-        let mut physics = PhysicsWorld::new();
-
-        // Create initial bouncy ball
-        // Pole is at (-500, -400), ball is 200 units away at (-300, -400)
-        let ball_id = format!("ball_{}", uuid::Uuid::new_v4());
-        physics.create_bouncy_ball(ball_id.clone(), -3.0, -4.0);
-
-        let mut entities = HashMap::new();
-        entities.insert(
-            ball_id.clone(),
-            Entity {
-                id: ball_id,
-                entity_type: EntityType::Ball,
-                position: Position {
-                    x: -3.0, // 2m away from pole at (-5, -4)
-                    y: 5.0,  // Start at 5 meters for visibility
-                    z: -4.0,
-                },
-                rotation: Rotation {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-            },
-        );
-
-        let entity_count = entities.len();
-        tracing::info!("GameState initialized with {} entities", entity_count);
+        let physics = PhysicsWorld::new();
+        let entities = HashMap::new();
+        tracing::info!("GameState initialized with {} entities", entities.len());
         Self {
             players: HashMap::new(),
             entities,

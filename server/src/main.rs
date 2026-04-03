@@ -191,8 +191,8 @@ async fn main() -> anyhow::Result<()> {
         .parse::<u16>()?;
 
     // Bind to all network interfaces on the specified port
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    tracing::info!("Server listening on port {}", port);
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
+    tracing::info!("Server listening on 0.0.0.0:{port} — open http://localhost:{port}/");
 
     // Start the HTTP server
     axum::serve(listener, app).await?;
