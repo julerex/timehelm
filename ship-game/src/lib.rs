@@ -2,9 +2,10 @@
 //!
 //! **World space uses SI metres:** one unit of `Vec3`, mesh positions, and camera distance is **1 m**.
 //!
-//! Deck footprint follows [`ship_hull::SHIP_BEAM_M`] × [`ship_hull::SHIP_LENGTH_M`] (Deck 10 scale; see
-//! `assets/reference_floorplan_deck10.png`). Tiles are axis-aligned squares on the deck plane (XY); **+Y** is
-//! bow, **±X** port/starboard. Decks stack along **+Z**; a shader discards fragments above the cut height.
+//! Deck footprint uses [`ship_hull::SHIP_BEAM_M`] × [`ship_hull::SHIP_LENGTH_M`] (60 m beam, ~5.3:1 L/B from
+//! `assets/reference_floorplan_deck10.png`). Decks 10+ use a courtyard void and U-stern from
+//! [`ship_hull::deck_hull_polygon_upper`]. Tiles are axis-aligned on **XY**; **+Y** bow, **±X** port/starboard;
+//! decks stack on **+Z**; the clip shader removes fragments above the cut height.
 
 mod shader_embed;
 mod ship_hull;
@@ -16,7 +17,9 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderRef};
 use shader_embed::ShipShaderEmbedPlugin;
 use ship_hull::{
-    deck_hull_polygon, deck_tile_centers, is_perimeter_tile, SHIP_BEAM_M, SHIP_LENGTH_M,
+    deck_hull_polygon, deck_hull_polygon_upper, deck_tile_centers, deck_tile_centers_upper,
+    is_perimeter_tile, FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M, SHIP_LENGTH_M,
+    UPPER_VOID_HALF_WIDTH_M, UPPER_VOID_Y_AFT_M, UPPER_VOID_Y_FWD_M,
 };
 
 const NUM_DECKS: usize = 20;
@@ -223,6 +226,38 @@ fn window_strip_zone(p: Vec2) -> bool {
     p.y > SHIP_LENGTH_M * 0.12 && p.x.abs() > SHIP_BEAM_M * 0.34
 }
 
+// --- Upper decks (Deck 10+): colours aligned with `reference_floorplan_deck10.png` ---
+
+fn upper_window_strip_zone(p: Vec2) -> bool {
+    p.x.abs() > SHIP_BEAM_M * 0.34
+        && (p.y > SHIP_LENGTH_M * 0.12
+            || (p.y < UPPER_VOID_Y_FWD_M + 6.0 && p.y > UPPER_VOID_Y_AFT_M - SHIP_LENGTH_M * 0.04))
+}
+
+fn upper_outer_balcony_zone(p: Vec2) -> bool {
+    let inner = UPPER_VOID_HALF_WIDTH_M + 3.2;
+    p.x.abs() > inner
+        && p.y < UPPER_VOID_Y_FWD_M + SHIP_LENGTH_M * 0.14
+        && p.y > UPPER_VOID_Y_AFT_M - SHIP_LENGTH_M * 0.05
+}
+
+fn upper_inner_courtyard_zone(p: Vec2) -> bool {
+    let hb = SHIP_BEAM_M * 0.5;
+    let vw = UPPER_VOID_HALF_WIDTH_M;
+    p.y < UPPER_VOID_Y_FWD_M - 1.5
+        && p.y > UPPER_VOID_Y_AFT_M + 1.5
+        && p.x.abs() > vw + 1.6
+        && p.x.abs() < hb - 4.0
+}
+
+fn upper_bow_forward_block(p: Vec2) -> bool {
+    p.y > UPPER_VOID_Y_FWD_M - 2.0
+}
+
+fn upper_stern_wing_body(p: Vec2) -> bool {
+    p.y < UPPER_VOID_Y_AFT_M && p.x.abs() > UPPER_VOID_HALF_WIDTH_M + 1.2
+}
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -273,14 +308,23 @@ fn setup(
         ..default()
     });
 
-    let hull = deck_hull_polygon();
-    let tile_centers = deck_tile_centers(TILE_CELL_M);
+    let hull_lower = deck_hull_polygon();
+    let hull_upper = deck_hull_polygon_upper();
+    let tile_centers_lower = deck_tile_centers(TILE_CELL_M);
+    let tile_centers_upper = deck_tile_centers_upper(TILE_CELL_M);
 
     let edge_deck = Color::srgb(0.38, 0.3, 0.24);
     let window_color = Color::srgb(0.42, 0.62, 0.9);
     let outer_cabin = Color::srgb(0.95, 0.82, 0.35);
     let inner_cabin = Color::srgb(0.92, 0.55, 0.72);
     let public_deck = Color::srgb(0.78, 0.86, 0.92);
+
+    let upper_outer_red = Color::srgb(0.78, 0.2, 0.22);
+    let upper_inner_peach = Color::srgb(0.93, 0.68, 0.55);
+    let upper_stern_teal = Color::srgb(0.16, 0.44, 0.48);
+    let upper_bow_side = Color::srgb(0.9, 0.8, 0.28);
+    let upper_bow_core = Color::srgb(0.86, 0.42, 0.66);
+    let upper_corridor = Color::srgb(0.55, 0.53, 0.51);
 
     let mesh_hull = meshes.add(deck_tile_cuboid_mesh(
         TILE_CELL_M,
@@ -307,6 +351,36 @@ fn setup(
         DECK_SLAB_THICKNESS_M,
         public_deck,
     ));
+    let mesh_upper_red = meshes.add(deck_tile_cuboid_mesh(
+        TILE_CELL_M,
+        DECK_SLAB_THICKNESS_M,
+        upper_outer_red,
+    ));
+    let mesh_upper_peach = meshes.add(deck_tile_cuboid_mesh(
+        TILE_CELL_M,
+        DECK_SLAB_THICKNESS_M,
+        upper_inner_peach,
+    ));
+    let mesh_upper_teal = meshes.add(deck_tile_cuboid_mesh(
+        TILE_CELL_M,
+        DECK_SLAB_THICKNESS_M,
+        upper_stern_teal,
+    ));
+    let mesh_upper_bow_side = meshes.add(deck_tile_cuboid_mesh(
+        TILE_CELL_M,
+        DECK_SLAB_THICKNESS_M,
+        upper_bow_side,
+    ));
+    let mesh_upper_bow_core = meshes.add(deck_tile_cuboid_mesh(
+        TILE_CELL_M,
+        DECK_SLAB_THICKNESS_M,
+        upper_bow_core,
+    ));
+    let mesh_upper_corridor = meshes.add(deck_tile_cuboid_mesh(
+        TILE_CELL_M,
+        DECK_SLAB_THICKNESS_M,
+        upper_corridor,
+    ));
 
     for deck_i in 0..NUM_DECKS {
         let hue = 0.52 + (deck_i as f32 * 0.012);
@@ -326,13 +400,48 @@ fn setup(
                 DeckLayer(deck_i),
             ))
             .with_children(|deck| {
-                for c in &tile_centers {
-                    let edge = is_perimeter_tile(*c, TILE_CELL_M, &hull);
+                let hull: &[Vec2] = if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
+                    hull_upper.as_slice()
+                } else {
+                    hull_lower.as_slice()
+                };
+                let centers: &[Vec2] = if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
+                    tile_centers_upper.as_slice()
+                } else {
+                    tile_centers_lower.as_slice()
+                };
+
+                for c in centers {
+                    let edge = is_perimeter_tile(*c, TILE_CELL_M, hull);
                     let mesh = if edge {
-                        if window_strip_zone(*c) {
+                        if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
+                            if upper_window_strip_zone(*c) {
+                                &mesh_window
+                            } else {
+                                &mesh_hull
+                            }
+                        } else if window_strip_zone(*c) {
                             &mesh_window
                         } else {
                             &mesh_hull
+                        }
+                    } else if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
+                        if upper_stern_wing_body(*c) {
+                            &mesh_upper_teal
+                        } else if upper_bow_forward_block(*c) {
+                            if c.x.abs() > SHIP_BEAM_M * 0.26 {
+                                &mesh_upper_bow_side
+                            } else {
+                                &mesh_upper_bow_core
+                            }
+                        } else if upper_inner_courtyard_zone(*c) {
+                            &mesh_upper_peach
+                        } else if upper_outer_balcony_zone(*c) {
+                            &mesh_upper_red
+                        } else if c.y < -SHIP_LENGTH_M * 0.3 {
+                            &mesh_public
+                        } else {
+                            &mesh_upper_corridor
                         }
                     } else if inner_cabin_zone(*c) {
                         &mesh_inner
