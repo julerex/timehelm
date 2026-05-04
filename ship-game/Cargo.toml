@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 bevy = { version = "0.14", default-features = false, features = [
     "bevy_winit",
+    "x11",
     "bevy_scene",
     "bevy_render",
     "bevy_core_pipeline",
@@ -18,6 +19,7 @@ bevy = { version = "0.14", default-features = false, features = [
     "bevy_ui",
     "bevy_asset",
     "bevy_color",
+    "tonemapping_luts",
     "default_font",
     "webgl2",
     "png",

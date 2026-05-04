@@ -6,6 +6,14 @@
 - Sandbox 
 - Social simulation game
 
+## Ship Game Run Modes
+
+- Browser (WASM + server): `make run-ship`, then open `http://localhost:8080/`
+- Native Linux desktop: `make run-ship-native`
+- Debug split:
+  - Agent: build/run logs, compile errors, runtime diagnostics
+  - You: native window visual checks (rendering/input), then report observations for fixes
+
 
 # Game Mechanics
 - One hour in-game lasts one minute real-time.

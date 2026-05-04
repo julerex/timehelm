@@ -175,20 +175,48 @@ impl Material for ShipClipMaterial {
     }
 }
 
-#[wasm_bindgen::prelude::wasm_bindgen(start)]
-pub fn run() {
+fn primary_window() -> Window {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Window {
+            title: "Ship Game - Time Helm".into(),
+            canvas: Some("#ship-game-canvas".into()),
+            fit_canvas_to_parent: true,
+            ..default()
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Window {
+            title: "Ship Game - Time Helm".into(),
+            ..default()
+        }
+    }
+}
+
+fn asset_plugin() -> AssetPlugin {
+    #[cfg(target_arch = "wasm32")]
+    {
+        AssetPlugin::default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        AssetPlugin {
+            file_path: "../assets".into(),
+            ..default()
+        }
+    }
+}
+
+fn run_app() {
     App::new()
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Ship Game - Time Helm".into(),
-                        canvas: Some("#ship-game-canvas".into()),
-                        fit_canvas_to_parent: true,
-                        ..default()
-                    }),
+                    primary_window: Some(primary_window()),
                     ..default()
                 })
+                .set(asset_plugin())
                 .set(ImagePlugin::default_nearest()),
         )
         .add_plugins(ShipShaderEmbedPlugin)
@@ -209,6 +237,17 @@ pub fn run() {
             ),
         )
         .run();
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn run() {
+    run_app();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_native() {
+    run_app();
 }
 
 impl Default for CameraRig {
