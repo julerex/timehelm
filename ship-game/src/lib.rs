@@ -23,6 +23,29 @@ use ship_hull::{
 };
 
 const NUM_DECKS: usize = 20;
+const SIM_DECK_INDEX: usize = 4; // Deck 5 (human-facing numbering)
+const SIM_NPC_SPEED_M_S: f32 = 2.8;
+const SIM_TARGET_REACHED_M: f32 = 0.45;
+const SIM_NPC_MODEL_PATHS: [&str; 18] = [
+    "character-a.glb",
+    "character-b.glb",
+    "character-c.glb",
+    "character-d.glb",
+    "character-e.glb",
+    "character-f.glb",
+    "character-g.glb",
+    "character-h.glb",
+    "character-i.glb",
+    "character-j.glb",
+    "character-k.glb",
+    "character-l.glb",
+    "character-m.glb",
+    "character-n.glb",
+    "character-o.glb",
+    "character-p.glb",
+    "character-q.glb",
+    "character-r.glb",
+];
 
 const DECK_NAMES: [&str; NUM_DECKS] = [
     "Engine Deck",
@@ -98,8 +121,26 @@ struct DeckLabel;
 #[derive(Component)]
 struct DeckLayer(#[allow(dead_code)] usize);
 
+#[derive(Component)]
+struct SimNpc {
+    speed_m_s: f32,
+}
+
+#[derive(Component)]
+struct WanderState {
+    target: Vec3,
+}
+
 #[derive(Resource)]
 struct CurrentDeck(usize);
+
+#[derive(Resource)]
+struct DeckFiveWalkPoints(Vec<Vec3>);
+
+#[derive(Resource)]
+struct SimRng {
+    state: u64,
+}
 
 /// Orbit camera: eye looks at `target` (m), offset given by yaw/pitch and `distance` (m).
 #[derive(Resource)]
@@ -152,15 +193,17 @@ pub fn run() {
         )
         .add_plugins(ShipShaderEmbedPlugin)
         .add_plugins(MaterialPlugin::<ShipClipMaterial>::default())
-        .insert_resource(CurrentDeck(NUM_DECKS - 1))
+        .insert_resource(CurrentDeck(SIM_DECK_INDEX))
         .insert_resource(CameraRig::default())
+        .insert_resource(SimRng::default())
         .insert_resource(ClearColor::default())
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, spawn_sim_npcs.after(setup)))
         .add_systems(
             Update,
             (
                 deck_switch,
                 camera_controls,
+                sim_npc_wander,
                 sync_clip_material,
                 update_deck_label,
             ),
@@ -179,6 +222,33 @@ impl Default for CameraRig {
             yaw,
             pitch,
             distance: CAM_DEFAULT_DISTANCE_M,
+        }
+    }
+}
+
+impl Default for SimRng {
+    fn default() -> Self {
+        Self {
+            state: 0x2f50_794f_dcae_b5a3,
+        }
+    }
+}
+
+impl SimRng {
+    fn next_u32(&mut self) -> u32 {
+        // xorshift64*
+        self.state ^= self.state >> 12;
+        self.state ^= self.state << 25;
+        self.state ^= self.state >> 27;
+        let mixed = self.state.wrapping_mul(0x2545_f491_4f6c_dd1d);
+        (mixed >> 32) as u32
+    }
+
+    fn next_usize(&mut self, upper_exclusive: usize) -> usize {
+        if upper_exclusive <= 1 {
+            0
+        } else {
+            (self.next_u32() as usize) % upper_exclusive
         }
     }
 }
@@ -486,6 +556,45 @@ fn setup(
     ));
 }
 
+fn spawn_sim_npcs(mut commands: Commands, asset_server: Res<AssetServer>, mut rng: ResMut<SimRng>) {
+    let deck_five_z = SIM_DECK_INDEX as f32 * DECK_FLOOR_SPACING_M + DECK_SLAB_THICKNESS_M;
+    let walk_points: Vec<Vec3> = deck_tile_centers(TILE_CELL_M)
+        .into_iter()
+        .map(|p| Vec3::new(p.x, p.y, deck_five_z))
+        .collect();
+    if walk_points.is_empty() {
+        return;
+    }
+
+    let mut shuffled_indices: Vec<usize> = (0..walk_points.len()).collect();
+    for i in (1..shuffled_indices.len()).rev() {
+        let j = rng.next_usize(i + 1);
+        shuffled_indices.swap(i, j);
+    }
+
+    for (idx, model_path) in SIM_NPC_MODEL_PATHS.iter().enumerate() {
+        let spawn_idx = shuffled_indices[idx % shuffled_indices.len()];
+        let spawn_point = walk_points[spawn_idx];
+        let target_point = walk_points[rng.next_usize(walk_points.len())];
+        commands.spawn((
+            SceneBundle {
+                scene: asset_server.load(format!("{model_path}#Scene0")),
+                transform: Transform::from_translation(spawn_point),
+                ..default()
+            },
+            SimNpc {
+                speed_m_s: SIM_NPC_SPEED_M_S,
+            },
+            WanderState {
+                target: target_point,
+            },
+            Name::new(format!("SimNpc{}", idx + 1)),
+        ));
+    }
+
+    commands.insert_resource(DeckFiveWalkPoints(walk_points));
+}
+
 fn deck_switch(keyboard: Res<ButtonInput<KeyCode>>, mut current_deck: ResMut<CurrentDeck>) {
     if keyboard.just_pressed(KeyCode::PageUp) && current_deck.0 < NUM_DECKS - 1 {
         current_deck.0 += 1;
@@ -592,6 +701,38 @@ fn camera_controls(
     let tf = camera_rig_transform(&rig);
     for mut cam_tf in &mut cameras {
         *cam_tf = tf;
+    }
+}
+
+fn sim_npc_wander(
+    time: Res<Time>,
+    walk_points: Option<Res<DeckFiveWalkPoints>>,
+    mut rng: ResMut<SimRng>,
+    mut npcs: Query<(&SimNpc, &mut Transform, &mut WanderState)>,
+) {
+    let Some(walk_points) = walk_points else {
+        return;
+    };
+    if walk_points.0.is_empty() {
+        return;
+    }
+
+    for (npc, mut tf, mut state) in &mut npcs {
+        let mut to_target = state.target - tf.translation;
+        if to_target.length() <= SIM_TARGET_REACHED_M {
+            state.target = walk_points.0[rng.next_usize(walk_points.0.len())];
+            to_target = state.target - tf.translation;
+        }
+
+        let distance = to_target.length();
+        if distance <= f32::EPSILON {
+            continue;
+        }
+
+        let move_step = (npc.speed_m_s * time.delta_seconds()).min(distance);
+        let dir = to_target / distance;
+        tf.translation += dir * move_step;
+        tf.look_to(Vec3::new(dir.x, dir.y, 0.0), Vec3::Z);
     }
 }
 
