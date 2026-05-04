@@ -3,7 +3,7 @@
 //! Manages physics bodies, collisions, and entity dynamics.
 //! Units: meters (1 unit = 1 m).
 
-use rand::Rng;
+use rand::prelude::*;
 use rapier3d::prelude::*;
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ pub struct PhysicsWorld {
     pub impulse_joint_set: ImpulseJointSet,
     pub multibody_joint_set: MultibodyJointSet,
     pub ccd_solver: CCDSolver,
-    pub gravity: Vector<Real>,
+    pub gravity: Vector,
     pub integration_parameters: IntegrationParameters,
     pub entity_handles: HashMap<String, RigidBodyHandle>,
 }
@@ -41,7 +41,7 @@ impl PhysicsWorld {
         // Create a static rigid body for the ground
         // Position ground body at y = -0.1 so the top surface is at y = 0.0
         let ground_body = RigidBodyBuilder::fixed()
-            .translation(vector![0.0, -0.1, 0.0])
+            .translation(Vec3::new(0.0, -0.1, 0.0))
             .build();
         let ground_handle = rigid_body_set.insert(ground_body);
 
@@ -60,11 +60,11 @@ impl PhysicsWorld {
 
         // East wall (positive X) - inner edge at x = ground_half_size
         let east_wall_body = RigidBodyBuilder::fixed()
-            .translation(vector![
+            .translation(Vec3::new(
                 ground_half_size + wall_half_thickness,
                 wall_half_height,
-                0.0
-            ])
+                0.0,
+            ))
             .build();
         let east_wall_handle = rigid_body_set.insert(east_wall_body);
         let east_wall =
@@ -76,11 +76,11 @@ impl PhysicsWorld {
 
         // West wall (negative X) - inner edge at x = -ground_half_size
         let west_wall_body = RigidBodyBuilder::fixed()
-            .translation(vector![
+            .translation(Vec3::new(
                 -ground_half_size - wall_half_thickness,
                 wall_half_height,
-                0.0
-            ])
+                0.0,
+            ))
             .build();
         let west_wall_handle = rigid_body_set.insert(west_wall_body);
         let west_wall =
@@ -92,11 +92,11 @@ impl PhysicsWorld {
 
         // North wall (positive Z) - inner edge at z = ground_half_size
         let north_wall_body = RigidBodyBuilder::fixed()
-            .translation(vector![
+            .translation(Vec3::new(
                 0.0,
                 wall_half_height,
-                ground_half_size + wall_half_thickness
-            ])
+                ground_half_size + wall_half_thickness,
+            ))
             .build();
         let north_wall_handle = rigid_body_set.insert(north_wall_body);
         let north_wall =
@@ -108,11 +108,11 @@ impl PhysicsWorld {
 
         // South wall (negative Z) - inner edge at z = -ground_half_size
         let south_wall_body = RigidBodyBuilder::fixed()
-            .translation(vector![
+            .translation(Vec3::new(
                 0.0,
                 wall_half_height,
-                -ground_half_size - wall_half_thickness
-            ])
+                -ground_half_size - wall_half_thickness,
+            ))
             .build();
         let south_wall_handle = rigid_body_set.insert(south_wall_body);
         let south_wall =
@@ -134,7 +134,7 @@ impl PhysicsWorld {
             ccd_solver: CCDSolver::new(),
             // Earth gravity: 9.81 m/s²
             // Physics steps represent game time (1 step = 1 game second), so use normal gravity.
-            gravity: vector![0.0, -9.81, 0.0],
+            gravity: Vec3::new(0.0, -9.81, 0.0),
             integration_parameters: IntegrationParameters {
                 // Each physics step represents 1 game second (60x time scale)
                 // Real-time step is 1/60 second, but we simulate 1 game second per step
@@ -158,18 +158,16 @@ impl PhysicsWorld {
     /// # Returns
     /// Rigid body handle for physics updates
     pub fn create_bouncy_ball(&mut self, entity_id: String, x: f32, z: f32) -> RigidBodyHandle {
-        use rand::Rng;
-
         // Random initial velocity for trajectory variation
         // Velocities are in game-time units (m/game-second)
-        let mut rng = rand::thread_rng();
-        let vel_x = rng.gen_range(-1.0..1.0);
-        let vel_z = rng.gen_range(-1.0..1.0);
+        let mut rng = rand::rng();
+        let vel_x = rng.random_range(-1.0..1.0);
+        let vel_z = rng.random_range(-1.0..1.0);
         let vel_y = 0.0; // Zero vertical velocity
 
         let rigid_body = RigidBodyBuilder::dynamic()
-            .translation(vector![x, 5.0, z]) // Start at 5 meters for visibility
-            .linvel(vector![vel_x, vel_y, vel_z])
+            .translation(Vec3::new(x, 5.0, z)) // Start at 5 meters for visibility
+            .linvel(Vec3::new(vel_x, vel_y, vel_z))
             .build();
         let handle = self.rigid_body_set.insert(rigid_body);
 
@@ -208,7 +206,7 @@ impl PhysicsWorld {
     /// Rigid body handle for position updates
     pub fn create_human(&mut self, entity_id: String, x: f32, y: f32, z: f32) -> RigidBodyHandle {
         let rigid_body = RigidBodyBuilder::kinematic_position_based()
-            .translation(vector![x, y, z])
+            .translation(Vec3::new(x, y, z))
             .build();
         let handle = self.rigid_body_set.insert(rigid_body);
 
@@ -237,7 +235,7 @@ impl PhysicsWorld {
     pub fn update_human_position(&mut self, entity_id: &str, x: f32, y: f32, z: f32) {
         if let Some(handle) = self.entity_handles.get(entity_id) {
             if let Some(body) = self.rigid_body_set.get_mut(*handle) {
-                body.set_translation(vector![x, y, z], true);
+                body.set_translation(Vec3::new(x, y, z), true);
             }
         }
     }
@@ -251,17 +249,17 @@ impl PhysicsWorld {
     /// * `_dt` - Delta time in seconds (unused, but kept for API consistency)
     pub fn step(&mut self, _dt: f64) {
         // Add randomness to ball velocities on each step (simulates random bounce effects)
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for (entity_id, handle) in &self.entity_handles {
             if entity_id.starts_with("ball_") {
                 if let Some(body) = self.rigid_body_set.get_mut(*handle) {
-                    let mut linvel = *body.linvel();
+                    let mut linvel = body.linvel();
                     // Random perturbation to velocity for trajectory variation
                     // Velocities are in game-time units (m/game-second)
                     if linvel.y < 0.06 && linvel.y > -0.06 {
                         // Near ground, add random horizontal component to maintain speed
-                        linvel.x += rng.gen_range(-0.2..0.2);
-                        linvel.z += rng.gen_range(-0.2..0.2);
+                        linvel.x += rng.random_range(-0.2..0.2);
+                        linvel.z += rng.random_range(-0.2..0.2);
                         body.set_linvel(linvel, true);
                     }
                 }
@@ -271,7 +269,7 @@ impl PhysicsWorld {
         let hooks: &dyn rapier3d::pipeline::PhysicsHooks = &();
         let events: &dyn rapier3d::pipeline::EventHandler = &();
         self.physics_pipeline.step(
-            &self.gravity,
+            self.gravity,
             &self.integration_parameters,
             &mut self.island_manager,
             &mut self.broad_phase,
@@ -335,7 +333,10 @@ impl PhysicsWorld {
         let handle = self.entity_handles.get(entity_id)?;
         let body = self.rigid_body_set.get(*handle)?;
         let rotation = body.rotation();
-        let euler = rotation.euler_angles();
+        let quat = rapier3d::na::UnitQuaternion::from_quaternion(rapier3d::na::Quaternion::new(
+            rotation.w, rotation.x, rotation.y, rotation.z,
+        ));
+        let euler = quat.euler_angles();
         Some((euler.0, euler.1, euler.2))
     }
 

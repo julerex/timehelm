@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-bevy = { version = "0.14", default-features = false, features = [
+bevy = { version = "0.18", default-features = false, features = [
     "bevy_winit",
     "x11",
     "bevy_scene",
@@ -23,6 +23,7 @@ bevy = { version = "0.14", default-features = false, features = [
     "default_font",
     "webgl2",
     "png",
+    "zstd_rust",
 ] }
 wasm-bindgen = "0.2"
 getrandom = { version = "0.3", features = ["wasm_js"] }

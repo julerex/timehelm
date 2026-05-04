@@ -10,11 +10,11 @@
 mod shader_embed;
 mod ship_hull;
 
-use bevy::asset::AssetPath;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
-use bevy::pbr::{Material, MaterialMeshBundle, MaterialPlugin};
+use bevy::pbr::{Material, MaterialPlugin, MeshMaterial3d};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, ShaderRef};
+use bevy::render::render_resource::AsBindGroup;
+use bevy::shader::ShaderRef;
 use shader_embed::ShipShaderEmbedPlugin;
 use ship_hull::{
     deck_hull_polygon, deck_hull_polygon_upper, deck_tile_centers, deck_tile_centers_upper,
@@ -163,11 +163,11 @@ struct ShipClipMaterial {
 
 impl Material for ShipClipMaterial {
     fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::from(CLIP_SHADER_FORWARD))
+        CLIP_SHADER_FORWARD.into()
     }
 
     fn prepass_fragment_shader() -> ShaderRef {
-        ShaderRef::Path(AssetPath::from(CLIP_SHADER_PREPASS))
+        CLIP_SHADER_PREPASS.into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {
@@ -379,43 +379,39 @@ fn setup(
 
     let rig = CameraRig::default();
     commands.spawn((
-        Camera3dBundle {
-            transform: camera_rig_transform(&rig),
-            camera: Camera {
-                order: 0,
-                ..default()
-            },
+        Camera3d::default(),
+        Camera {
+            order: 0,
             ..default()
         },
+        camera_rig_transform(&rig),
         GameCamera3d,
     ));
 
     let ui_camera = commands
         .spawn((
-            Camera2dBundle {
-                camera: Camera {
-                    order: 1,
-                    clear_color: ClearColorConfig::None,
-                    ..default()
-                },
+            Camera2d,
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::None,
                 ..default()
             },
             UiCamera,
         ))
         .id();
 
-    commands.insert_resource(AmbientLight {
+    commands.insert_resource(GlobalAmbientLight {
         color: Color::WHITE,
-        brightness: 0.35,
+        brightness: 40.0,
+        affects_lightmapped_meshes: true,
     });
-    commands.spawn(DirectionalLightBundle {
-        transform: Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
-        directional_light: DirectionalLight {
+    commands.spawn((
+        DirectionalLight {
             illuminance: 12000.0,
             ..default()
         },
-        ..default()
-    });
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
+    ));
 
     let hull_lower = deck_hull_polygon();
     let hull_upper = deck_hull_polygon_upper();
@@ -504,8 +500,8 @@ fn setup(
 
         commands
             .spawn((
-                TransformBundle::from_transform(Transform::from_xyz(0.0, 0.0, deck_z)),
-                VisibilityBundle::default(),
+                Transform::from_xyz(0.0, 0.0, deck_z),
+                Visibility::default(),
                 DeckLayer(deck_i),
             ))
             .with_children(|deck| {
@@ -562,35 +558,29 @@ fn setup(
                         &mesh_deck_base
                     };
 
-                    deck.spawn(MaterialMeshBundle {
-                        mesh: (*mesh).clone(),
-                        material: clip_handle.clone(),
-                        transform: Transform::from_xyz(c.x, c.y, DECK_SLAB_THICKNESS_M * 0.5),
-                        ..default()
-                    });
+                    deck.spawn((
+                        Mesh3d((*mesh).clone()),
+                        MeshMaterial3d(clip_handle.clone()),
+                        Transform::from_xyz(c.x, c.y, DECK_SLAB_THICKNESS_M * 0.5),
+                    ));
                 }
             });
     }
 
     commands.spawn((
-        TextBundle {
-            style: Style {
-                position_type: PositionType::Absolute,
-                top: Val::Px(10.0),
-                left: Val::Px(10.0),
-                ..default()
-            },
-            text: Text::from_section(
-                "",
-                TextStyle {
-                    font_size: 22.0,
-                    color: Color::WHITE,
-                    ..default()
-                },
-            ),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.0),
+            left: Val::Px(10.0),
             ..default()
         },
-        TargetCamera(ui_camera),
+        Text::new(""),
+        TextFont {
+            font_size: 22.0,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        UiTargetCamera(ui_camera),
         DeckLabel,
     ));
 }
@@ -616,11 +606,10 @@ fn spawn_sim_npcs(mut commands: Commands, asset_server: Res<AssetServer>, mut rn
         let spawn_point = walk_points[spawn_idx];
         let target_point = walk_points[rng.next_usize(walk_points.len())];
         commands.spawn((
-            SceneBundle {
-                scene: asset_server.load(format!("{model_path}#Scene0")),
-                transform: Transform::from_translation(spawn_point),
-                ..default()
-            },
+            SceneRoot(
+                asset_server.load(GltfAssetLabel::Scene(0).from_asset(*model_path)),
+            ),
+            Transform::from_translation(spawn_point),
             SimNpc {
                 speed_m_s: SIM_NPC_SPEED_M_S,
             },
@@ -672,13 +661,13 @@ fn pan_basis_xy(rig: &CameraRig) -> (Vec3, Vec3) {
 fn camera_controls(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_btn: Res<ButtonInput<MouseButton>>,
-    mut scroll_evr: EventReader<MouseWheel>,
-    mut motion_evr: EventReader<MouseMotion>,
+    mut scroll_evr: MessageReader<MouseWheel>,
+    mut motion_evr: MessageReader<MouseMotion>,
     time: Res<Time>,
     mut rig: ResMut<CameraRig>,
     mut cameras: Query<&mut Transform, With<GameCamera3d>>,
 ) {
-    let dt = time.delta_seconds();
+    let dt = time.delta_secs();
 
     if keyboard.pressed(KeyCode::KeyQ) {
         rig.yaw += CAMERA_YAW_SPEED_RAD_S * dt;
@@ -768,7 +757,7 @@ fn sim_npc_wander(
             continue;
         }
 
-        let move_step = (npc.speed_m_s * time.delta_seconds()).min(distance);
+        let move_step = (npc.speed_m_s * time.delta_secs()).min(distance);
         let dir = to_target / distance;
         tf.translation += dir * move_step;
         tf.look_to(Vec3::new(dir.x, dir.y, 0.0), Vec3::Z);
@@ -784,7 +773,7 @@ fn update_deck_label(
         return;
     }
     for mut text in &mut query {
-        text.sections[0].value = format!(
+        text.0 = format!(
             "Deck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck",
             current_deck.0 + 1,
             NUM_DECKS,

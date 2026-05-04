@@ -21,7 +21,8 @@ FROM rust:1.92 as ship-builder
 
 WORKDIR /app
 RUN rustup target add wasm32-unknown-unknown
-RUN cargo install wasm-bindgen-cli
+# Must match ship-game's wasm-bindgen crate version in Cargo.lock (schema must match CLI).
+RUN cargo install wasm-bindgen-cli --version 0.2.120
 
 COPY ship-game ./ship-game
 RUN RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build --manifest-path ship-game/Cargo.toml --target wasm32-unknown-unknown --release

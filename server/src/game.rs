@@ -3,7 +3,7 @@
 //! Handles player and entity state, game time, and physics integration.
 
 use crate::physics::PhysicsWorld;
-use rand::Rng;
+use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -309,9 +309,9 @@ impl GameState {
                         y
                     );
                     // Reset ball position to above ground with random x/z
-                    let mut rng = rand::thread_rng();
-                    let new_x = rng.gen_range(-50.0..50.0);
-                    let new_z = rng.gen_range(-50.0..50.0);
+                    let mut rng = rand::rng();
+                    let new_x = rng.random_range(-50.0..50.0);
+                    let new_z = rng.random_range(-50.0..50.0);
                     let new_y = 5.0;
 
                     // Remove old physics body and create new one

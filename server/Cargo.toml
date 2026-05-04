@@ -4,24 +4,23 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "*", features = ["full"] }
-axum = { version = "*", features = ["ws"] }
-futures-util = "*"
-tower = "*"
-tower-http = { version = "*", features = ["cors", "fs"] }
-serde = { version = "*", features = ["derive"] }
-serde_json = "*"
-oauth2 = "*"
-reqwest = { version = "*", features = ["json"] }
-jsonwebtoken = { version = "*", features = ["rust_crypto"] }
-chrono = { version = "*", features = ["serde"] }
-uuid = { version = "*", features = ["v4", "v5", "serde"] }
-tracing = "*"
-tracing-subscriber = "*"
-anyhow = "*"
-thiserror = "*"
-sqlx = { version = "*", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "migrate"] }
-dotenv = "*"
-rapier3d = { version = "*", features = ["simd-stable", "serde-serialize"] }
-rand = "*"
-
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+oauth2 = "5.0"
+reqwest = { version = "0.13", features = ["json"] }
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+thiserror = "2.0"
+sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "migrate"] }
+dotenv = "0.15"
+rapier3d = { version = "0.32", features = ["simd-stable", "serde-serialize"] }
+rand = "0.10"
