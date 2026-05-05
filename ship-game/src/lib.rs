@@ -197,7 +197,12 @@ fn primary_window() -> Window {
 fn asset_plugin() -> AssetPlugin {
     #[cfg(target_arch = "wasm32")]
     {
-        AssetPlugin::default()
+        // Skip HTTP fetches for `.meta` sidecars: static hosting has no meta files, and Bevy
+        // would fall back to default meta anyway (`AssetReaderError::NotFound`).
+        AssetPlugin {
+            meta_check: bevy::asset::AssetMetaCheck::Never,
+            ..default()
+        }
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -606,9 +611,7 @@ fn spawn_sim_npcs(mut commands: Commands, asset_server: Res<AssetServer>, mut rn
         let spawn_point = walk_points[spawn_idx];
         let target_point = walk_points[rng.next_usize(walk_points.len())];
         commands.spawn((
-            SceneRoot(
-                asset_server.load(GltfAssetLabel::Scene(0).from_asset(*model_path)),
-            ),
+            SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*model_path))),
             Transform::from_translation(spawn_point),
             SimNpc {
                 speed_m_s: SIM_NPC_SPEED_M_S,

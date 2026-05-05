@@ -15,6 +15,9 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_core_pipeline",
     "bevy_pbr",
     "bevy_gltf",
+    # Character GLBs use skinned meshes / clips; scenes reference animation types that must
+    # be registered (otherwise ScenePlugin panics with "unregistered type" on WASM).
+    "gltf_animation",
     "bevy_text",
     "bevy_ui",
     "bevy_asset",
