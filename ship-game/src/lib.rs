@@ -3,7 +3,7 @@
 //! **World space uses SI metres:** one unit of `Vec3`, mesh positions, and camera distance is **1 m**.
 //!
 //! Deck footprint uses [`ship_hull::SHIP_BEAM_M`] × [`ship_hull::SHIP_LENGTH_M`] (60 m beam, ~5.3:1 L/B from
-//! `assets/reference_floorplan_deck10.png`). Decks 10+ use a courtyard void and U-stern from
+//! `assets/icon_of_the_seas/floorplan_deck_10.png`). Decks 10+ use a courtyard void and U-stern from
 //! [`ship_hull::deck_hull_polygon_upper`]. Tiles are axis-aligned on **XY**; **+Y** bow, **±X** port/starboard;
 //! decks stack on **+Z**; the clip shader removes fragments above the cut height.
 
@@ -340,7 +340,7 @@ fn window_strip_zone(p: Vec2) -> bool {
     p.y > SHIP_LENGTH_M * 0.12 && p.x.abs() > SHIP_BEAM_M * 0.34
 }
 
-// --- Upper decks (Deck 10+): colours aligned with `reference_floorplan_deck10.png` ---
+// --- Upper decks (Deck 10+): colours aligned with `assets/icon_of_the_seas/floorplan_deck_10.png` ---
 
 fn upper_window_strip_zone(p: Vec2) -> bool {
     p.x.abs() > SHIP_BEAM_M * 0.34

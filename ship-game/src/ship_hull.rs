@@ -1,6 +1,6 @@
 //! Cruise-ship deck outline in plan view (world **X** = port/starboard, **Y** = stern→bow).
 //! Footprint matches Deck 10 reference scale ([`SHIP_BEAM_M`] × [`SHIP_LENGTH_M`]);
-//! see `assets/reference_floorplan_deck10.png` (~60 m beam, ~5.3:1 L/B).
+//! see `assets/icon_of_the_seas/floorplan_deck_10.png` (~60 m beam, ~5.3:1 L/B).
 
 use bevy::prelude::*;
 
