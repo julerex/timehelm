@@ -18,6 +18,12 @@ bevy = { version = "0.18", default-features = false, features = [
     # Character GLBs use skinned meshes / clips; scenes reference animation types that must
     # be registered (otherwise ScenePlugin panics with "unregistered type" on WASM).
     "gltf_animation",
+    # Required when default Bevy features are disabled: auto-register reflected engine types
+    # (e.g. Transform) so SceneSpawner can materialize GLTF scenes.
+    "reflect_auto_register",
+    # Shows real `type_name` in panics (e.g. scene spawner) instead of "<Enable the debug feature…>".
+    # Remove for smaller release WASM if you no longer need that signal.
+    "debug",
     "bevy_text",
     "bevy_ui",
     "bevy_asset",
