@@ -627,10 +627,15 @@ fn spawn_sim_npcs(mut commands: Commands, asset_server: Res<AssetServer>, mut rn
 }
 
 fn deck_switch(keyboard: Res<ButtonInput<KeyCode>>, mut current_deck: ResMut<CurrentDeck>) {
-    if keyboard.just_pressed(KeyCode::PageUp) && current_deck.0 < NUM_DECKS - 1 {
+    let deck_up =
+        keyboard.just_pressed(KeyCode::PageUp) || keyboard.just_pressed(KeyCode::BracketRight);
+    let deck_down =
+        keyboard.just_pressed(KeyCode::PageDown) || keyboard.just_pressed(KeyCode::BracketLeft);
+
+    if deck_up && current_deck.0 < NUM_DECKS - 1 {
         current_deck.0 += 1;
     }
-    if keyboard.just_pressed(KeyCode::PageDown) && current_deck.0 > 0 {
+    if deck_down && current_deck.0 > 0 {
         current_deck.0 -= 1;
     }
 }
