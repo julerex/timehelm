@@ -4,7 +4,7 @@ struct ShipClipMaterial {
     clip_data: vec4<f32>,
 }
 
-@group(2) @binding(0) var<uniform> material: ShipClipMaterial;
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: ShipClipMaterial;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {

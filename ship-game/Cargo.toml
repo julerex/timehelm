@@ -26,6 +26,11 @@ bevy = { version = "0.18", default-features = false, features = [
     "debug",
     "bevy_text",
     "bevy_ui",
+    # Required to actually render Bevy UI (Text, Node, etc.). Without these the
+    # UI hierarchy exists but nothing is drawn.
+    "bevy_ui_render",
+    "bevy_sprite",
+    "bevy_sprite_render",
     "bevy_asset",
     "bevy_color",
     "tonemapping_luts",

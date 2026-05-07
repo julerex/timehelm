@@ -1,7 +1,12 @@
 import init from './ship.js';
 
-// Prevent browser/page scrolling shortcuts from stealing game controls.
-window.addEventListener('keydown', (event) => {
+const canvas = document.getElementById('ship-game-canvas');
+if (canvas) {
+    canvas.focus();
+    canvas.addEventListener('pointerdown', () => canvas.focus());
+}
+
+canvas?.addEventListener('keydown', (event) => {
     if (
         event.code === 'PageUp' ||
         event.code === 'PageDown' ||

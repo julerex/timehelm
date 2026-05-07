@@ -235,9 +235,11 @@ fn run_app() {
             Update,
             (
                 deck_switch,
+                focus_camera_on_current_deck,
                 camera_controls,
                 sim_npc_wander,
                 sync_clip_material,
+                cull_npcs_above_cut,
                 update_deck_label,
             ),
         )
@@ -257,7 +259,7 @@ pub fn run_native() {
 
 impl Default for CameraRig {
     fn default() -> Self {
-        let target = Vec3::new(0.0, 0.0, ship_stack_mid_z());
+        let target = Vec3::new(0.0, 0.0, focused_deck_target_z(SIM_DECK_INDEX));
         let dir0 = Vec3::new(0.82, -1.02, 0.68).normalize();
         let yaw = dir0.y.atan2(dir0.x);
         let pitch = dir0.z.clamp(-1.0, 1.0).asin();
@@ -301,8 +303,9 @@ fn cut_plane_world_z(current_deck: usize) -> f32 {
     (current_deck + 1) as f32 * DECK_FLOOR_SPACING_M
 }
 
-fn ship_stack_mid_z() -> f32 {
-    NUM_DECKS as f32 * DECK_FLOOR_SPACING_M * 0.5
+/// Camera focus height for a given deck index: middle of the deck slab (m).
+fn focused_deck_target_z(deck_index: usize) -> f32 {
+    (deck_index as f32 + 0.5) * DECK_FLOOR_SPACING_M
 }
 
 fn dir_from_yaw_pitch(yaw: f32, pitch: f32) -> Vec3 {
@@ -652,6 +655,37 @@ fn sync_clip_material(
         return;
     };
     m.clip_data = Vec4::new(cut_plane_world_z(current.0), 0.0, 0.0, 0.0);
+}
+
+/// Slide the orbit target's Z to the middle of the focused deck so deck switches
+/// visibly re-frame the cross-section instead of just shifting the cut plane by 3 m
+/// at the top of a 60 m stack (imperceptible from default zoom).
+fn focus_camera_on_current_deck(current: Res<CurrentDeck>, mut rig: ResMut<CameraRig>) {
+    if !current.is_changed() {
+        return;
+    }
+    rig.target.z = focused_deck_target_z(current.0);
+}
+
+/// NPCs use unlit GLB materials, so the [`ShipClipMaterial`] cut plane does not
+/// reach them. Toggle [`Visibility`] manually so a character on Deck 5 disappears
+/// when the user descends to a deck below it (otherwise the slab beneath their
+/// feet is clipped away and they appear to float).
+fn cull_npcs_above_cut(
+    current: Res<CurrentDeck>,
+    mut npcs: Query<(&Transform, &mut Visibility), With<SimNpc>>,
+) {
+    let cut_z = cut_plane_world_z(current.0);
+    for (tf, mut vis) in &mut npcs {
+        let next = if tf.translation.z <= cut_z + 0.05 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *vis != next {
+            *vis = next;
+        }
+    }
 }
 
 /// Horizontal pan basis in world XY from current view (for WASD / MMB pan).
