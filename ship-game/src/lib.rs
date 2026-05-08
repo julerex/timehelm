@@ -13,6 +13,7 @@ mod ship_hull;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::pbr::{Material, MaterialPlugin, MeshMaterial3d};
 use bevy::prelude::*;
+use bevy::camera::primitives::Aabb;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 use shader_embed::ShipShaderEmbedPlugin;
@@ -21,6 +22,7 @@ use ship_hull::{
     SHIP_LENGTH_M,
 };
 use std::collections::HashSet;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const NUM_DECKS: usize = 20;
 const SIM_DECK_INDEX: usize = 4; // Deck 5 (human-facing numbering)
@@ -71,7 +73,7 @@ const DECK_NAMES: [&str; NUM_DECKS] = [
 ];
 
 /// Square deck cell size (m). ~3–4 m matches stateroom-scale on the deck plan scale.
-const TILE_CELL_M: f32 = 3.8;
+const TILE_CELL_M: f32 = 0.1;
 /// Slight inset so neighbouring slabs do not z-fight at vertical faces.
 const TILE_VISUAL_SCALE: f32 = 0.92;
 
@@ -94,13 +96,14 @@ const CAMERA_MOUSE_ORBIT_SENS: f32 = 0.005;
 const CAMERA_MOUSE_PAN_SENS: f32 = 0.0022;
 /// Default camera distance from focal point (m).
 const CAM_DEFAULT_DISTANCE_M: f32 = 1180.0;
-const CAM_MIN_DISTANCE_M: f32 = 180.0;
+const CAM_MIN_DISTANCE_M: f32 = 90.0;
 const CAM_MAX_DISTANCE_M: f32 = 6200.0;
 /// Opacity applied to deck slabs above the currently selected deck.
-const ABOVE_DECK_ALPHA: f32 = 0.22;
+const ABOVE_DECK_ALPHA: f32 = 0.14;
 /// Orbit pitch limits (radians from horizontal); keep camera above the XY plane.
 const CAM_PITCH_MIN: f32 = 0.15;
 const CAM_PITCH_MAX: f32 = 1.42;
+const VERSION_EPOCH_UNIX_DAYS: i64 = 20_454; // 2026-01-01 (UTC)
 
 const CLIP_SHADER_FORWARD: &str = concat!(
     "embedded://",
@@ -144,6 +147,11 @@ struct DeckFiveWalkPoints(Vec<Vec3>);
 #[derive(Resource)]
 struct SimRng {
     state: u64,
+}
+
+#[derive(Resource, Default)]
+struct NpcHeightLogState {
+    logged_roots: HashSet<Entity>,
 }
 
 #[derive(Clone)]
@@ -254,6 +262,7 @@ fn run_app() {
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
         .insert_resource(CameraRig::default())
         .insert_resource(SimRng::default())
+        .insert_resource(NpcHeightLogState::default())
         .insert_resource(ClearColor::default())
         .add_systems(Startup, (setup, spawn_sim_npcs.after(setup)))
         .add_systems(
@@ -265,6 +274,7 @@ fn run_app() {
                 sync_clip_material,
                 cull_npcs_above_cut,
                 update_deck_label,
+                log_npc_heights_once,
             ),
         )
         .run();
@@ -1024,13 +1034,73 @@ fn update_deck_label(
         return;
     }
     for mut text in &mut query {
+        let version_days = version_days_since_epoch();
         text.0 = format!(
-            "Deck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | R/F: vertical | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck",
+            "Version {version_days}\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | R/F: vertical | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck",
             current_deck.0 + 1,
             NUM_DECKS,
             DECK_NAMES[current_deck.0],
             SHIP_LENGTH_M,
             SHIP_BEAM_M,
         );
+    }
+}
+
+fn version_days_since_epoch() -> i64 {
+    let unix_days = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => (duration.as_secs() / 86_400) as i64,
+        Err(_) => VERSION_EPOCH_UNIX_DAYS,
+    };
+    (unix_days - VERSION_EPOCH_UNIX_DAYS).max(0)
+}
+
+fn log_npc_heights_once(
+    mut log_state: ResMut<NpcHeightLogState>,
+    npcs: Query<(Entity, &Name, Option<&Children>), With<SimNpc>>,
+    children_query: Query<&Children>,
+    aabbs: Query<(&GlobalTransform, &Aabb)>,
+) {
+    for (npc_entity, name, children) in &npcs {
+        if log_state.logged_roots.contains(&npc_entity) {
+            continue;
+        }
+        let Some(children) = children else {
+            continue;
+        };
+
+        let mut stack: Vec<Entity> = children.iter().collect();
+        let mut min_z = f32::INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+        let mut found_mesh_bounds = false;
+
+        while let Some(entity) = stack.pop() {
+            if let Ok(children) = children_query.get(entity) {
+                stack.extend(children.iter());
+            }
+            let Ok((global_tf, aabb)) = aabbs.get(entity) else {
+                continue;
+            };
+
+            let center = aabb.center;
+            let half = aabb.half_extents;
+            for sx in [-1.0, 1.0] {
+                for sy in [-1.0, 1.0] {
+                    for sz in [-1.0, 1.0] {
+                        let local_corner =
+                            center + Vec3A::new(sx * half.x, sy * half.y, sz * half.z);
+                        let world_corner = global_tf.affine().transform_point3(local_corner.into());
+                        min_z = min_z.min(world_corner.z);
+                        max_z = max_z.max(world_corner.z);
+                    }
+                }
+            }
+            found_mesh_bounds = true;
+        }
+
+        if found_mesh_bounds {
+            let height_m = (max_z - min_z).max(0.0);
+            println!("NPC {} measured height: {height_m:.2} m", name.as_str());
+            log_state.logged_roots.insert(npc_entity);
+        }
     }
 }
