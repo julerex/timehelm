@@ -17,10 +17,10 @@ use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 use shader_embed::ShipShaderEmbedPlugin;
 use ship_hull::{
-    deck_hull_polygon, deck_hull_polygon_upper, deck_tile_centers, deck_tile_centers_upper,
-    is_perimeter_tile, FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M, SHIP_LENGTH_M,
-    UPPER_VOID_HALF_WIDTH_M, UPPER_VOID_Y_AFT_M, UPPER_VOID_Y_FWD_M,
+    deck_tile_centers, deck_tile_centers_upper, FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M,
+    SHIP_LENGTH_M,
 };
+use std::collections::HashSet;
 
 const NUM_DECKS: usize = 20;
 const SIM_DECK_INDEX: usize = 4; // Deck 5 (human-facing numbering)
@@ -140,6 +140,27 @@ struct DeckFiveWalkPoints(Vec<Vec3>);
 #[derive(Resource)]
 struct SimRng {
     state: u64,
+}
+
+#[derive(Clone)]
+struct DeckTiles {
+    centers: Vec<Vec2>,
+    occupied: HashSet<(i32, i32)>,
+}
+
+#[derive(Resource)]
+struct DeckLayouts(Vec<DeckTiles>);
+
+#[derive(Clone, Copy)]
+struct DeckProfile {
+    half_beam_scale: f32,
+    y_aft: f32,
+    y_fwd: f32,
+    bow_taper: f32,
+    stern_taper: f32,
+    courtyard_half_width: f32,
+    courtyard_y_aft: f32,
+    courtyard_y_fwd: f32,
 }
 
 /// Orbit camera: eye looks at `target` (m), offset given by yaw/pitch and `distance` (m).
@@ -343,36 +364,286 @@ fn window_strip_zone(p: Vec2) -> bool {
     p.y > SHIP_LENGTH_M * 0.12 && p.x.abs() > SHIP_BEAM_M * 0.34
 }
 
-// --- Upper decks (Deck 10+): colours aligned with `assets/icon_of_the_seas/floorplan_deck_10.png` ---
-
-fn upper_window_strip_zone(p: Vec2) -> bool {
-    p.x.abs() > SHIP_BEAM_M * 0.34
-        && (p.y > SHIP_LENGTH_M * 0.12
-            || (p.y < UPPER_VOID_Y_FWD_M + 6.0 && p.y > UPPER_VOID_Y_AFT_M - SHIP_LENGTH_M * 0.04))
+fn deck_profile(deck_index: usize) -> DeckProfile {
+    // Hand-authored deck-by-deck silhouettes inspired by the reference plans.
+    const P: [DeckProfile; NUM_DECKS] = [
+        DeckProfile {
+            half_beam_scale: 0.42,
+            y_aft: -SHIP_LENGTH_M * 0.43,
+            y_fwd: SHIP_LENGTH_M * 0.14,
+            bow_taper: 0.55,
+            stern_taper: 0.35,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 1
+        DeckProfile {
+            half_beam_scale: 0.52,
+            y_aft: -SHIP_LENGTH_M * 0.45,
+            y_fwd: SHIP_LENGTH_M * 0.20,
+            bow_taper: 0.48,
+            stern_taper: 0.30,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 2
+        DeckProfile {
+            half_beam_scale: 0.70,
+            y_aft: -SHIP_LENGTH_M * 0.47,
+            y_fwd: SHIP_LENGTH_M * 0.26,
+            bow_taper: 0.44,
+            stern_taper: 0.25,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 3
+        DeckProfile {
+            half_beam_scale: 0.88,
+            y_aft: -SHIP_LENGTH_M * 0.49,
+            y_fwd: SHIP_LENGTH_M * 0.38,
+            bow_taper: 0.32,
+            stern_taper: 0.18,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 4
+        DeckProfile {
+            half_beam_scale: 0.96,
+            y_aft: -SHIP_LENGTH_M * 0.50,
+            y_fwd: SHIP_LENGTH_M * 0.44,
+            bow_taper: 0.26,
+            stern_taper: 0.12,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 5
+        DeckProfile {
+            half_beam_scale: 0.98,
+            y_aft: -SHIP_LENGTH_M * 0.50,
+            y_fwd: SHIP_LENGTH_M * 0.46,
+            bow_taper: 0.24,
+            stern_taper: 0.11,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 6
+        DeckProfile {
+            half_beam_scale: 0.98,
+            y_aft: -SHIP_LENGTH_M * 0.50,
+            y_fwd: SHIP_LENGTH_M * 0.47,
+            bow_taper: 0.23,
+            stern_taper: 0.10,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 7
+        DeckProfile {
+            half_beam_scale: 0.97,
+            y_aft: -SHIP_LENGTH_M * 0.50,
+            y_fwd: SHIP_LENGTH_M * 0.47,
+            bow_taper: 0.23,
+            stern_taper: 0.10,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 8
+        DeckProfile {
+            half_beam_scale: 0.96,
+            y_aft: -SHIP_LENGTH_M * 0.50,
+            y_fwd: SHIP_LENGTH_M * 0.47,
+            bow_taper: 0.24,
+            stern_taper: 0.10,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 9
+        DeckProfile {
+            half_beam_scale: 0.94,
+            y_aft: -SHIP_LENGTH_M * 0.49,
+            y_fwd: SHIP_LENGTH_M * 0.46,
+            bow_taper: 0.25,
+            stern_taper: 0.16,
+            courtyard_half_width: 9.0,
+            courtyard_y_aft: -SHIP_LENGTH_M * 0.26,
+            courtyard_y_fwd: SHIP_LENGTH_M * 0.21,
+        }, // 10
+        DeckProfile {
+            half_beam_scale: 0.93,
+            y_aft: -SHIP_LENGTH_M * 0.49,
+            y_fwd: SHIP_LENGTH_M * 0.45,
+            bow_taper: 0.26,
+            stern_taper: 0.17,
+            courtyard_half_width: 9.5,
+            courtyard_y_aft: -SHIP_LENGTH_M * 0.26,
+            courtyard_y_fwd: SHIP_LENGTH_M * 0.21,
+        }, // 11
+        DeckProfile {
+            half_beam_scale: 0.92,
+            y_aft: -SHIP_LENGTH_M * 0.48,
+            y_fwd: SHIP_LENGTH_M * 0.44,
+            bow_taper: 0.27,
+            stern_taper: 0.18,
+            courtyard_half_width: 10.0,
+            courtyard_y_aft: -SHIP_LENGTH_M * 0.25,
+            courtyard_y_fwd: SHIP_LENGTH_M * 0.20,
+        }, // 12
+        DeckProfile {
+            half_beam_scale: 0.89,
+            y_aft: -SHIP_LENGTH_M * 0.47,
+            y_fwd: SHIP_LENGTH_M * 0.42,
+            bow_taper: 0.29,
+            stern_taper: 0.20,
+            courtyard_half_width: 9.2,
+            courtyard_y_aft: -SHIP_LENGTH_M * 0.23,
+            courtyard_y_fwd: SHIP_LENGTH_M * 0.18,
+        }, // 13
+        DeckProfile {
+            half_beam_scale: 0.86,
+            y_aft: -SHIP_LENGTH_M * 0.46,
+            y_fwd: SHIP_LENGTH_M * 0.40,
+            bow_taper: 0.31,
+            stern_taper: 0.22,
+            courtyard_half_width: 8.2,
+            courtyard_y_aft: -SHIP_LENGTH_M * 0.20,
+            courtyard_y_fwd: SHIP_LENGTH_M * 0.16,
+        }, // 14
+        DeckProfile {
+            half_beam_scale: 0.82,
+            y_aft: -SHIP_LENGTH_M * 0.45,
+            y_fwd: SHIP_LENGTH_M * 0.38,
+            bow_taper: 0.32,
+            stern_taper: 0.23,
+            courtyard_half_width: 7.4,
+            courtyard_y_aft: -SHIP_LENGTH_M * 0.18,
+            courtyard_y_fwd: SHIP_LENGTH_M * 0.14,
+        }, // 15
+        DeckProfile {
+            half_beam_scale: 0.78,
+            y_aft: -SHIP_LENGTH_M * 0.43,
+            y_fwd: SHIP_LENGTH_M * 0.36,
+            bow_taper: 0.34,
+            stern_taper: 0.24,
+            courtyard_half_width: 6.2,
+            courtyard_y_aft: -SHIP_LENGTH_M * 0.15,
+            courtyard_y_fwd: SHIP_LENGTH_M * 0.12,
+        }, // 16
+        DeckProfile {
+            half_beam_scale: 0.73,
+            y_aft: -SHIP_LENGTH_M * 0.40,
+            y_fwd: SHIP_LENGTH_M * 0.34,
+            bow_taper: 0.35,
+            stern_taper: 0.25,
+            courtyard_half_width: 4.8,
+            courtyard_y_aft: -SHIP_LENGTH_M * 0.13,
+            courtyard_y_fwd: SHIP_LENGTH_M * 0.10,
+        }, // 17
+        DeckProfile {
+            half_beam_scale: 0.68,
+            y_aft: -SHIP_LENGTH_M * 0.37,
+            y_fwd: SHIP_LENGTH_M * 0.31,
+            bow_taper: 0.37,
+            stern_taper: 0.27,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 18
+        DeckProfile {
+            half_beam_scale: 0.63,
+            y_aft: -SHIP_LENGTH_M * 0.34,
+            y_fwd: SHIP_LENGTH_M * 0.28,
+            bow_taper: 0.40,
+            stern_taper: 0.30,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 19
+        DeckProfile {
+            half_beam_scale: 0.56,
+            y_aft: -SHIP_LENGTH_M * 0.30,
+            y_fwd: SHIP_LENGTH_M * 0.24,
+            bow_taper: 0.44,
+            stern_taper: 0.34,
+            courtyard_half_width: 0.0,
+            courtyard_y_aft: 0.0,
+            courtyard_y_fwd: 0.0,
+        }, // 20
+    ];
+    P[deck_index.min(NUM_DECKS - 1)]
 }
 
-fn upper_outer_balcony_zone(p: Vec2) -> bool {
-    let inner = UPPER_VOID_HALF_WIDTH_M + 3.2;
-    p.x.abs() > inner
-        && p.y < UPPER_VOID_Y_FWD_M + SHIP_LENGTH_M * 0.14
-        && p.y > UPPER_VOID_Y_AFT_M - SHIP_LENGTH_M * 0.05
+fn profile_allows_tile(deck_index: usize, p: Vec2) -> bool {
+    let profile = deck_profile(deck_index);
+    if p.y < profile.y_aft || p.y > profile.y_fwd {
+        return false;
+    }
+
+    let fwd_span = (SHIP_LENGTH_M * 0.5 - profile.y_fwd).max(1.0);
+    let aft_span = (profile.y_aft + SHIP_LENGTH_M * 0.5).max(1.0);
+    let fwd_t = ((p.y - profile.y_fwd) / fwd_span).clamp(0.0, 1.0);
+    let aft_t = ((profile.y_aft - p.y) / aft_span).clamp(0.0, 1.0);
+    let taper = 1.0 - profile.bow_taper * fwd_t * fwd_t - profile.stern_taper * aft_t * aft_t;
+    let beam_limit = SHIP_BEAM_M * 0.5 * profile.half_beam_scale * taper.max(0.2);
+    if p.x.abs() > beam_limit {
+        return false;
+    }
+
+    if profile.courtyard_half_width > 0.0
+        && p.y > profile.courtyard_y_aft
+        && p.y < profile.courtyard_y_fwd
+        && p.x.abs() < profile.courtyard_half_width
+    {
+        return false;
+    }
+
+    // Upper leisure decks: emulate split stern terraces and side tapering.
+    if deck_index >= 17 && p.y < -SHIP_LENGTH_M * 0.20 && p.x.abs() < SHIP_BEAM_M * 0.14 {
+        return false;
+    }
+    if deck_index >= 18 && p.y > SHIP_LENGTH_M * 0.15 && p.x.abs() > SHIP_BEAM_M * 0.22 {
+        return false;
+    }
+
+    true
 }
 
-fn upper_inner_courtyard_zone(p: Vec2) -> bool {
-    let hb = SHIP_BEAM_M * 0.5;
-    let vw = UPPER_VOID_HALF_WIDTH_M;
-    p.y < UPPER_VOID_Y_FWD_M - 1.5
-        && p.y > UPPER_VOID_Y_AFT_M + 1.5
-        && p.x.abs() > vw + 1.6
-        && p.x.abs() < hb - 4.0
+fn fallback_deck_tiles(deck_index: usize, step_m: f32) -> DeckTiles {
+    let centers = if deck_index >= FIRST_UPPER_DECK_STYLE_INDEX {
+        deck_tile_centers_upper(step_m)
+    } else {
+        deck_tile_centers(step_m)
+    };
+    let occupied = centers
+        .iter()
+        .map(|c| ((c.x / step_m).round() as i32, (c.y / step_m).round() as i32))
+        .collect::<HashSet<_>>();
+    DeckTiles { centers, occupied }
 }
 
-fn upper_bow_forward_block(p: Vec2) -> bool {
-    p.y > UPPER_VOID_Y_FWD_M - 2.0
+fn deck_layouts(step_m: f32) -> Vec<DeckTiles> {
+    let mut out = Vec::with_capacity(NUM_DECKS);
+    for deck_i in 0..NUM_DECKS {
+        let base = fallback_deck_tiles(deck_i, step_m);
+        let centers = base
+            .centers
+            .into_iter()
+            .filter(|p| profile_allows_tile(deck_i, *p))
+            .collect::<Vec<_>>();
+        let occupied = centers
+            .iter()
+            .map(|c| ((c.x / step_m).round() as i32, (c.y / step_m).round() as i32))
+            .collect::<HashSet<_>>();
+        out.push(DeckTiles { centers, occupied });
+    }
+    out
 }
 
-fn upper_stern_wing_body(p: Vec2) -> bool {
-    p.y < UPPER_VOID_Y_AFT_M && p.x.abs() > UPPER_VOID_HALF_WIDTH_M + 1.2
+fn is_perimeter_cell(cell: (i32, i32), occupied: &HashSet<(i32, i32)>) -> bool {
+    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        if !occupied.contains(&(cell.0 + dx, cell.1 + dy)) {
+            return true;
+        }
+    }
+    false
 }
 
 fn setup(
@@ -421,23 +692,14 @@ fn setup(
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
     ));
 
-    let hull_lower = deck_hull_polygon();
-    let hull_upper = deck_hull_polygon_upper();
-    let tile_centers_lower = deck_tile_centers(TILE_CELL_M);
-    let tile_centers_upper = deck_tile_centers_upper(TILE_CELL_M);
+    let layouts = deck_layouts(TILE_CELL_M);
+    commands.insert_resource(DeckLayouts(layouts.clone()));
 
     let edge_deck = Color::srgb(0.38, 0.3, 0.24);
     let window_color = Color::srgb(0.42, 0.62, 0.9);
     let outer_cabin = Color::srgb(0.95, 0.82, 0.35);
     let inner_cabin = Color::srgb(0.92, 0.55, 0.72);
     let public_deck = Color::srgb(0.78, 0.86, 0.92);
-
-    let upper_outer_red = Color::srgb(0.78, 0.2, 0.22);
-    let upper_inner_peach = Color::srgb(0.93, 0.68, 0.55);
-    let upper_stern_teal = Color::srgb(0.16, 0.44, 0.48);
-    let upper_bow_side = Color::srgb(0.9, 0.8, 0.28);
-    let upper_bow_core = Color::srgb(0.86, 0.42, 0.66);
-    let upper_corridor = Color::srgb(0.55, 0.53, 0.51);
 
     let mesh_hull = meshes.add(deck_tile_cuboid_mesh(
         TILE_CELL_M,
@@ -464,36 +726,6 @@ fn setup(
         DECK_SLAB_THICKNESS_M,
         public_deck,
     ));
-    let mesh_upper_red = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        upper_outer_red,
-    ));
-    let mesh_upper_peach = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        upper_inner_peach,
-    ));
-    let mesh_upper_teal = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        upper_stern_teal,
-    ));
-    let mesh_upper_bow_side = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        upper_bow_side,
-    ));
-    let mesh_upper_bow_core = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        upper_bow_core,
-    ));
-    let mesh_upper_corridor = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        upper_corridor,
-    ));
 
     for deck_i in 0..NUM_DECKS {
         let hue = 0.52 + (deck_i as f32 * 0.012);
@@ -513,48 +745,19 @@ fn setup(
                 DeckLayer(deck_i),
             ))
             .with_children(|deck| {
-                let hull: &[Vec2] = if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
-                    hull_upper.as_slice()
-                } else {
-                    hull_lower.as_slice()
-                };
-                let centers: &[Vec2] = if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
-                    tile_centers_upper.as_slice()
-                } else {
-                    tile_centers_lower.as_slice()
-                };
+                let layout = &layouts[deck_i];
 
-                for c in centers {
-                    let edge = is_perimeter_tile(*c, TILE_CELL_M, hull);
+                for c in &layout.centers {
+                    let cell = (
+                        (c.x / TILE_CELL_M).round() as i32,
+                        (c.y / TILE_CELL_M).round() as i32,
+                    );
+                    let edge = is_perimeter_cell(cell, &layout.occupied);
                     let mesh = if edge {
-                        if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
-                            if upper_window_strip_zone(*c) {
-                                &mesh_window
-                            } else {
-                                &mesh_hull
-                            }
-                        } else if window_strip_zone(*c) {
+                        if window_strip_zone(*c) {
                             &mesh_window
                         } else {
                             &mesh_hull
-                        }
-                    } else if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
-                        if upper_stern_wing_body(*c) {
-                            &mesh_upper_teal
-                        } else if upper_bow_forward_block(*c) {
-                            if c.x.abs() > SHIP_BEAM_M * 0.26 {
-                                &mesh_upper_bow_side
-                            } else {
-                                &mesh_upper_bow_core
-                            }
-                        } else if upper_inner_courtyard_zone(*c) {
-                            &mesh_upper_peach
-                        } else if upper_outer_balcony_zone(*c) {
-                            &mesh_upper_red
-                        } else if c.y < -SHIP_LENGTH_M * 0.3 {
-                            &mesh_public
-                        } else {
-                            &mesh_upper_corridor
                         }
                     } else if inner_cabin_zone(*c) {
                         &mesh_inner
@@ -593,9 +796,16 @@ fn setup(
     ));
 }
 
-fn spawn_sim_npcs(mut commands: Commands, asset_server: Res<AssetServer>, mut rng: ResMut<SimRng>) {
+fn spawn_sim_npcs(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    layouts: Res<DeckLayouts>,
+    mut rng: ResMut<SimRng>,
+) {
     let deck_five_z = SIM_DECK_INDEX as f32 * DECK_FLOOR_SPACING_M + DECK_SLAB_THICKNESS_M;
-    let walk_points: Vec<Vec3> = deck_tile_centers(TILE_CELL_M)
+    let walk_points: Vec<Vec3> = layouts.0[SIM_DECK_INDEX]
+        .centers
+        .clone()
         .into_iter()
         .map(|p| Vec3::new(p.x, p.y, deck_five_z))
         .collect();
