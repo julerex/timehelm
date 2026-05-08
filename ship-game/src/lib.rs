@@ -82,6 +82,8 @@ const DECK_SLAB_THICKNESS_M: f32 = 2.88;
 
 /// Pan speed (m/s) for WASD and mouse middle-drag.
 const CAMERA_PAN_SPEED_M_S: f32 = 520.0;
+/// Vertical pan speed (m/s) for R/F.
+const CAMERA_VERTICAL_SPEED_M_S: f32 = 260.0;
 /// Keyboard orbit speed around the focal point (rad/s) on Q/E.
 const CAMERA_YAW_SPEED_RAD_S: f32 = 1.75;
 /// Dolly speed for Z/X (m/s).
@@ -94,6 +96,8 @@ const CAMERA_MOUSE_PAN_SENS: f32 = 0.0022;
 const CAM_DEFAULT_DISTANCE_M: f32 = 1180.0;
 const CAM_MIN_DISTANCE_M: f32 = 180.0;
 const CAM_MAX_DISTANCE_M: f32 = 6200.0;
+/// Opacity applied to deck slabs above the currently selected deck.
+const ABOVE_DECK_ALPHA: f32 = 0.22;
 /// Orbit pitch limits (radians from horizontal); keep camera above the XY plane.
 const CAM_PITCH_MIN: f32 = 0.15;
 const CAM_PITCH_MAX: f32 = 1.42;
@@ -177,7 +181,7 @@ struct SharedClipMaterial(Handle<ShipClipMaterial>);
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Copy)]
 struct ShipClipMaterial {
-    /// `.x` = world-space Z above which fragments are clipped (rest unused).
+    /// `.x` = world-space Z cut height, `.y` = alpha for fragments above cut.
     #[uniform(0)]
     clip_data: Vec4,
 }
@@ -192,7 +196,7 @@ impl Material for ShipClipMaterial {
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Opaque
+        AlphaMode::Blend
     }
 }
 
@@ -256,7 +260,6 @@ fn run_app() {
             Update,
             (
                 deck_switch,
-                focus_camera_on_current_deck,
                 camera_controls,
                 sim_npc_wander,
                 sync_clip_material,
@@ -652,7 +655,7 @@ fn setup(
     mut materials: ResMut<Assets<ShipClipMaterial>>,
 ) {
     let clip_handle = materials.add(ShipClipMaterial {
-        clip_data: Vec4::new(cut_plane_world_z(NUM_DECKS - 1), 0.0, 0.0, 0.0),
+        clip_data: Vec4::new(cut_plane_world_z(NUM_DECKS - 1), ABOVE_DECK_ALPHA, 0.0, 0.0),
     });
     commands.insert_resource(SharedClipMaterial(clip_handle.clone()));
 
@@ -864,17 +867,7 @@ fn sync_clip_material(
     let Some(m) = materials.get_mut(&shared.0) else {
         return;
     };
-    m.clip_data = Vec4::new(cut_plane_world_z(current.0), 0.0, 0.0, 0.0);
-}
-
-/// Slide the orbit target's Z to the middle of the focused deck so deck switches
-/// visibly re-frame the cross-section instead of just shifting the cut plane by 3 m
-/// at the top of a 60 m stack (imperceptible from default zoom).
-fn focus_camera_on_current_deck(current: Res<CurrentDeck>, mut rig: ResMut<CameraRig>) {
-    if !current.is_changed() {
-        return;
-    }
-    rig.target.z = focused_deck_target_z(current.0);
+    m.clip_data = Vec4::new(cut_plane_world_z(current.0), ABOVE_DECK_ALPHA, 0.0, 0.0);
 }
 
 /// NPCs use unlit GLB materials, so the [`ShipClipMaterial`] cut plane does not
@@ -922,20 +915,20 @@ fn camera_controls(
     let dt = time.delta_secs();
 
     if keyboard.pressed(KeyCode::KeyQ) {
-        rig.yaw += CAMERA_YAW_SPEED_RAD_S * dt;
+        rig.yaw -= CAMERA_YAW_SPEED_RAD_S * dt;
     }
     if keyboard.pressed(KeyCode::KeyE) {
-        rig.yaw -= CAMERA_YAW_SPEED_RAD_S * dt;
+        rig.yaw += CAMERA_YAW_SPEED_RAD_S * dt;
     }
 
     {
         let (right_flat, forward_flat) = pan_basis_xy(&rig);
         let pan_step = CAMERA_PAN_SPEED_M_S * dt;
         if keyboard.pressed(KeyCode::KeyW) {
-            rig.target += forward_flat * pan_step;
+            rig.target -= forward_flat * pan_step;
         }
         if keyboard.pressed(KeyCode::KeyS) {
-            rig.target -= forward_flat * pan_step;
+            rig.target += forward_flat * pan_step;
         }
         if keyboard.pressed(KeyCode::KeyD) {
             rig.target += right_flat * pan_step;
@@ -943,6 +936,12 @@ fn camera_controls(
         if keyboard.pressed(KeyCode::KeyA) {
             rig.target -= right_flat * pan_step;
         }
+    }
+    if keyboard.pressed(KeyCode::KeyR) {
+        rig.target.z += CAMERA_VERTICAL_SPEED_M_S * dt;
+    }
+    if keyboard.pressed(KeyCode::KeyF) {
+        rig.target.z -= CAMERA_VERTICAL_SPEED_M_S * dt;
     }
 
     let zoom_linear = CAMERA_ZOOM_SPEED_M_S * dt;
@@ -1026,7 +1025,7 @@ fn update_deck_label(
     }
     for mut text in &mut query {
         text.0 = format!(
-            "Deck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck",
+            "Deck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | R/F: vertical | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck",
             current_deck.0 + 1,
             NUM_DECKS,
             DECK_NAMES[current_deck.0],

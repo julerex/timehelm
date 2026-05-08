@@ -8,12 +8,11 @@ struct ShipClipMaterial {
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    if in.world_position.z > material.clip_data.x {
-        discard;
-    }
+    let alpha = select(1.0, material.clip_data.y, in.world_position.z > material.clip_data.x);
 #ifdef VERTEX_COLORS
-    return in.color;
+    let base = in.color;
+    return vec4<f32>(base.rgb, base.a * alpha);
 #else
-    return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+    return vec4<f32>(1.0, 0.0, 1.0, alpha);
 #endif
 }

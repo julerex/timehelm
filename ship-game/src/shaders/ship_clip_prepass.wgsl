@@ -9,9 +9,7 @@ struct ShipClipMaterial {
 
 @fragment
 fn fragment(in: VertexOutput) -> FragmentOutput {
-    if in.world_position.z > material.clip_data.x {
-        discard;
-    }
+    let _alpha = select(1.0, material.clip_data.y, in.world_position.z > material.clip_data.x);
     var out: FragmentOutput;
     return out;
 }
