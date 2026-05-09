@@ -236,7 +236,8 @@ mod tests {
     #[test]
     fn upper_deck_stern_wings_and_open_gap() {
         let poly = deck_hull_polygon_upper();
-        assert!(point_in_polygon(Vec2::new(22.0, -140.0), &poly));
+        // Starboard stern wing is a thin fairing near the outer shell (not mid-beam at this y).
+        assert!(point_in_polygon(Vec2::new(29.0, -140.0), &poly));
         // Aft of the wing tips, centreline is open water / gap between wings (no deck tile).
         assert!(!point_in_polygon(Vec2::new(0.0, -155.0), &poly));
     }

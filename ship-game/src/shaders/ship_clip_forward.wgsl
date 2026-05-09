@@ -5,14 +5,23 @@ struct ShipClipMaterial {
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: ShipClipMaterial;
+@group(#{MATERIAL_BIND_GROUP}) @binding(1) var deck_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(2) var deck_samp: sampler;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let alpha = select(1.0, material.clip_data.y, in.world_position.z > material.clip_data.x);
+    let uv = vec2<f32>(
+        in.world_position.x / 60.0 + 0.5,
+        in.world_position.y / 318.0 + 0.5,
+    );
+    let pat = textureSample(deck_tex, deck_samp, uv).rgb;
 #ifdef VERTEX_COLORS
     let base = in.color;
-    return vec4<f32>(base.rgb, base.a * alpha);
+    let rgb = base.rgb * pat * 1.08;
+    return vec4<f32>(rgb, base.a * alpha);
 #else
-    return vec4<f32>(1.0, 0.0, 1.0, alpha);
+    let rgb = pat;
+    return vec4<f32>(rgb, alpha);
 #endif
 }

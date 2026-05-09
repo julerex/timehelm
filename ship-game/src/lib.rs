@@ -6,26 +6,33 @@
 //! `assets/icon_of_the_seas/floorplan_deck_10.png`). Decks 10+ use a courtyard void and U-stern from
 //! [`ship_hull::deck_hull_polygon_upper`]. Tiles are axis-aligned on **XY**; **+Y** bow, **±X** port/starboard;
 //! decks stack on **+Z**; the clip shader removes fragments above the cut height.
+//!
+//! **Deck rendering:** distance-based **LOD** swaps coarse extruded hull + procedural deck texture vs
+//! fine cuboid tiles; smaller buckets use **automatic GPU instancing** (shared mesh/material per tile),
+//! larger buckets stay **CPU-merged**. [`deck_geometry`] holds mesh helpers.
 
+mod deck_geometry;
 mod shader_embed;
 mod ship_hull;
 
+use bevy::camera::primitives::Aabb;
+use bevy::ecs::system::ParamSet;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::pbr::{Material, MaterialPlugin, MeshMaterial3d};
 use bevy::prelude::*;
-use bevy::camera::primitives::Aabb;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 use shader_embed::ShipShaderEmbedPlugin;
 use ship_hull::{
-    deck_tile_centers, deck_tile_centers_upper, FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M,
-    SHIP_LENGTH_M,
+    deck_hull_polygon, deck_hull_polygon_upper, deck_tile_centers, deck_tile_centers_upper,
+    FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M, SHIP_LENGTH_M,
 };
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const NUM_DECKS: usize = 20;
 const SIM_DECK_INDEX: usize = 4; // Deck 5 (human-facing numbering)
+const SIM_NPC_SCALE: f32 = 0.6;
 const SIM_NPC_SPEED_M_S: f32 = 2.8;
 const SIM_TARGET_REACHED_M: f32 = 0.45;
 const SIM_NPC_MODEL_PATHS: [&str; 18] = [
@@ -72,8 +79,11 @@ const DECK_NAMES: [&str; NUM_DECKS] = [
     "Sun Deck",
 ];
 
-/// Square deck cell size (m). ~3–4 m matches stateroom-scale on the deck plan scale.
-const TILE_CELL_M: f32 = 0.1;
+/// Square deck cell size (m). **1.2 m** balances detail vs load on WASM after mesh batching.
+/// Slabs use **merged meshes** (six visual buckets per deck), so ECS stays light, but each halving
+/// of this value still roughly **quadruples** triangle count and CPU merge work—keep above ~0.8 m
+/// unless you add LOD or instancing (see project plan).
+const TILE_CELL_M: f32 = 1.2;
 /// Slight inset so neighbouring slabs do not z-fight at vertical faces.
 const TILE_VISUAL_SCALE: f32 = 0.92;
 
@@ -98,11 +108,18 @@ const CAMERA_MOUSE_PAN_SENS: f32 = 0.0022;
 const CAM_DEFAULT_DISTANCE_M: f32 = 1180.0;
 const CAM_MIN_DISTANCE_M: f32 = 90.0;
 const CAM_MAX_DISTANCE_M: f32 = 6200.0;
-/// Opacity applied to deck slabs above the currently selected deck.
-const ABOVE_DECK_ALPHA: f32 = 0.14;
+/// Alpha multiplier for deck slab fragments **above** the cut plane (`clip_data.x` in WGSL).
+/// `0.0` = fully transparent upper decks; `1.0` would leave them unchanged below the cut.
+const ABOVE_DECK_ALPHA: f32 = 0.0;
 /// Orbit pitch limits (radians from horizontal); keep camera above the XY plane.
 const CAM_PITCH_MIN: f32 = 0.15;
 const CAM_PITCH_MAX: f32 = 1.42;
+/// Outside this camera-to-deck distance (m) we prefer the coarse textured extruded hull LOD.
+const LOD_COARSE_BEYOND_M: f32 = 820.0;
+/// Inside this distance (m) we prefer fine cuboid tiles (merged or batched instances).
+const LOD_FINE_WITHIN_M: f32 = 680.0;
+/// Tile counts at or below this use per-tile entities (Bevy automatic GPU instancing / batching).
+const DECK_TILE_AUTOMATIC_INSTANCE_CAP: usize = 1600;
 const VERSION_EPOCH_UNIX_DAYS: i64 = 20_454; // 2026-01-01 (UTC)
 
 const CLIP_SHADER_FORWARD: &str = concat!(
@@ -127,6 +144,15 @@ struct DeckLabel;
 
 #[derive(Component)]
 struct DeckLayer(#[allow(dead_code)] usize);
+
+#[derive(Component)]
+struct DeckLodFineTier(usize);
+
+#[derive(Component)]
+struct DeckLodCoarseTier(usize);
+
+#[derive(Resource, Default)]
+struct DeckLodFinePreferred([bool; NUM_DECKS]);
 
 #[derive(Component)]
 struct SimNpc {
@@ -187,11 +213,15 @@ struct CameraRig {
 #[derive(Resource, Clone)]
 struct SharedClipMaterial(Handle<ShipClipMaterial>);
 
-#[derive(Asset, TypePath, AsBindGroup, Clone, Copy)]
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
 struct ShipClipMaterial {
     /// `.x` = world-space Z cut height, `.y` = alpha for fragments above cut.
     #[uniform(0)]
     clip_data: Vec4,
+    /// Multiplies albedo in world XY (coarse hull + fine tiles).
+    #[texture(1)]
+    #[sampler(2)]
+    deck_pattern: Handle<Image>,
 }
 
 impl Material for ShipClipMaterial {
@@ -264,12 +294,14 @@ fn run_app() {
         .insert_resource(SimRng::default())
         .insert_resource(NpcHeightLogState::default())
         .insert_resource(ClearColor::default())
+        .insert_resource(DeckLodFinePreferred::default())
         .add_systems(Startup, (setup, spawn_sim_npcs.after(setup)))
         .add_systems(
             Update,
             (
                 deck_switch,
                 camera_controls,
+                update_deck_lod.after(camera_controls),
                 sim_npc_wander,
                 sync_clip_material,
                 cull_npcs_above_cut,
@@ -659,13 +691,63 @@ fn is_perimeter_cell(cell: (i32, i32), occupied: &HashSet<(i32, i32)>) -> bool {
     false
 }
 
+#[derive(Clone, Copy)]
+enum DeckTileBucket {
+    HullEdge,
+    WindowStrip,
+    InnerCabin,
+    OuterCabin,
+    PublicDeck,
+    DeckBase,
+}
+
+impl DeckTileBucket {
+    const COUNT: usize = 6;
+
+    fn idx(self) -> usize {
+        match self {
+            DeckTileBucket::HullEdge => 0,
+            DeckTileBucket::WindowStrip => 1,
+            DeckTileBucket::InnerCabin => 2,
+            DeckTileBucket::OuterCabin => 3,
+            DeckTileBucket::PublicDeck => 4,
+            DeckTileBucket::DeckBase => 5,
+        }
+    }
+
+    /// Mirrors the classification order in legacy `setup` (per-tile spawn).
+    fn classify(c: Vec2, cell: (i32, i32), occupied: &HashSet<(i32, i32)>) -> Self {
+        let edge = is_perimeter_cell(cell, occupied);
+        if edge {
+            return if window_strip_zone(c) {
+                DeckTileBucket::WindowStrip
+            } else {
+                DeckTileBucket::HullEdge
+            };
+        }
+        if inner_cabin_zone(c) {
+            return DeckTileBucket::InnerCabin;
+        }
+        if outer_cabin_zone(c) {
+            return DeckTileBucket::OuterCabin;
+        }
+        if c.y < -SHIP_LENGTH_M * 0.28 {
+            return DeckTileBucket::PublicDeck;
+        }
+        DeckTileBucket::DeckBase
+    }
+}
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ShipClipMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
+    let deck_pattern = images.add(deck_geometry::procedural_deck_plan_texture_image());
     let clip_handle = materials.add(ShipClipMaterial {
         clip_data: Vec4::new(cut_plane_world_z(NUM_DECKS - 1), ABOVE_DECK_ALPHA, 0.0, 0.0),
+        deck_pattern,
     });
     commands.insert_resource(SharedClipMaterial(clip_handle.clone()));
 
@@ -714,81 +796,111 @@ fn setup(
     let inner_cabin = Color::srgb(0.92, 0.55, 0.72);
     let public_deck = Color::srgb(0.78, 0.86, 0.92);
 
-    let mesh_hull = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        edge_deck,
-    ));
-    let mesh_window = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        window_color,
-    ));
-    let mesh_outer = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        outer_cabin,
-    ));
-    let mesh_inner = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        inner_cabin,
-    ));
-    let mesh_public = meshes.add(deck_tile_cuboid_mesh(
-        TILE_CELL_M,
-        DECK_SLAB_THICKNESS_M,
-        public_deck,
-    ));
+    let proto_hull = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, edge_deck);
+    let proto_window = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, window_color);
+    let proto_outer = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, outer_cabin);
+    let proto_inner = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, inner_cabin);
+    let proto_public = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, public_deck);
 
-    for deck_i in 0..NUM_DECKS {
+    let hull_mesh_h = meshes.add(proto_hull.clone());
+    let window_mesh_h = meshes.add(proto_window.clone());
+    let outer_mesh_h = meshes.add(proto_outer.clone());
+    let inner_mesh_h = meshes.add(proto_inner.clone());
+    let public_mesh_h = meshes.add(proto_public.clone());
+
+    let slab_local_z = DECK_SLAB_THICKNESS_M * 0.5;
+
+    for (deck_i, layout) in layouts.iter().enumerate() {
         let hue = 0.52 + (deck_i as f32 * 0.012);
         let base_tint = Color::hsl(hue * 360.0 % 360.0, 0.28, 0.42);
-        let mesh_deck_base = meshes.add(deck_tile_cuboid_mesh(
-            TILE_CELL_M,
-            DECK_SLAB_THICKNESS_M,
-            base_tint,
-        ));
+        let proto_base = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, base_tint);
 
         let deck_z = deck_i as f32 * DECK_FLOOR_SPACING_M;
 
-        commands
-            .spawn((
-                Transform::from_xyz(0.0, 0.0, deck_z),
-                Visibility::default(),
-                DeckLayer(deck_i),
-            ))
-            .with_children(|deck| {
-                let layout = &layouts[deck_i];
+        let hull_outline = if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
+            deck_hull_polygon_upper()
+        } else {
+            deck_hull_polygon()
+        };
+        let coarse_mesh = deck_geometry::extruded_polygon_deck_mesh(
+            &hull_outline,
+            DECK_SLAB_THICKNESS_M,
+            SHIP_BEAM_M,
+            SHIP_LENGTH_M,
+        );
+        let coarse_handle = meshes.add(coarse_mesh);
+        commands.spawn((
+            Mesh3d(coarse_handle),
+            MeshMaterial3d(clip_handle.clone()),
+            Transform::from_xyz(0.0, 0.0, deck_z),
+            Visibility::Inherited,
+            DeckLayer(deck_i),
+            DeckLodCoarseTier(deck_i),
+        ));
 
-                for c in &layout.centers {
-                    let cell = (
-                        (c.x / TILE_CELL_M).round() as i32,
-                        (c.y / TILE_CELL_M).round() as i32,
-                    );
-                    let edge = is_perimeter_cell(cell, &layout.occupied);
-                    let mesh = if edge {
-                        if window_strip_zone(*c) {
-                            &mesh_window
-                        } else {
-                            &mesh_hull
-                        }
-                    } else if inner_cabin_zone(*c) {
-                        &mesh_inner
-                    } else if outer_cabin_zone(*c) {
-                        &mesh_outer
-                    } else if c.y < -SHIP_LENGTH_M * 0.28 {
-                        &mesh_public
-                    } else {
-                        &mesh_deck_base
-                    };
+        let mut buckets: [Vec<Vec3>; DeckTileBucket::COUNT] = std::array::from_fn(|_| Vec::new());
 
-                    deck.spawn((
-                        Mesh3d((*mesh).clone()),
-                        MeshMaterial3d(clip_handle.clone()),
-                        Transform::from_xyz(c.x, c.y, DECK_SLAB_THICKNESS_M * 0.5),
-                    ));
-                }
-            });
+        for c in &layout.centers {
+            let cell = (
+                (c.x / TILE_CELL_M).round() as i32,
+                (c.y / TILE_CELL_M).round() as i32,
+            );
+            let bucket = DeckTileBucket::classify(*c, cell, &layout.occupied);
+            buckets[bucket.idx()].push(Vec3::new(c.x, c.y, slab_local_z));
+        }
+
+        let protos: [&Mesh; DeckTileBucket::COUNT] = [
+            &proto_hull,
+            &proto_window,
+            &proto_inner,
+            &proto_outer,
+            &proto_public,
+            &proto_base,
+        ];
+
+        let base_mesh_h = meshes.add(proto_base.clone());
+        let bucket_mesh_handles: [Handle<Mesh>; DeckTileBucket::COUNT] = [
+            hull_mesh_h.clone(),
+            window_mesh_h.clone(),
+            inner_mesh_h.clone(),
+            outer_mesh_h.clone(),
+            public_mesh_h.clone(),
+            base_mesh_h,
+        ];
+
+        for (bi, bucket_centers) in buckets.into_iter().enumerate() {
+            if bucket_centers.is_empty() {
+                continue;
+            }
+            let proto = protos[bi];
+            let mesh_h = bucket_mesh_handles[bi].clone();
+            if bucket_centers.len() <= DECK_TILE_AUTOMATIC_INSTANCE_CAP {
+                let tiles = bucket_centers.to_vec();
+                let clip_inst = clip_handle.clone();
+                commands.spawn_batch(tiles.into_iter().map(move |t| {
+                    (
+                        Mesh3d(mesh_h.clone()),
+                        MeshMaterial3d(clip_inst.clone()),
+                        Transform::from_xyz(t.x, t.y, deck_z + t.z),
+                        Visibility::Hidden,
+                        DeckLayer(deck_i),
+                        DeckLodFineTier(deck_i),
+                    )
+                }));
+            } else if let Some(merged) =
+                deck_geometry::accumulate_translated_tile_instances(proto, &bucket_centers)
+            {
+                let handle = meshes.add(merged);
+                commands.spawn((
+                    Mesh3d(handle),
+                    MeshMaterial3d(clip_handle.clone()),
+                    Transform::from_xyz(0.0, 0.0, deck_z),
+                    Visibility::Hidden,
+                    DeckLayer(deck_i),
+                    DeckLodFineTier(deck_i),
+                ));
+            }
+        }
     }
 
     commands.spawn((
@@ -838,7 +950,7 @@ fn spawn_sim_npcs(
         let target_point = walk_points[rng.next_usize(walk_points.len())];
         commands.spawn((
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(*model_path))),
-            Transform::from_translation(spawn_point),
+            Transform::from_translation(spawn_point).with_scale(Vec3::splat(SIM_NPC_SCALE)),
             SimNpc {
                 speed_m_s: SIM_NPC_SPEED_M_S,
             },
@@ -850,6 +962,45 @@ fn spawn_sim_npcs(
     }
 
     commands.insert_resource(DeckFiveWalkPoints(walk_points));
+}
+
+fn update_deck_lod(
+    rig: Res<CameraRig>,
+    mut pref: ResMut<DeckLodFinePreferred>,
+    mut lod_queries: ParamSet<(
+        Query<(&DeckLodFineTier, &mut Visibility)>,
+        Query<(&DeckLodCoarseTier, &mut Visibility)>,
+    )>,
+) {
+    let eye = camera_rig_transform(&rig).translation;
+    for deck_i in 0..NUM_DECKS {
+        let deck_mid_z = deck_i as f32 * DECK_FLOOR_SPACING_M + DECK_SLAB_THICKNESS_M * 0.5;
+        let anchor = Vec3::new(rig.target.x, rig.target.y, deck_mid_z);
+        let d = eye.distance(anchor);
+
+        let mut want_fine = pref.0[deck_i];
+        if d < LOD_FINE_WITHIN_M {
+            want_fine = true;
+        } else if d > LOD_COARSE_BEYOND_M {
+            want_fine = false;
+        }
+        pref.0[deck_i] = want_fine;
+    }
+
+    for (tier, mut vis) in lod_queries.p0().iter_mut() {
+        *vis = if pref.0[tier.0] {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (tier, mut vis) in lod_queries.p1().iter_mut() {
+        *vis = if pref.0[tier.0] {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+    }
 }
 
 fn deck_switch(keyboard: Res<ButtonInput<KeyCode>>, mut current_deck: ResMut<CurrentDeck>) {

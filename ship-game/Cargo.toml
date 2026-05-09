@@ -42,3 +42,4 @@ bevy = { version = "0.18", default-features = false, features = [
 wasm-bindgen = "0.2"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1", features = ["js"] }
+earcutr = "0.5"
