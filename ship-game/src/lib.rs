@@ -28,7 +28,6 @@ use ship_hull::{
     FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M, SHIP_LENGTH_M,
 };
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const NUM_DECKS: usize = 20;
 const SIM_DECK_INDEX: usize = 4; // Deck 5 (human-facing numbering)
@@ -120,7 +119,7 @@ const LOD_COARSE_BEYOND_M: f32 = 820.0;
 const LOD_FINE_WITHIN_M: f32 = 680.0;
 /// Tile counts at or below this use per-tile entities (Bevy automatic GPU instancing / batching).
 const DECK_TILE_AUTOMATIC_INSTANCE_CAP: usize = 1600;
-const VERSION_EPOCH_UNIX_DAYS: i64 = 20_454; // 2026-01-01 (UTC)
+const VERSION_NUMBER: i64 = 128;
 
 const CLIP_SHADER_FORWARD: &str = concat!(
     "embedded://",
@@ -1185,9 +1184,8 @@ fn update_deck_label(
         return;
     }
     for mut text in &mut query {
-        let version_days = version_days_since_epoch();
         text.0 = format!(
-            "Version {version_days}\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | R/F: vertical | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck",
+            "Version {VERSION_NUMBER}\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | R/F: vertical | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck",
             current_deck.0 + 1,
             NUM_DECKS,
             DECK_NAMES[current_deck.0],
@@ -1195,14 +1193,6 @@ fn update_deck_label(
             SHIP_BEAM_M,
         );
     }
-}
-
-fn version_days_since_epoch() -> i64 {
-    let unix_days = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => (duration.as_secs() / 86_400) as i64,
-        Err(_) => VERSION_EPOCH_UNIX_DAYS,
-    };
-    (unix_days - VERSION_EPOCH_UNIX_DAYS).max(0)
 }
 
 fn log_npc_heights_once(
