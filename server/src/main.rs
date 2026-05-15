@@ -5,7 +5,12 @@
 //! and periodic persistence of game data to PostgreSQL.
 
 use axum::extract::WebSocketUpgrade;
-use axum::{extract::State, response::Response, routing::get, Router};
+use axum::{
+    extract::State,
+    response::{Redirect, Response},
+    routing::get,
+    Router,
+};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -177,9 +182,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up HTTP routes
     let app = Router::new()
+        // Ship game: canonical URLs with trailing slash (static `2d/index.html`, `3d/index.html`)
+        .route("/", get(|| async { Redirect::temporary("/3d/") }))
+        .route("/2d", get(|| async { Redirect::permanent("/2d/") }))
+        .route("/3d", get(|| async { Redirect::permanent("/3d/") }))
         // WebSocket endpoint for game client connections
         .route("/ws", get(websocket_handler))
-        // Serve static files from client/public (index.html = ship game at root)
+        // Browsers request /favicon.ico by default; we serve SVG and redirect here.
+        .route(
+            "/favicon.ico",
+            get(|| async { Redirect::temporary("/favicon.svg") }),
+        )
+        // Serve static files from client/public (/3d/, /2d/, /ship/, etc.)
         .fallback_service(ServeDir::new(static_dir()).append_index_html_on_directories(true))
         // Enable CORS for all origins (development)
         .layer(CorsLayer::permissive())

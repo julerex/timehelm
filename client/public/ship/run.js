@@ -1,10 +1,6 @@
-import init from './ship.js';
+import init, { run } from './ship.js';
 
 const canvas = document.getElementById('ship-game-canvas');
-if (canvas) {
-    canvas.focus();
-    canvas.addEventListener('pointerdown', () => canvas.focus());
-}
 
 canvas?.addEventListener('keydown', (event) => {
     if (
@@ -18,8 +14,54 @@ canvas?.addEventListener('keydown', (event) => {
     }
 }, { passive: false });
 
-init().catch((error) => {
-    if (!error.message.startsWith("Using exceptions for control flow")) {
-        console.error(error);
+/** Resolves run mode from URL path: `/2d` or `/3d` (with optional trailing slash). */
+function modeFromPathname() {
+    let path = window.location.pathname;
+    while (path.length > 1 && path.endsWith('/')) {
+        path = path.slice(0, -1);
     }
-});
+    if (path === '/2d') {
+        return 1;
+    }
+    if (path === '/3d') {
+        return 0;
+    }
+    return null;
+}
+
+/** On WASM, Bevy returns from `run()` immediately after spawning the winit loop; a second `run()` panics with RecreationAttempt. */
+let gameLaunchStarted = false;
+
+async function startGame(mode) {
+    if (gameLaunchStarted) {
+        return;
+    }
+    gameLaunchStarted = true;
+
+    try {
+        const container = document.getElementById('ship-game-container');
+        if (container) {
+            container.style.display = 'flex';
+        }
+        if (canvas) {
+            canvas.focus();
+            canvas.addEventListener('pointerdown', () => canvas.focus());
+        }
+        await init();
+        run(mode);
+    } catch (err) {
+        gameLaunchStarted = false;
+        throw err;
+    }
+}
+
+const mode = modeFromPathname();
+if (mode !== null) {
+    startGame(mode).catch((error) => {
+        if (!error.message.startsWith('Using exceptions for control flow')) {
+            console.error(error);
+        }
+    });
+} else {
+    console.error('Time Helm: open /2d/ or /3d/');
+}

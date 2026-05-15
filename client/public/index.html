@@ -4,35 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Time Helm</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            overflow: hidden;
-            background: #0a1929;
-        }
-        #ship-game-container {
-            width: 100vw;
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        #ship-game-canvas {
-            width: 100%;
-            height: 100%;
-            display: block;
-        }
-    </style>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <meta http-equiv="refresh" content="0; url=/3d/">
+    <link rel="canonical" href="/3d/">
+    <script>
+        location.replace('/3d/');
+    </script>
 </head>
 <body>
-    <div id="ship-game-container">
-        <canvas id="ship-game-canvas" tabindex="0" oncontextmenu="return false"></canvas>
-    </div>
-    <script type="module" src="/ship/run.js"></script>
+    <p><a href="/3d/">Open Time Helm (3D)</a> · <a href="/2d/">2D plan</a></p>
 </body>
 </html>
