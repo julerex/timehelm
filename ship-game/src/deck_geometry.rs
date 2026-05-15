@@ -205,8 +205,17 @@ pub fn accumulate_translated_tile_instances(
     )
 }
 
-/// Merge axis-aligned XY squares centred at each point (camera down **−Z**, quads lie in XY at `z`).
-pub fn merged_plan_squares_mesh(centers: &[Vec2], half_size: f32, z: f32) -> Mesh {
+/// Merge axis-aligned XY squares centred at each point, each tile painted with its own
+/// linear-RGBA vertex colour. Lets a single `Mesh2d` + `ColorMaterial { color: WHITE }` render
+/// every bucket and amenity overlay in one draw call (Bevy's `ColorMaterial` shader multiplies
+/// by `Mesh::ATTRIBUTE_COLOR` when present).
+pub fn merged_plan_squares_mesh_colored(
+    centers: &[Vec2],
+    tile_colors: &[[f32; 4]],
+    half_size: f32,
+    z: f32,
+) -> Mesh {
+    debug_assert_eq!(centers.len(), tile_colors.len());
     let mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
@@ -214,12 +223,14 @@ pub fn merged_plan_squares_mesh(centers: &[Vec2], half_size: f32, z: f32) -> Mes
     if centers.is_empty() {
         return mesh;
     }
-    let mut positions = Vec::with_capacity(centers.len() * 4);
-    let mut normals = Vec::with_capacity(centers.len() * 4);
-    let mut uvs = Vec::with_capacity(centers.len() * 4);
-    let mut indices = Vec::with_capacity(centers.len() * 6);
+    let n = centers.len();
+    let mut positions = Vec::with_capacity(n * 4);
+    let mut normals = Vec::with_capacity(n * 4);
+    let mut uvs = Vec::with_capacity(n * 4);
+    let mut colors = Vec::with_capacity(n * 4);
+    let mut indices = Vec::with_capacity(n * 6);
     let h = half_size;
-    for (i, c) in centers.iter().enumerate() {
+    for (i, (c, col)) in centers.iter().zip(tile_colors.iter()).enumerate() {
         let base = (i * 4) as u32;
         positions.push([c.x - h, c.y - h, z]);
         positions.push([c.x + h, c.y - h, z]);
@@ -228,11 +239,13 @@ pub fn merged_plan_squares_mesh(centers: &[Vec2], half_size: f32, z: f32) -> Mes
         for _ in 0..4 {
             normals.push([0.0, 0.0, 1.0]);
             uvs.push([0.0, 0.0]);
+            colors.push(*col);
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     mesh.with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
         .with_inserted_indices(Indices::U32(indices))
 }

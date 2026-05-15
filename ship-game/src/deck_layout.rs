@@ -1,8 +1,8 @@
 //! Procedural deck grid and tile zoning shared by 3D and 2D ship views (+Y bow).
 
 use crate::ship_hull::{
-    deck_tile_centers, deck_tile_centers_upper, FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M,
-    SHIP_LENGTH_M,
+    deck_hull_polygon_upper, deck_tile_centers, deck_tile_centers_upper,
+    FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M, SHIP_LENGTH_M,
 };
 use bevy::prelude::*;
 use std::collections::HashSet;
@@ -22,7 +22,9 @@ pub struct DeckLayouts(pub Vec<DeckTiles>);
 #[derive(Clone)]
 pub struct DeckTiles {
     pub centers: Vec<Vec2>,
-    pub occupied: HashSet<(i32, i32)>,
+    /// Cells whose 4-neighbourhood contains at least one empty cell. Precomputed once so
+    /// per-tile classification only needs a single hash lookup instead of four.
+    pub perimeter: HashSet<(i32, i32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -257,22 +259,30 @@ fn deck_profile(deck_index: usize) -> DeckProfile {
     P[deck_index.min(NUM_DECKS - 1)]
 }
 
-fn profile_allows_tile(deck_index: usize, p: Vec2) -> bool {
+/// Half-width (positive starboard extent) allowed by the deck profile at `y`, before courtyard / carve rules.
+fn sim_half_beam_limit(deck_index: usize, y: f32) -> Option<f32> {
     let profile = deck_profile(deck_index);
-    if p.y < profile.y_aft || p.y > profile.y_fwd {
-        return false;
+    if y < profile.y_aft || y > profile.y_fwd {
+        return None;
     }
 
     let fwd_span = (SHIP_LENGTH_M * 0.5 - profile.y_fwd).max(1.0);
     let aft_span = (profile.y_aft + SHIP_LENGTH_M * 0.5).max(1.0);
-    let fwd_t = ((p.y - profile.y_fwd) / fwd_span).clamp(0.0, 1.0);
-    let aft_t = ((profile.y_aft - p.y) / aft_span).clamp(0.0, 1.0);
+    let fwd_t = ((y - profile.y_fwd) / fwd_span).clamp(0.0, 1.0);
+    let aft_t = ((profile.y_aft - y) / aft_span).clamp(0.0, 1.0);
     let taper = 1.0 - profile.bow_taper * fwd_t * fwd_t - profile.stern_taper * aft_t * aft_t;
-    let beam_limit = SHIP_BEAM_M * 0.5 * profile.half_beam_scale * taper.max(0.2);
+    Some(SHIP_BEAM_M * 0.5 * profile.half_beam_scale * taper.max(0.2))
+}
+
+fn profile_allows_tile(deck_index: usize, p: Vec2) -> bool {
+    let Some(beam_limit) = sim_half_beam_limit(deck_index, p.y) else {
+        return false;
+    };
     if p.x.abs() > beam_limit {
         return false;
     }
 
+    let profile = deck_profile(deck_index);
     if profile.courtyard_half_width > 0.0
         && p.y > profile.courtyard_y_aft
         && p.y < profile.courtyard_y_fwd
@@ -292,26 +302,60 @@ fn profile_allows_tile(deck_index: usize, p: Vec2) -> bool {
     true
 }
 
-fn fallback_deck_tiles(deck_index: usize, step_m: f32) -> DeckTiles {
-    let centers = if deck_index >= FIRST_UPPER_DECK_STYLE_INDEX {
+fn deck_lower_profile_outline(deck_index: usize) -> Vec<Vec2> {
+    const STEPS: usize = 72;
+    let profile = deck_profile(deck_index);
+    let y_aft = profile.y_aft;
+    let y_fwd = profile.y_fwd;
+    let hb_fwd = sim_half_beam_limit(deck_index, y_fwd).unwrap_or(0.0);
+    let hb_aft = sim_half_beam_limit(deck_index, y_aft).unwrap_or(0.0);
+
+    let mut poly = Vec::with_capacity(STEPS * 2 + 4);
+    poly.push(Vec2::new(hb_fwd, y_fwd));
+    for i in 1..STEPS - 1 {
+        let t = i as f32 / (STEPS - 1) as f32;
+        let y = y_fwd + (y_aft - y_fwd) * t;
+        if let Some(hb) = sim_half_beam_limit(deck_index, y) {
+            poly.push(Vec2::new(hb, y));
+        }
+    }
+    poly.push(Vec2::new(hb_aft, y_aft));
+    poly.push(Vec2::new(-hb_aft, y_aft));
+    for i in (1..STEPS - 1).rev() {
+        let t = i as f32 / (STEPS - 1) as f32;
+        let y = y_fwd + (y_aft - y_fwd) * t;
+        if let Some(hb) = sim_half_beam_limit(deck_index, y) {
+            poly.push(Vec2::new(-hb, y));
+        }
+    }
+    poly.push(Vec2::new(-hb_fwd, y_fwd));
+    poly
+}
+
+/// Closed deck boundary matching the **simulated tile footprint** (profile clipping). Upper decks use the
+/// courtyard hull polygon so coarse LOD / 2D fills align with fine tiles instead of the full reference hull.
+pub fn deck_sim_footprint_polygon(deck_index: usize) -> Vec<Vec2> {
+    if deck_index >= FIRST_UPPER_DECK_STYLE_INDEX {
+        deck_hull_polygon_upper()
+    } else {
+        deck_lower_profile_outline(deck_index)
+    }
+}
+
+fn fallback_deck_tile_centers(deck_index: usize, step_m: f32) -> Vec<Vec2> {
+    if deck_index >= FIRST_UPPER_DECK_STYLE_INDEX {
         deck_tile_centers_upper(step_m)
     } else {
         deck_tile_centers(step_m)
-    };
-    let occupied = centers
-        .iter()
-        .map(|c| ((c.x / step_m).round() as i32, (c.y / step_m).round() as i32))
-        .collect::<HashSet<_>>();
-    DeckTiles { centers, occupied }
+    }
 }
 
-/// All deck occupancy grids at `step_m` cell spacing.
+/// All deck occupancy grids at `step_m` cell spacing. Perimeter cells are precomputed once
+/// so classification at draw time is a single hash lookup per tile.
 pub fn deck_layouts(step_m: f32) -> Vec<DeckTiles> {
     let mut out = Vec::with_capacity(NUM_DECKS);
     for deck_i in 0..NUM_DECKS {
-        let base = fallback_deck_tiles(deck_i, step_m);
-        let centers = base
-            .centers
+        let centers = fallback_deck_tile_centers(deck_i, step_m)
             .into_iter()
             .filter(|p| profile_allows_tile(deck_i, *p))
             .collect::<Vec<_>>();
@@ -319,7 +363,12 @@ pub fn deck_layouts(step_m: f32) -> Vec<DeckTiles> {
             .iter()
             .map(|c| ((c.x / step_m).round() as i32, (c.y / step_m).round() as i32))
             .collect::<HashSet<_>>();
-        out.push(DeckTiles { centers, occupied });
+        let perimeter = occupied
+            .iter()
+            .copied()
+            .filter(|cell| is_perimeter_cell(*cell, &occupied))
+            .collect::<HashSet<_>>();
+        out.push(DeckTiles { centers, perimeter });
     }
     out
 }
@@ -357,10 +406,11 @@ impl DeckTileBucket {
         }
     }
 
-    /// Mirrors the classification order in legacy `setup` (per-tile spawn).
-    pub fn classify(c: Vec2, cell: (i32, i32), occupied: &HashSet<(i32, i32)>) -> Self {
-        let edge = is_perimeter_cell(cell, occupied);
-        if edge {
+    /// Mirrors the classification order in legacy `setup` (per-tile spawn). Callers pass a
+    /// precomputed perimeter flag (see [`DeckTiles::perimeter`]) so this stays branchy but
+    /// allocation-free.
+    pub fn classify(c: Vec2, is_perimeter: bool) -> Self {
+        if is_perimeter {
             return if window_strip_zone(c) {
                 DeckTileBucket::WindowStrip
             } else {
@@ -380,15 +430,60 @@ impl DeckTileBucket {
     }
 }
 
-/// Optional axis-aligned amenity tint on top of base bucket colours (restaurant, pool, theatre, …).
-pub fn amenity_overlay(deck_index: usize, p: Vec2) -> Option<Color> {
+/// Closed set of amenity overlays painted on top of base bucket colours.
+#[derive(Clone, Copy)]
+pub enum AmenityKind {
+    Theatre,
+    MainDining,
+    Buffet,
+    Pools,
+    Casino,
+}
+
+impl AmenityKind {
+    pub const COUNT: usize = 5;
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Theatre,
+        Self::MainDining,
+        Self::Buffet,
+        Self::Pools,
+        Self::Casino,
+    ];
+
+    pub fn idx(self) -> usize {
+        self as usize
+    }
+
+    pub fn color(self) -> Color {
+        match self {
+            Self::Theatre => Color::srgb(0.52, 0.36, 0.68),
+            Self::MainDining => Color::srgb(0.82, 0.48, 0.34),
+            Self::Buffet => Color::srgb(0.42, 0.70, 0.50),
+            Self::Pools => Color::srgb(0.32, 0.74, 0.88),
+            Self::Casino => Color::srgb(0.72, 0.22, 0.42),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Theatre => "Theatre / aqua show",
+            Self::MainDining => "Main dining",
+            Self::Buffet => "Buffet / speciality dining",
+            Self::Pools => "Pools / sports deck",
+            Self::Casino => "Casino / nightclub band",
+        }
+    }
+}
+
+/// Optional axis-aligned amenity overlay on top of base bucket colours (restaurant, pool, theatre, …).
+pub fn amenity_overlay(deck_index: usize, p: Vec2) -> Option<AmenityKind> {
     // Forward theatre / aqua show — decks 5–10, centreline-forward
     if (5..=10).contains(&deck_index)
         && p.x.abs() < 17.5
         && p.y > SHIP_LENGTH_M * 0.36
         && p.y < SHIP_LENGTH_M * 0.49
     {
-        return Some(Color::srgb(0.52, 0.36, 0.68));
+        return Some(AmenityKind::Theatre);
     }
     // Main dining room — mid-aft hull
     if (4..=7).contains(&deck_index)
@@ -396,7 +491,7 @@ pub fn amenity_overlay(deck_index: usize, p: Vec2) -> Option<Color> {
         && p.y > -SHIP_LENGTH_M * 0.36
         && p.y < -SHIP_LENGTH_M * 0.10
     {
-        return Some(Color::srgb(0.82, 0.48, 0.34));
+        return Some(AmenityKind::MainDining);
     }
     // Buffet / speciality restaurant strip — upper lido bays
     if (8..=12).contains(&deck_index)
@@ -405,14 +500,14 @@ pub fn amenity_overlay(deck_index: usize, p: Vec2) -> Option<Color> {
         && p.y > SHIP_LENGTH_M * 0.04
         && p.y < SHIP_LENGTH_M * 0.30
     {
-        return Some(Color::srgb(0.42, 0.70, 0.50));
+        return Some(AmenityKind::Buffet);
     }
     // Pool / sports — open forward-upper
     if (11..=16).contains(&deck_index)
         && p.y > SHIP_LENGTH_M * 0.16
         && p.x.abs() < SHIP_BEAM_M * 0.36
     {
-        return Some(Color::srgb(0.32, 0.74, 0.88));
+        return Some(AmenityKind::Pools);
     }
     // Casino / nightclub — outboard promenade band
     if (6..=9).contains(&deck_index)
@@ -420,7 +515,7 @@ pub fn amenity_overlay(deck_index: usize, p: Vec2) -> Option<Color> {
         && p.y < SHIP_LENGTH_M * 0.14
         && p.x.abs() > 19.0
     {
-        return Some(Color::srgb(0.72, 0.22, 0.42));
+        return Some(AmenityKind::Casino);
     }
     None
 }

@@ -1,49 +1,55 @@
 //! Top-down 2D plan view of the ship (metres in XY; ship-space **+Y** = bow). The view rotates the hull
 //! so bow runs **left–right** on screen.
+//!
+//! All 20 decks are baked to one vertex-coloured `Mesh2d` each at startup and share a single
+//! white `ColorMaterial`; deck switching just toggles `Visibility` on the relevant entity.
 
-use crate::deck_geometry::merged_plan_squares_mesh;
+use crate::deck_geometry::merged_plan_squares_mesh_colored;
 use crate::deck_layout::{
-    amenity_overlay, deck_layouts, DeckLayouts, DeckTileBucket, NUM_DECKS, TILE_CELL_M,
-    TILE_VISUAL_SCALE,
+    amenity_overlay, deck_layouts, AmenityKind, DeckLayouts, DeckTileBucket, DeckTiles, NUM_DECKS,
+    TILE_CELL_M, TILE_VISUAL_SCALE,
 };
 use crate::shared::{asset_plugin, primary_window};
-use crate::ship_hull::{
-    deck_hull_polygon, deck_hull_polygon_upper, FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M,
-    SHIP_LENGTH_M,
-};
-use bevy::asset::RenderAssetUsages;
+use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
+use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{OrthographicProjection, Projection, ScalingMode};
-use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
 use bevy::prelude::*;
-use std::collections::HashMap;
+use bevy::sprite::Anchor;
 use std::f32::consts::FRAC_PI_2;
 
 const SIM_DECK_INDEX: usize = 4;
 const VERSION_NUMBER: i64 = 128;
 const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
 
-/// Local quad **Z** layering (camera looks toward **−Z**, positive Z is nearer / above previous draw).
-const Z_HULL_FILL: f32 = -0.002;
-const Z_TILE_BUCKETS: f32 = 0.0;
-const Z_AMENITIES: f32 = 0.004;
+const Z_TILE_PLANE: f32 = 0.0;
+
+/// Source-of-truth zone colours (shared by the mesh builder and the legend so they cannot drift).
+const COLOR_OUTER_CABIN: Color = Color::srgb(0.95, 0.82, 0.35);
+const COLOR_WINDOW: Color = Color::srgb(0.42, 0.62, 0.9);
+const COLOR_PUBLIC_DECK: Color = Color::srgb(0.78, 0.86, 0.92);
+/// Representative interior tint used in the legend swatch (mid-deck base tint).
+const COLOR_INTERIOR_LEGEND: Color = Color::srgb(0.35, 0.52, 0.61);
 
 #[derive(Component)]
 struct ShipPlan2dRotateRoot;
 
 #[derive(Resource)]
-struct Plan2dContentHolder(Option<Entity>);
-
-#[derive(Resource)]
-struct ShipPlanRotateRootEntity(Entity);
-
-#[derive(Resource)]
 struct CurrentDeck(usize);
+
+/// Pre-built `Mesh2d` content entity for each deck, parented under the rotate root.
+/// Switching decks just toggles `Visibility` on these.
+#[derive(Resource)]
+struct DeckContentEntities([Entity; NUM_DECKS]);
 
 #[derive(Component)]
 struct DeckLabel;
 
 #[derive(Component)]
 struct UiCamera;
+
+#[derive(Component)]
+#[allow(dead_code)]
+struct PlanZoneLegend;
 
 const DECK_NAMES: [&str; NUM_DECKS] = [
     "Engine Deck",
@@ -70,7 +76,7 @@ const DECK_NAMES: [&str; NUM_DECKS] = [
 
 fn deck_label_text(deck: usize) -> String {
     format!(
-        "Version {VERSION_NUMBER} — 2D plan\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nPgUp/PgDn: decks | Bow → right\nCabins/zones match 3D model; overlays: dining, pools, theatre, casino",
+        "Version {VERSION_NUMBER} — 2D plan\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nPgUp/PgDn: decks | Bow → right\nColours & arrows label zones; silhouette matches simulated footprint per deck.",
         deck + 1,
         NUM_DECKS,
         DECK_NAMES[deck],
@@ -79,47 +85,135 @@ fn deck_label_text(deck: usize) -> String {
     )
 }
 
-fn hull_polygon_for_deck(deck: usize) -> Vec<Vec2> {
-    if deck >= FIRST_UPPER_DECK_STYLE_INDEX {
-        deck_hull_polygon_upper()
-    } else {
-        deck_hull_polygon()
-    }
+fn color_to_linear_array(c: Color) -> [f32; 4] {
+    let lr: LinearRgba = c.into();
+    [lr.red, lr.green, lr.blue, lr.alpha]
 }
 
-fn triangulated_plan_mesh(poly: &[Vec2]) -> Mesh {
-    if poly.len() < 3 {
-        return Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        );
-    }
-    let flat: Vec<f64> = poly.iter().flat_map(|p| [p.x as f64, p.y as f64]).collect();
-    let Ok(indices_u32) = earcutr::earcut(&flat, &[], 2) else {
-        return Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        );
-    };
-    let positions: Vec<[f32; 3]> = poly.iter().map(|p| [p.x, p.y, Z_HULL_FILL]).collect();
-    let normals: Vec<[f32; 3]> = (0..poly.len()).map(|_| [0.0, 0.0, 1.0]).collect();
-    let indices: Vec<u32> = indices_u32.iter().map(|&i| i as u32).collect();
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
+/// Per-deck base tint (slight hue walk so adjacent decks read as distinct).
+fn deck_base_tint(deck_index: usize) -> Color {
+    let hue = 0.52 + (deck_index as f32 * 0.012);
+    Color::hsla((hue * 360.0) % 360.0, 0.28, 0.42, 1.0)
 }
 
-fn rgb_key(c: Color) -> [u16; 3] {
-    let l: LinearRgba = c.into();
-    fn q(x: f32) -> u16 {
-        (x.clamp(0.0, 1.0) * 65535.0).round() as u16
+/// Bake all of a deck's tiles into one vertex-coloured mesh.
+fn build_deck_mesh(deck_index: usize, layout: &DeckTiles) -> Mesh {
+    let half_tile = TILE_CELL_M * TILE_VISUAL_SCALE * 0.5;
+
+    let outer_cabin = color_to_linear_array(COLOR_OUTER_CABIN);
+    let bucket_colour: [[f32; 4]; DeckTileBucket::COUNT] = [
+        outer_cabin,
+        color_to_linear_array(COLOR_WINDOW),
+        outer_cabin,
+        outer_cabin,
+        color_to_linear_array(COLOR_PUBLIC_DECK),
+        color_to_linear_array(deck_base_tint(deck_index)),
+    ];
+    let amenity_colour: [[f32; 4]; AmenityKind::COUNT] =
+        std::array::from_fn(|i| color_to_linear_array(AmenityKind::ALL[i].color()));
+
+    let mut tile_colors = Vec::with_capacity(layout.centers.len());
+    for c in &layout.centers {
+        let cell = (
+            (c.x / TILE_CELL_M).round() as i32,
+            (c.y / TILE_CELL_M).round() as i32,
+        );
+        let color = if let Some(amenity) = amenity_overlay(deck_index, *c) {
+            amenity_colour[amenity.idx()]
+        } else {
+            // Plan view: outer brown perimeter + pink/yellow cabin zoning reads like two nested hulls.
+            // Fold hull-edge and inner blocks into the outboard cabin colour so the outline is one mass (3D keeps zones).
+            let mut b = DeckTileBucket::classify(*c, layout.perimeter.contains(&cell));
+            if matches!(b, DeckTileBucket::HullEdge | DeckTileBucket::InnerCabin) {
+                b = DeckTileBucket::OuterCabin;
+            }
+            bucket_colour[b.idx()]
+        };
+        tile_colors.push(color);
     }
-    [q(l.red), q(l.green), q(l.blue)]
+
+    merged_plan_squares_mesh_colored(&layout.centers, &tile_colors, half_tile, Z_TILE_PLANE)
+}
+
+fn spawn_plan_zone_legend(commands: &mut Commands, ui_camera: Entity) {
+    const ZONES: [(&str, Color); 4] = [
+        ("Cabins & hull perimeter (plan)", COLOR_OUTER_CABIN),
+        ("Forward windows", COLOR_WINDOW),
+        ("Public / aft venues", COLOR_PUBLIC_DECK),
+        (
+            "Interior structure (tint ↑ with deck)",
+            COLOR_INTERIOR_LEGEND,
+        ),
+    ];
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(10.0),
+                right: Val::Px(12.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.06, 0.14, 0.88)),
+            UiTargetCamera(ui_camera),
+            PlanZoneLegend,
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                Text::new("Zones"),
+                TextFont {
+                    font_size: 17.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+            for (name, col) in ZONES {
+                spawn_legend_row(panel, name, col);
+            }
+
+            panel.spawn((
+                Text::new("Amenity overlays"),
+                TextFont {
+                    font_size: 17.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+            for amenity in AmenityKind::ALL {
+                spawn_legend_row(panel, amenity.label(), amenity.color());
+            }
+        });
+}
+
+fn spawn_legend_row(panel: &mut ChildSpawnerCommands, name: &str, col: Color) {
+    panel
+        .spawn((Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(8.0),
+            align_items: AlignItems::Center,
+            ..default()
+        },))
+        .with_children(|row| {
+            row.spawn((
+                Node {
+                    width: Val::Px(14.0),
+                    height: Val::Px(14.0),
+                    ..default()
+                },
+                BackgroundColor(col),
+            ));
+            row.spawn((
+                Text::new(name),
+                TextFont {
+                    font_size: 13.5,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.88, 0.91, 0.96)),
+            ));
+        });
 }
 
 pub fn run_app_2d() {
@@ -135,21 +229,25 @@ pub fn run_app_2d() {
         )
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
         .insert_resource(DeckLayouts(deck_layouts(TILE_CELL_M)))
-        .insert_resource(Plan2dContentHolder(None))
         .insert_resource(ClearColor(Color::srgb(0.04, 0.09, 0.16)))
         .add_systems(Startup, setup_2d)
         .add_systems(
             Update,
             (
                 deck_switch_2d,
-                sync_plan_deck_content_2d,
+                sync_plan_deck_visibility,
                 update_deck_label_2d,
             ),
         )
         .run();
 }
 
-fn setup_2d(mut commands: Commands) {
+fn setup_2d(
+    mut commands: Commands,
+    layouts: Res<DeckLayouts>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     let mut world_ortho = OrthographicProjection::default_2d();
     world_ortho.scaling_mode = ScalingMode::FixedHorizontal {
         viewport_width: VIEW_WIDTH_M,
@@ -163,6 +261,10 @@ fn setup_2d(mut commands: Commands) {
         Projection::from(world_ortho),
     ));
 
+    // World plan meshes and Text2d use the default render layer (0). The UI camera must *not* draw
+    // those: its orthographic projection is pixel/window space, so sharing layer 0 would composite a
+    // second, wrongly scaled copy of the ship (a "ghost" miniature). UI still reaches this camera via
+    // `UiTargetCamera`; extraction does not rely on matching `RenderLayers`.
     let ui_camera = commands
         .spawn((
             Camera2d,
@@ -171,6 +273,7 @@ fn setup_2d(mut commands: Commands) {
                 clear_color: ClearColorConfig::None,
                 ..default()
             },
+            RenderLayers::layer(1),
             UiCamera,
         ))
         .id();
@@ -183,7 +286,52 @@ fn setup_2d(mut commands: Commands) {
             GlobalTransform::default(),
         ))
         .id();
-    commands.insert_resource(ShipPlanRotateRootEntity(rotate_root));
+
+    commands.entity(rotate_root).with_children(|markers| {
+        for (label, pos) in [
+            ("Bow (+Y)", Vec3::new(0.0, SHIP_LENGTH_M * 0.53, 0.025)),
+            ("Stern (−Y)", Vec3::new(0.0, -SHIP_LENGTH_M * 0.53, 0.025)),
+            ("Port (−X)", Vec3::new(-SHIP_BEAM_M * 0.56, -6.0, 0.025)),
+            ("Starboard (+X)", Vec3::new(SHIP_BEAM_M * 0.56, -6.0, 0.025)),
+        ] {
+            markers.spawn((
+                Text2d::new(label),
+                TextFont {
+                    font_size: 17.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.96, 0.97, 1.0, 0.93)),
+                Anchor::CENTER,
+                Transform::from_translation(pos),
+            ));
+        }
+    });
+
+    // One shared white material for every deck — vertex colours do all the work, so we never need
+    // to allocate a `ColorMaterial` per bucket / per deck switch.
+    let shared_material = materials.add(ColorMaterial::from(Color::WHITE));
+
+    let mut deck_entities = [Entity::PLACEHOLDER; NUM_DECKS];
+    for (deck_i, slot) in deck_entities.iter_mut().enumerate() {
+        let mesh_handle = meshes.add(build_deck_mesh(deck_i, &layouts.0[deck_i]));
+        let visibility = if deck_i == SIM_DECK_INDEX {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        *slot = commands
+            .spawn((
+                Mesh2d(mesh_handle),
+                MeshMaterial2d(shared_material.clone()),
+                Transform::IDENTITY,
+                visibility,
+                ChildOf(rotate_root),
+            ))
+            .id();
+    }
+    commands.insert_resource(DeckContentEntities(deck_entities));
+
+    spawn_plan_zone_legend(&mut commands, ui_camera);
 
     commands.spawn((
         Node {
@@ -203,118 +351,6 @@ fn setup_2d(mut commands: Commands) {
     ));
 }
 
-/// Replaces the rotating root’s sole content child: hull fill, tile buckets, amenity overlays.
-fn rebuild_deck_visuals_into_holder(
-    deck_index: usize,
-    rotate_root: Entity,
-    layouts: &DeckLayouts,
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ColorMaterial>,
-    holder_res: &mut Plan2dContentHolder,
-) {
-    if let Some(prev) = holder_res.0.take() {
-        commands.entity(prev).despawn();
-    }
-
-    let layout = &layouts.0[deck_index];
-    let poly = hull_polygon_for_deck(deck_index);
-
-    let edge_deck = Color::srgb(0.38, 0.3, 0.24);
-    let window_color = Color::srgb(0.42, 0.62, 0.9);
-    let outer_cabin = Color::srgb(0.95, 0.82, 0.35);
-    let inner_cabin = Color::srgb(0.92, 0.55, 0.72);
-    let public_deck = Color::srgb(0.78, 0.86, 0.92);
-    let hue = 0.52 + (deck_index as f32 * 0.012);
-    let base_tint = Color::hsla((hue * 360.0) % 360.0, 0.28, 0.42, 1.0);
-    let bucket_colour: [Color; DeckTileBucket::COUNT] = [
-        edge_deck,
-        window_color,
-        inner_cabin,
-        outer_cabin,
-        public_deck,
-        base_tint,
-    ];
-
-    let half_tile = TILE_CELL_M * TILE_VISUAL_SCALE * 0.5;
-    let mut buckets: [Vec<Vec2>; DeckTileBucket::COUNT] = std::array::from_fn(|_| Vec::new());
-    let mut amenity_buckets: HashMap<[u16; 3], (Color, Vec<Vec2>)> = HashMap::new();
-
-    for c in &layout.centers {
-        let cell = (
-            (c.x / TILE_CELL_M).round() as i32,
-            (c.y / TILE_CELL_M).round() as i32,
-        );
-        let b = DeckTileBucket::classify(*c, cell, &layout.occupied);
-        if let Some(ov) = amenity_overlay(deck_index, *c) {
-            let key = rgb_key(ov);
-            amenity_buckets
-                .entry(key)
-                .or_insert_with(|| (ov, Vec::new()))
-                .1
-                .push(*c);
-        } else {
-            buckets[b.idx()].push(*c);
-        }
-    }
-
-    let hull_mesh = meshes.add(triangulated_plan_mesh(&poly));
-
-    let content_id = commands
-        .spawn((
-            Transform::default(),
-            Visibility::Inherited,
-            GlobalTransform::default(),
-            ChildOf(rotate_root),
-        ))
-        .with_children(|p| {
-            p.spawn((
-                Mesh2d(hull_mesh),
-                MeshMaterial2d(materials.add(Color::srgb(0.22, 0.28, 0.42))),
-                Transform::IDENTITY,
-            ));
-
-            let z_bucket = Z_TILE_BUCKETS;
-
-            for (bi, bucket_centres) in buckets.into_iter().enumerate() {
-                if bucket_centres.is_empty() {
-                    continue;
-                }
-                let zm = meshes.add(merged_plan_squares_mesh(
-                    &bucket_centres,
-                    half_tile,
-                    z_bucket + bi as f32 * 1e-4,
-                ));
-                let col = bucket_colour[bi];
-                p.spawn((
-                    Mesh2d(zm),
-                    MeshMaterial2d(materials.add(col)),
-                    Transform::IDENTITY,
-                ));
-            }
-
-            let z_am = Z_AMENITIES;
-            for (ki, (_, (col, centres))) in amenity_buckets.into_iter().enumerate() {
-                if centres.is_empty() {
-                    continue;
-                }
-                let zm = meshes.add(merged_plan_squares_mesh(
-                    &centres,
-                    half_tile * 0.95,
-                    z_am + ki as f32 * 2e-4,
-                ));
-                p.spawn((
-                    Mesh2d(zm),
-                    MeshMaterial2d(materials.add(col)),
-                    Transform::IDENTITY,
-                ));
-            }
-        })
-        .id();
-
-    holder_res.0 = Some(content_id);
-}
-
 fn deck_switch_2d(keyboard: Res<ButtonInput<KeyCode>>, mut current_deck: ResMut<CurrentDeck>) {
     let deck_up =
         keyboard.just_pressed(KeyCode::PageUp) || keyboard.just_pressed(KeyCode::BracketRight);
@@ -329,31 +365,26 @@ fn deck_switch_2d(keyboard: Res<ButtonInput<KeyCode>>, mut current_deck: ResMut<
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn sync_plan_deck_content_2d(
+/// Hide the previously-visible deck entity and show the new one. All deck meshes/materials are
+/// already on the GPU from startup, so deck switching is essentially free.
+fn sync_plan_deck_visibility(
     current: Res<CurrentDeck>,
-    layouts: Res<DeckLayouts>,
-    root: Res<ShipPlanRotateRootEntity>,
-    mut holder: ResMut<Plan2dContentHolder>,
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    mut synced: Local<bool>,
+    entities: Res<DeckContentEntities>,
+    mut visibility: Query<&mut Visibility>,
+    mut last: Local<Option<usize>>,
 ) {
-    let need = !*synced || current.is_changed();
-    if !need {
+    if Some(current.0) == *last {
         return;
     }
-    *synced = true;
-    rebuild_deck_visuals_into_holder(
-        current.0,
-        root.0,
-        layouts.as_ref(),
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        holder.as_mut(),
-    );
+    if let Some(prev) = *last {
+        if let Ok(mut vis) = visibility.get_mut(entities.0[prev]) {
+            *vis = Visibility::Hidden;
+        }
+    }
+    if let Ok(mut vis) = visibility.get_mut(entities.0[current.0]) {
+        *vis = Visibility::Inherited;
+    }
+    *last = Some(current.0);
 }
 
 fn update_deck_label_2d(

@@ -2,24 +2,21 @@
 //!
 //! **World space uses SI metres:** one unit of `Vec3`, mesh positions, and camera distance is **1 m**.
 //!
-//! Deck footprint uses [`ship_hull::SHIP_BEAM_M`] × [`ship_hull::SHIP_LENGTH_M`] (60 m beam, ~5.3:1 L/B from
-//! `assets/icon_of_the_seas/floorplan_deck_10.png`). Decks 10+ use a courtyard void and U-stern from
-//! [`ship_hull::deck_hull_polygon_upper`]. Tiles are axis-aligned on **XY**; **+Y** bow, **±X** port/starboard;
-//! decks stack on **+Z**; the clip shader removes fragments above the cut height.
+//! Deck footprint uses [`crate::ship_hull::SHIP_BEAM_M`] × [`crate::ship_hull::SHIP_LENGTH_M`] at full scale.
+//! Tiles are axis-aligned on **XY** (**+Y** bow, **±X** port/starboard); [`crate::deck_layout::deck_sim_footprint_polygon`]
+//! matches coarse LOD to the simulated silhouette per deck. Decks stack on **+Z**; the clip shader removes fragments above the cut height.
 //!
 //! **Deck rendering:** distance-based **LOD** swaps coarse extruded hull + procedural deck texture vs
 //! fine cuboid tiles; smaller buckets use **automatic GPU instancing** (shared mesh/material per tile),
 //! larger buckets stay **CPU-merged**. [`crate::deck_geometry`] holds mesh helpers.
 
 use crate::deck_layout::{
-    deck_layouts, DeckLayouts, DeckTileBucket, NUM_DECKS, TILE_CELL_M, TILE_VISUAL_SCALE,
+    deck_layouts, deck_sim_footprint_polygon, DeckLayouts, DeckTileBucket, NUM_DECKS, TILE_CELL_M,
+    TILE_VISUAL_SCALE,
 };
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{asset_plugin, primary_window};
-use crate::ship_hull::{
-    deck_hull_polygon, deck_hull_polygon_upper, FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M,
-    SHIP_LENGTH_M,
-};
+use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
 use bevy::camera::primitives::Aabb;
 use bevy::ecs::system::ParamSet;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
@@ -395,11 +392,7 @@ fn setup(
 
         let deck_z = deck_i as f32 * DECK_FLOOR_SPACING_M;
 
-        let hull_outline = if deck_i >= FIRST_UPPER_DECK_STYLE_INDEX {
-            deck_hull_polygon_upper()
-        } else {
-            deck_hull_polygon()
-        };
+        let hull_outline = deck_sim_footprint_polygon(deck_i);
         let coarse_mesh = crate::deck_geometry::extruded_polygon_deck_mesh(
             &hull_outline,
             DECK_SLAB_THICKNESS_M,
@@ -423,7 +416,7 @@ fn setup(
                 (c.x / TILE_CELL_M).round() as i32,
                 (c.y / TILE_CELL_M).round() as i32,
             );
-            let bucket = DeckTileBucket::classify(*c, cell, &layout.occupied);
+            let bucket = DeckTileBucket::classify(*c, layout.perimeter.contains(&cell));
             buckets[bucket.idx()].push(Vec3::new(c.x, c.y, slab_local_z));
         }
 
@@ -764,7 +757,7 @@ fn update_deck_label(
     }
     for mut text in &mut query {
         text.0 = format!(
-            "Version {VERSION_NUMBER}\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | R/F: vertical | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck",
+            "Version {VERSION_NUMBER}\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | R/F: vertical | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck\nTile zones (fine LOD): hull edge · bow windows · inner/outer cabins · public aft · shell tint",
             current_deck.0 + 1,
             NUM_DECKS,
             DECK_NAMES[current_deck.0],
