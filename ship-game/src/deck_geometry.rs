@@ -204,3 +204,35 @@ pub fn accumulate_translated_tile_instances(
         .with_inserted_indices(Indices::U32(idx)),
     )
 }
+
+/// Merge axis-aligned XY squares centred at each point (camera down **−Z**, quads lie in XY at `z`).
+pub fn merged_plan_squares_mesh(centers: &[Vec2], half_size: f32, z: f32) -> Mesh {
+    let mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    if centers.is_empty() {
+        return mesh;
+    }
+    let mut positions = Vec::with_capacity(centers.len() * 4);
+    let mut normals = Vec::with_capacity(centers.len() * 4);
+    let mut uvs = Vec::with_capacity(centers.len() * 4);
+    let mut indices = Vec::with_capacity(centers.len() * 6);
+    let h = half_size;
+    for (i, c) in centers.iter().enumerate() {
+        let base = (i * 4) as u32;
+        positions.push([c.x - h, c.y - h, z]);
+        positions.push([c.x + h, c.y - h, z]);
+        positions.push([c.x + h, c.y + h, z]);
+        positions.push([c.x - h, c.y + h, z]);
+        for _ in 0..4 {
+            normals.push([0.0, 0.0, 1.0]);
+            uvs.push([0.0, 0.0]);
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    mesh.with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
+}
