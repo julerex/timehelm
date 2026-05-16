@@ -389,7 +389,6 @@ fn setup(
     ));
 
     let layouts = deck_cell_layouts(CELL_SIZE_M);
-    commands.insert_resource(DeckLayouts(layouts.clone()));
 
     let material_protos: [Mesh; CellMaterial::COUNT] = std::array::from_fn(|i| {
         deck_cell_cuboid_mesh(
@@ -403,7 +402,8 @@ fn setup(
 
     let slab_local_z = DECK_SLAB_THICKNESS_M * 0.5;
 
-    for (deck_i, layout) in layouts.iter().enumerate() {
+    for deck_i in 0..NUM_DECKS {
+        let layout = layouts.deck(deck_i);
         let deck_z = deck_i as f32 * DECK_FLOOR_SPACING_M;
 
         let hull_outline = deck_sim_footprint_polygon(deck_i);
@@ -425,15 +425,12 @@ fn setup(
 
         let mut buckets: [Vec<Vec3>; CellMaterial::COUNT] = std::array::from_fn(|_| Vec::new());
 
-        for (&(ix, iy), cell) in &layout.cells {
+        for (plan, cell) in layout.iter_cells() {
             if cell.floor == CellMaterial::Open {
                 continue;
             }
-            let p = Vec3::new(
-                ix as f32 * CELL_SIZE_M,
-                iy as f32 * CELL_SIZE_M,
-                slab_local_z,
-            );
+            let w = layout.index(plan).to_world_xy();
+            let p = Vec3::new(w.x, w.y, slab_local_z);
             buckets[cell.floor.idx()].push(p);
         }
 
@@ -472,6 +469,8 @@ fn setup(
         }
     }
 
+    commands.insert_resource(layouts);
+
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -497,8 +496,9 @@ fn spawn_sim_npcs(
     mut rng: ResMut<SimRng>,
 ) {
     let deck_five_z = SIM_DECK_INDEX as f32 * DECK_FLOOR_SPACING_M + DECK_SLAB_THICKNESS_M;
-    let walk_points: Vec<Vec3> = layouts.0[SIM_DECK_INDEX]
-        .centers(CELL_SIZE_M)
+    let walk_points: Vec<Vec3> = layouts
+        .deck(SIM_DECK_INDEX)
+        .centers()
         .into_iter()
         .map(|p| Vec3::new(p.x, p.y, deck_five_z))
         .collect();

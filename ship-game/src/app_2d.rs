@@ -4,7 +4,8 @@
 //! All 20 decks are baked to one vertex-coloured `Mesh2d` each at startup and share a single
 //! white `ColorMaterial`; deck switching just toggles `Visibility` on the relevant entity.
 
-use crate::cell::{step_allowed, AgentId, Cell, Material, CELL_NEIGHBOUR_OFFSETS};
+use crate::cell::{AgentId, Material, CELL_NEIGHBOUR_OFFSETS};
+use crate::cell_box::{self, deck_walk_grid, step_allowed, CellIndex, PlanKey};
 use crate::deck_geometry::{
     merged_plan_squares_mesh_colored, merged_plan_wall_borders_mesh, PlanWallEdge,
 };
@@ -48,7 +49,7 @@ struct DeckContentEntities([Entity; NUM_DECKS]);
 
 /// Per-deck map from 1 m grid cell to exact walk cell centre.
 #[derive(Resource)]
-struct DeckWalkGrids(Vec<HashMap<(i32, i32), Vec2>>);
+struct DeckWalkGrids(Vec<HashMap<PlanKey, Vec2>>);
 
 #[derive(Resource)]
 struct SimRng {
@@ -88,7 +89,7 @@ struct NextAgentId(u64);
 struct SimHuman {
     agent_id: AgentId,
     deck_idx: usize,
-    last_cell: Option<(i32, i32)>,
+    last_cell: Option<PlanKey>,
     steps_per_second: f32,
     time_until_step: f32,
 }
@@ -104,31 +105,33 @@ fn color_to_linear_array(c: Color) -> [f32; 4] {
 }
 
 /// Bake all of a deck's cells into one vertex-coloured mesh.
-fn build_deck_mesh(deck_index: usize, layout: &DeckCells) -> Mesh {
-    let half = CELL_SIZE_M * CELL_VISUAL_SCALE * 0.5;
-    let mut centers = Vec::with_capacity(layout.cells.len());
-    let mut colors = Vec::with_capacity(layout.cells.len());
-    for (&(ix, iy), cell) in &layout.cells {
-        let p = Vec2::new(ix as f32 * CELL_SIZE_M, iy as f32 * CELL_SIZE_M);
+fn build_deck_mesh(deck_index: usize, deck: DeckCells<'_>) -> Mesh {
+    let half_x = cell_box::length_cell_m() * CELL_VISUAL_SCALE * 0.5;
+    let half_y = cell_box::beam_cell_m() * CELL_VISUAL_SCALE * 0.5;
+    let cells: Vec<_> = deck.iter_cells().collect();
+    let mut centers = Vec::with_capacity(cells.len());
+    let mut colors = Vec::with_capacity(cells.len());
+    for (plan, cell) in cells {
+        let p = deck.index(plan).to_world_xy();
         centers.push(p);
         colors.push(color_to_linear_array(
             cell.floor.plan_floor_color(deck_index),
         ));
     }
-    merged_plan_squares_mesh_colored(&centers, &colors, half, Z_CELL_PLANE)
+    merged_plan_squares_mesh_colored(&centers, &colors, half_x.min(half_y), Z_CELL_PLANE)
 }
 
 /// Collect axis-aligned wall edges once per shared boundary (5 cm strokes in plan view).
-fn collect_wall_edges(layout: &DeckCells) -> Vec<PlanWallEdge> {
-    let half = CELL_SIZE_M * CELL_VISUAL_SCALE * 0.5;
+fn collect_wall_edges(deck: DeckCells<'_>) -> Vec<PlanWallEdge> {
+    let half_x = cell_box::length_cell_m() * CELL_VISUAL_SCALE * 0.5;
+    let half_y = cell_box::beam_cell_m() * CELL_VISUAL_SCALE * 0.5;
     let mut edges = Vec::new();
-    for (&(ix, iy), cell) in &layout.cells {
-        let cx = ix as f32 * CELL_SIZE_M;
-        let cy = iy as f32 * CELL_SIZE_M;
-        let y0 = cy - half;
-        let y1 = cy + half;
-        let x0 = cx - half;
-        let x1 = cx + half;
+    for (plan, cell) in deck.iter_cells() {
+        let c = deck.index(plan).to_world_xy();
+        let y0 = c.y - half_x;
+        let y1 = c.y + half_x;
+        let x0 = c.x - half_y;
+        let x1 = c.x + half_y;
 
         if cell.wall1 != Material::Open {
             edges.push(PlanWallEdge::Vertical {
@@ -145,9 +148,10 @@ fn collect_wall_edges(layout: &DeckCells) -> Vec<PlanWallEdge> {
             });
         }
         if cell.wall3 != Material::Open {
-            let west_draws = layout
-                .cells
-                .get(&(ix - 1, iy))
+            let west_draws = deck
+                .index(plan)
+                .offset(-1, 0, 0)
+                .and_then(|i| deck.get(i.plan()))
                 .is_none_or(|w| w.wall1 == Material::Open);
             if west_draws {
                 edges.push(PlanWallEdge::Vertical {
@@ -158,9 +162,10 @@ fn collect_wall_edges(layout: &DeckCells) -> Vec<PlanWallEdge> {
             }
         }
         if cell.wall4 != Material::Open {
-            let south_draws = layout
-                .cells
-                .get(&(ix, iy - 1))
+            let south_draws = deck
+                .index(plan)
+                .offset(0, -1, 0)
+                .and_then(|i| deck.get(i.plan()))
                 .is_none_or(|s| s.wall2 == Material::Open);
             if south_draws {
                 edges.push(PlanWallEdge::Horizontal {
@@ -174,8 +179,8 @@ fn collect_wall_edges(layout: &DeckCells) -> Vec<PlanWallEdge> {
     edges
 }
 
-fn build_deck_wall_mesh(layout: &DeckCells) -> Mesh {
-    let edges = collect_wall_edges(layout);
+fn build_deck_wall_mesh(deck: DeckCells<'_>) -> Mesh {
+    let edges = collect_wall_edges(deck);
     merged_plan_wall_borders_mesh(
         &edges,
         WALL_BORDER_THICKNESS_M,
@@ -184,7 +189,7 @@ fn build_deck_wall_mesh(layout: &DeckCells) -> Mesh {
     )
 }
 
-fn random_walk_point(grid: &HashMap<(i32, i32), Vec2>, rng: &mut SimRng) -> Option<Vec2> {
+fn random_walk_point(grid: &HashMap<PlanKey, Vec2>, rng: &mut SimRng) -> Option<Vec2> {
     if grid.is_empty() {
         return None;
     }
@@ -200,12 +205,12 @@ fn humans_per_deck(
     fn nonempty_deck(rng: &mut SimRng, layouts: &DeckLayouts) -> usize {
         for _ in 0..128 {
             let d = rng.next_usize(NUM_DECKS);
-            if !layouts.0[d].cells.is_empty() {
+            if layouts.cells.deck_occupied(d as u8) > 0 {
                 return d;
             }
         }
         (0..NUM_DECKS)
-            .find(|i| !layouts.0[*i].cells.is_empty())
+            .find(|i| layouts.cells.deck_occupied(*i as u8) > 0)
             .unwrap_or(0)
     }
 
@@ -234,19 +239,8 @@ fn humans_per_deck(
 
 fn deck_walk_grids(layouts: &DeckLayouts) -> DeckWalkGrids {
     DeckWalkGrids(
-        layouts
-            .0
-            .iter()
-            .map(|deck| {
-                let mut m = HashMap::new();
-                for (&(ix, iy), _) in &deck.cells {
-                    m.insert(
-                        (ix, iy),
-                        Vec2::new(ix as f32 * CELL_SIZE_M, iy as f32 * CELL_SIZE_M),
-                    );
-                }
-                m
-            })
+        (0..NUM_DECKS)
+            .map(|i| deck_walk_grid(&layouts.cells, i as u8))
             .collect(),
     )
 }
@@ -254,10 +248,11 @@ fn deck_walk_grids(layouts: &DeckLayouts) -> DeckWalkGrids {
 fn register_agent_on_cell(
     layouts: &mut DeckLayouts,
     deck_idx: usize,
-    coord: (i32, i32),
+    plan: PlanKey,
     agent: AgentId,
 ) {
-    if let Some(cell) = layouts.0[deck_idx].cell_mut(coord) {
+    let index = CellIndex::with_plan(deck_idx as u8, plan).expect("plan in box");
+    if let Some(cell) = layouts.cell_mut(index) {
         cell.contents.insert(agent);
     }
 }
@@ -265,34 +260,39 @@ fn register_agent_on_cell(
 fn unregister_agent_from_cell(
     layouts: &mut DeckLayouts,
     deck_idx: usize,
-    coord: (i32, i32),
+    plan: PlanKey,
     agent: AgentId,
 ) {
-    if let Some(cell) = layouts.0[deck_idx].cell_mut(coord) {
+    let index = CellIndex::with_plan(deck_idx as u8, plan).expect("plan in box");
+    if let Some(cell) = layouts.cell_mut(index) {
         cell.contents.remove(agent);
     }
 }
 
 /// Chooses among neighbours (8-way with corner cutting) that strictly reduce distance-to-target.
 fn pick_strictly_closer_neighbour(
-    cells: &HashMap<(i32, i32), Cell>,
-    grid: &HashMap<(i32, i32), Vec2>,
+    layouts: &DeckLayouts,
+    deck_idx: usize,
+    grid: &HashMap<PlanKey, Vec2>,
     rng: &mut SimRng,
-    ix: i32,
-    iy: i32,
+    plan: PlanKey,
     target: Vec2,
 ) -> Option<Vec2> {
-    let &current = grid.get(&(ix, iy))?;
+    let index = CellIndex::with_plan(deck_idx as u8, plan).expect("plan in box");
+    let &current = grid.get(&plan)?;
     let d0 = current.distance_squared(target);
 
     let mut best_d = f32::INFINITY;
     let mut best: Vec<Vec2> = Vec::new();
 
     for (dx, dy) in CELL_NEIGHBOUR_OFFSETS {
-        if !step_allowed(cells, ix, iy, dx, dy) {
+        if !step_allowed(&layouts.cells, index, dx, dy) {
             continue;
         }
-        let Some(&p) = grid.get(&(ix + dx, iy + dy)) else {
+        let Some(nb) = index.offset(dx, dy, 0) else {
+            continue;
+        };
+        let Some(&p) = grid.get(&nb.plan()) else {
             continue;
         };
         let d = p.distance_squared(target);
@@ -323,7 +323,7 @@ pub fn run_app_2d() {
                 .set(ImagePlugin::default_nearest()),
         )
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
-        .insert_resource(DeckLayouts(deck_cell_layouts(CELL_SIZE_M)))
+        .insert_resource(deck_cell_layouts(crate::deck_layout::CELL_SIZE_M))
         .insert_resource(SimRng::default())
         .insert_resource(NextAgentId(1))
         .insert_resource(ClearColor(Color::srgb(0.04, 0.09, 0.16)))
@@ -375,13 +375,13 @@ fn setup_2d(
 
     let mut deck_entities = [Entity::PLACEHOLDER; NUM_DECKS];
     for (deck_i, slot) in deck_entities.iter_mut().enumerate() {
-        let mesh_handle = meshes.add(build_deck_mesh(deck_i, &layouts.0[deck_i]));
+        let mesh_handle = meshes.add(build_deck_mesh(deck_i, layouts.deck(deck_i)));
         let visibility = if deck_i == SIM_DECK_INDEX {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
-        let wall_mesh_handle = meshes.add(build_deck_wall_mesh(&layouts.0[deck_i]));
+        let wall_mesh_handle = meshes.add(build_deck_wall_mesh(layouts.deck(deck_i)));
         *slot = commands
             .spawn((
                 Mesh2d(mesh_handle),
@@ -400,7 +400,7 @@ fn setup_2d(
                 for &(pos_xy, tgt_xy) in deck_placements {
                     let agent_id = AgentId(next_agent.0);
                     next_agent.0 += 1;
-                    let cell = DeckCells::cell_coords(pos_xy);
+                    let cell = DeckCells::cell_coords_deck(pos_xy, deck_i as u8).expect("walk cell");
                     register_agent_on_cell(&mut layouts, deck_i, cell, agent_id);
                     let stagger =
                         (rng.next_u32() as f32 / u32::MAX as f32).clamp(0.0, 1.0) * step_period;
@@ -483,15 +483,37 @@ fn human_wander_2d(
 
         human.time_until_step += human.steps_per_second.recip().max(1e-4);
 
-        let (ix, iy) = DeckCells::cell_coords(tf.translation.xy());
-        let Some(pos_snapped) = grid.get(&(ix, iy)).copied() else {
+        let plan = CellIndex::from_world_xy_deck(tf.translation.xy(), deck_idx as u8)
+            .map(CellIndex::plan);
+        let Some(plan) = plan else {
             let Some(p) = random_walk_point(grid, &mut rng) else {
                 continue;
             };
             if let Some(prev) = human.last_cell {
                 unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
             }
-            let cell = DeckCells::cell_coords(p);
+            let cell = CellIndex::from_world_xy_deck(p, deck_idx as u8)
+                .expect("walk cell")
+                .plan();
+            register_agent_on_cell(&mut layouts, deck_idx, cell, human.agent_id);
+            human.last_cell = Some(cell);
+            tf.translation.x = p.x;
+            tf.translation.y = p.y;
+            if let Some(t) = random_walk_point(grid, &mut rng) {
+                wander.target = t;
+            }
+            continue;
+        };
+        let Some(pos_snapped) = grid.get(&plan).copied() else {
+            let Some(p) = random_walk_point(grid, &mut rng) else {
+                continue;
+            };
+            if let Some(prev) = human.last_cell {
+                unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
+            }
+            let cell = CellIndex::from_world_xy_deck(p, deck_idx as u8)
+                .expect("walk cell")
+                .plan();
             register_agent_on_cell(&mut layouts, deck_idx, cell, human.agent_id);
             human.last_cell = Some(cell);
             tf.translation.x = p.x;
@@ -504,16 +526,17 @@ fn human_wander_2d(
         tf.translation.x = pos_snapped.x;
         tf.translation.y = pos_snapped.y;
 
-        if human.last_cell != Some((ix, iy)) {
+        if human.last_cell != Some(plan) {
             if let Some(prev) = human.last_cell {
                 unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
             }
-            register_agent_on_cell(&mut layouts, deck_idx, (ix, iy), human.agent_id);
-            human.last_cell = Some((ix, iy));
+            register_agent_on_cell(&mut layouts, deck_idx, plan, human.agent_id);
+            human.last_cell = Some(plan);
         }
 
-        let target_cell = DeckCells::cell_coords(wander.target);
-        if (ix, iy) == target_cell {
+        let target_cell = CellIndex::from_world_xy_deck(wander.target, deck_idx as u8)
+            .map(CellIndex::plan);
+        if target_cell == Some(plan) {
             if let Some(t) = random_walk_point(grid, &mut rng) {
                 wander.target = t;
             }
@@ -521,15 +544,17 @@ fn human_wander_2d(
         }
 
         let next_pos = pick_strictly_closer_neighbour(
-            &layouts.0[deck_idx].cells,
+            &layouts,
+            deck_idx,
             grid,
             &mut rng,
-            ix,
-            iy,
+            plan,
             wander.target,
         );
         if let Some(next_pos) = next_pos {
-            let next_cell = DeckCells::cell_coords(next_pos);
+            let next_cell = CellIndex::from_world_xy_deck(next_pos, deck_idx as u8)
+                .expect("walk cell")
+                .plan();
             if human.last_cell != Some(next_cell) {
                 if let Some(prev) = human.last_cell {
                     unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);

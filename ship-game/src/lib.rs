@@ -5,6 +5,7 @@
 mod app_2d;
 mod app_3d;
 mod cell;
+pub mod cell_box;
 mod deck_geometry;
 mod deck_layout;
 mod shader_embed;
