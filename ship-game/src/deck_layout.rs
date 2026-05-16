@@ -10,8 +10,8 @@ use std::collections::HashSet;
 /// Number of simulated decks (0-based indices).
 pub const NUM_DECKS: usize = 20;
 
-/// Square deck cell size (m). **1.2 m** balances detail vs WASM after mesh batching.
-pub const TILE_CELL_M: f32 = 1.2;
+/// Square deck cell size (m). **1 m** grid spacing in plan view and 3D deck slabs.
+pub const TILE_CELL_M: f32 = 1.0;
 
 /// Tile inset versus cell (matches 3D slab footprint).
 pub const TILE_VISUAL_SCALE: f32 = 0.92;

@@ -13,6 +13,7 @@ use crate::shared::{asset_plugin, primary_window};
 use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{OrthographicProjection, Projection, ScalingMode};
+use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use std::f32::consts::FRAC_PI_2;
@@ -23,12 +24,10 @@ const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
 
 const Z_TILE_PLANE: f32 = 0.0;
 
-/// Source-of-truth zone colours (shared by the mesh builder and the legend so they cannot drift).
+/// Source-of-truth zone colours (shared by the mesh builder and on-map labels).
 const COLOR_OUTER_CABIN: Color = Color::srgb(0.95, 0.82, 0.35);
 const COLOR_WINDOW: Color = Color::srgb(0.42, 0.62, 0.9);
 const COLOR_PUBLIC_DECK: Color = Color::srgb(0.78, 0.86, 0.92);
-/// Representative interior tint used in the legend swatch (mid-deck base tint).
-const COLOR_INTERIOR_LEGEND: Color = Color::srgb(0.35, 0.52, 0.61);
 
 #[derive(Component)]
 struct ShipPlan2dRotateRoot;
@@ -46,10 +45,6 @@ struct DeckLabel;
 
 #[derive(Component)]
 struct UiCamera;
-
-#[derive(Component)]
-#[allow(dead_code)]
-struct PlanZoneLegend;
 
 const DECK_NAMES: [&str; NUM_DECKS] = [
     "Engine Deck",
@@ -76,7 +71,7 @@ const DECK_NAMES: [&str; NUM_DECKS] = [
 
 fn deck_label_text(deck: usize) -> String {
     format!(
-        "Version {VERSION_NUMBER} — 2D plan\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nPgUp/PgDn: decks | Bow → right\nColours & arrows label zones; silhouette matches simulated footprint per deck.",
+        "Version {VERSION_NUMBER} — 2D plan\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nPgUp/PgDn: decks | Bow → right\nZone & amenity labels match the visible deck only.",
         deck + 1,
         NUM_DECKS,
         DECK_NAMES[deck],
@@ -135,85 +130,102 @@ fn build_deck_mesh(deck_index: usize, layout: &DeckTiles) -> Mesh {
     merged_plan_squares_mesh_colored(&layout.centers, &tile_colors, half_tile, Z_TILE_PLANE)
 }
 
-fn spawn_plan_zone_legend(commands: &mut Commands, ui_camera: Entity) {
-    const ZONES: [(&str, Color); 4] = [
-        ("Cabins & hull perimeter (plan)", COLOR_OUTER_CABIN),
-        ("Forward windows", COLOR_WINDOW),
-        ("Public / aft venues", COLOR_PUBLIC_DECK),
-        (
-            "Interior structure (tint ↑ with deck)",
-            COLOR_INTERIOR_LEGEND,
-        ),
-    ];
+/// Slightly above tile mesh; below ad-hoc compass glyphs (`0.025`).
+const Z_PLAN_LABELS: f32 = 0.035;
 
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(10.0),
-                right: Val::Px(12.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(6.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.02, 0.06, 0.14, 0.88)),
-            UiTargetCamera(ui_camera),
-            PlanZoneLegend,
-        ))
-        .with_children(|panel| {
-            panel.spawn((
-                Text::new("Zones"),
-                TextFont {
-                    font_size: 17.0,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
-            for (name, col) in ZONES {
-                spawn_legend_row(panel, name, col);
-            }
+/// On-map text sizes (world `TextFont` units). Kept small so labels stay readable without dominating the plan.
+const FONT_COMPASS: f32 = 12.5;
+const FONT_PLAN_ZONE: f32 = 7.75;
+const FONT_PLAN_AMENITY: f32 = 6.75;
 
-            panel.spawn((
-                Text::new("Amenity overlays"),
-                TextFont {
-                    font_size: 17.0,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
-            for amenity in AmenityKind::ALL {
-                spawn_legend_row(panel, amenity.label(), amenity.color());
-            }
-        });
+/// Parent [`ShipPlan2dRotateRoot`] applies −90° Z so bow runs left→right on screen; counter-spin
+/// keeps zone text horizontal while positions stay in ship metres (+Y bow).
+fn plan_label_bundle(
+    text: impl Into<String>,
+    translation: Vec3,
+    font_size: f32,
+    color: Color,
+) -> impl Bundle {
+    (
+        Text2d::new(text),
+        TextFont {
+            font_size,
+            ..default()
+        },
+        TextColor(color),
+        Anchor::CENTER,
+        Transform::from_translation(translation).with_rotation(Quat::from_rotation_z(FRAC_PI_2)),
+    )
 }
 
-fn spawn_legend_row(panel: &mut ChildSpawnerCommands, name: &str, col: Color) {
-    panel
-        .spawn((Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(8.0),
-            align_items: AlignItems::Center,
-            ..default()
-        },))
-        .with_children(|row| {
-            row.spawn((
-                Node {
-                    width: Val::Px(14.0),
-                    height: Val::Px(14.0),
-                    ..default()
-                },
-                BackgroundColor(col),
-            ));
-            row.spawn((
-                Text::new(name),
-                TextFont {
-                    font_size: 13.5,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.88, 0.91, 0.96)),
-            ));
-        });
+/// Zone + amenity names parented under each deck mesh so [`sync_plan_deck_visibility`] shows only the
+/// active deck’s overlays.
+fn spawn_deck_overlay_labels(parent: &mut ChildSpawnerCommands<'_>, deck_i: usize) {
+    parent.spawn(plan_label_bundle(
+        "Cabins & hull perimeter (plan)",
+        Vec3::new(-SHIP_BEAM_M * 0.34, 14.0, Z_PLAN_LABELS),
+        FONT_PLAN_ZONE,
+        Color::srgb(0.16, 0.12, 0.04),
+    ));
+    parent.spawn(plan_label_bundle(
+        "Forward windows",
+        Vec3::new(SHIP_BEAM_M * 0.36, SHIP_LENGTH_M * 0.21, Z_PLAN_LABELS),
+        FONT_PLAN_ZONE,
+        Color::srgba(0.98, 0.99, 1.0, 0.96),
+    ));
+    parent.spawn(plan_label_bundle(
+        "Public / aft venues",
+        Vec3::new(0.0, -SHIP_LENGTH_M * 0.36, Z_PLAN_LABELS),
+        FONT_PLAN_ZONE,
+        Color::srgb(0.1, 0.14, 0.2),
+    ));
+    parent.spawn(plan_label_bundle(
+        "Interior structure (tint ↑ with deck)",
+        Vec3::new(0.0, SHIP_LENGTH_M * 0.04, Z_PLAN_LABELS),
+        FONT_PLAN_ZONE * 0.97,
+        Color::srgba(0.96, 0.98, 1.0, 0.96),
+    ));
+
+    if (5..=10).contains(&deck_i) {
+        parent.spawn(plan_label_bundle(
+            AmenityKind::Theatre.label(),
+            Vec3::new(0.0, SHIP_LENGTH_M * 0.425, Z_PLAN_LABELS),
+            FONT_PLAN_AMENITY,
+            Color::srgba(0.98, 0.97, 1.0, 0.96),
+        ));
+    }
+    if (4..=7).contains(&deck_i) {
+        parent.spawn(plan_label_bundle(
+            AmenityKind::MainDining.label(),
+            Vec3::new(0.0, -SHIP_LENGTH_M * 0.23, Z_PLAN_LABELS),
+            FONT_PLAN_AMENITY,
+            Color::srgb(0.12, 0.06, 0.02),
+        ));
+    }
+    if (8..=12).contains(&deck_i) {
+        parent.spawn(plan_label_bundle(
+            AmenityKind::Buffet.label(),
+            Vec3::new(-SHIP_BEAM_M * 0.28, SHIP_LENGTH_M * 0.17, Z_PLAN_LABELS),
+            FONT_PLAN_AMENITY * 0.97,
+            Color::srgb(0.05, 0.12, 0.06),
+        ));
+    }
+    if (11..=16).contains(&deck_i) {
+        parent.spawn(plan_label_bundle(
+            AmenityKind::Pools.label(),
+            Vec3::new(0.0, SHIP_LENGTH_M * 0.28, Z_PLAN_LABELS),
+            FONT_PLAN_AMENITY,
+            Color::srgb(0.04, 0.1, 0.14),
+        ));
+    }
+    if (6..=9).contains(&deck_i) {
+        parent.spawn(plan_label_bundle(
+            AmenityKind::Casino.label(),
+            Vec3::new(SHIP_BEAM_M * 0.33, SHIP_LENGTH_M * 0.04, Z_PLAN_LABELS),
+            FONT_PLAN_AMENITY * 0.97,
+            Color::srgba(1.0, 0.96, 0.98, 0.96),
+        ));
+    }
 }
 
 pub fn run_app_2d() {
@@ -297,7 +309,7 @@ fn setup_2d(
             markers.spawn((
                 Text2d::new(label),
                 TextFont {
-                    font_size: 17.0,
+                    font_size: FONT_COMPASS,
                     ..default()
                 },
                 TextColor(Color::srgba(0.96, 0.97, 1.0, 0.93)),
@@ -327,11 +339,12 @@ fn setup_2d(
                 visibility,
                 ChildOf(rotate_root),
             ))
+            .with_children(|plan| {
+                spawn_deck_overlay_labels(plan, deck_i);
+            })
             .id();
     }
     commands.insert_resource(DeckContentEntities(deck_entities));
-
-    spawn_plan_zone_legend(&mut commands, ui_camera);
 
     commands.spawn((
         Node {
