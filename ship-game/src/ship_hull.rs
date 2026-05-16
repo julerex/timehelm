@@ -147,20 +147,21 @@ pub fn deck_hull_polygon_upper() -> Vec<Vec2> {
 
 fn deck_cell_centers_in_poly(step_m: f32, poly: &[Vec2]) -> Vec<Vec2> {
     let half_len = SHIP_LENGTH_M * 0.5;
-    let pad = step_m;
-    let half_b = SHIP_BEAM_M * 0.5 + pad;
+    let half_b = SHIP_BEAM_M * 0.5 + step_m;
     let mut out = Vec::new();
-    let mut cy = -half_len + step_m * 0.5;
-    while cy <= half_len - step_m * 0.25 {
-        let mut cx = -half_b + step_m * 0.5;
-        while cx <= half_b - step_m * 0.25 {
-            let p = Vec2::new(cx, cy);
+    // Integer lattice (ix, iy) → world (ix * step, iy * step). Half-offset sampling made
+    // `cell_coords` round −0.5 → −1 and +0.5 → +1, so index 0 was never occupied (centreline cross gap).
+    let ix_min = ((-half_b) / step_m).ceil() as i32;
+    let ix_max = (half_b / step_m).floor() as i32;
+    let iy_min = ((-half_len) / step_m).ceil() as i32;
+    let iy_max = (half_len / step_m).floor() as i32;
+    for iy in iy_min..=iy_max {
+        for ix in ix_min..=ix_max {
+            let p = Vec2::new(ix as f32 * step_m, iy as f32 * step_m);
             if point_in_polygon(p, poly) {
                 out.push(p);
             }
-            cx += step_m;
         }
-        cy += step_m;
     }
     out
 }

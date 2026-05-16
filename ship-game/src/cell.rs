@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-/// Wall and floor surface materials (exactly 16 variants).
+/// Wall and floor surface materials (exactly 18 variants).
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Material {
@@ -23,13 +23,20 @@ pub enum Material {
     CabinStripeB = 13,
     CorridorWhite = 14,
     BowAccent = 15,
+    MarinePanel = 16,
+    Door = 17,
 }
 
 impl Material {
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 18;
 
     pub fn idx(self) -> usize {
         self as usize
+    }
+
+    /// Edges agents may cross when both sides are passable (`Open`, or `Door` via [`shared_edge_passable`]).
+    pub fn is_passable(self) -> bool {
+        matches!(self, Self::Open | Self::Door)
     }
 
     pub fn color(self) -> Color {
@@ -50,6 +57,8 @@ impl Material {
             Self::CabinStripeB => Color::srgb(0.55, 0.90, 0.58),
             Self::CorridorWhite => Color::srgb(0.97, 0.97, 0.995),
             Self::BowAccent => Color::srgb(0.88, 0.55, 0.72),
+            Self::MarinePanel => Color::srgb(0.62, 0.52, 0.44),
+            Self::Door => Color::srgb(0.48, 0.32, 0.22),
         }
     }
 
@@ -57,7 +66,7 @@ impl Material {
     pub fn plan_floor_color(self, deck_index: usize) -> Color {
         const OUTER_CABIN: Color = Color::srgb(0.95, 0.82, 0.35);
         match self {
-            Self::Hull | Self::CabinPartition => OUTER_CABIN,
+            Self::Hull | Self::CabinPartition | Self::MarinePanel => OUTER_CABIN,
             Self::DeckBase => {
                 let hue = 0.52 + (deck_index as f32 * 0.012);
                 Color::hsla((hue * 360.0) % 360.0, 0.28, 0.42, 1.0)
@@ -65,6 +74,14 @@ impl Material {
             _ => self.color(),
         }
     }
+}
+
+/// True when agents may cross the edge between two wall materials.
+pub fn shared_edge_passable(from_wall: Material, to_wall: Material) -> bool {
+    if from_wall == Material::Door || to_wall == Material::Door {
+        return true;
+    }
+    from_wall.is_passable() && to_wall.is_passable()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -111,6 +128,10 @@ impl RoomCatalog {
 
     pub fn get(&self, id: RoomId) -> Option<&Room> {
         self.rooms.get(&id)
+    }
+
+    pub fn category(&self, id: RoomId) -> Option<RoomCategory> {
+        self.get(id).map(|r| r.category)
     }
 }
 
@@ -180,6 +201,42 @@ pub const CELL_NEIGHBOUR_OFFSETS: [(i32, i32); 8] = [
     (-1, -1),
 ];
 
+/// True when a cardinal step crosses only passable edges (`Open`, or `Door` on either side).
+pub fn cardinal_step_allowed(from: &Cell, to: &Cell, dx: i32, dy: i32) -> bool {
+    match (dx, dy) {
+        (1, 0) => shared_edge_passable(from.wall1, to.wall3),
+        (-1, 0) => shared_edge_passable(from.wall3, to.wall1),
+        (0, 1) => shared_edge_passable(from.wall2, to.wall4),
+        (0, -1) => shared_edge_passable(from.wall4, to.wall2),
+        _ => false,
+    }
+}
+
+/// True when a step to `(ix + dx, iy + dy)` exists and every crossed edge is passable.
+pub fn step_allowed(cells: &HashMap<(i32, i32), Cell>, ix: i32, iy: i32, dx: i32, dy: i32) -> bool {
+    let Some(from) = cells.get(&(ix, iy)) else {
+        return false;
+    };
+    if dx == 0 && dy == 0 {
+        return false;
+    }
+    if dx == 0 || dy == 0 {
+        let Some(to) = cells.get(&(ix + dx, iy + dy)) else {
+            return false;
+        };
+        return cardinal_step_allowed(from, to, dx, dy);
+    }
+    let c1 = (dx.signum(), 0);
+    let c2 = (0, dy.signum());
+    let Some(mid1) = cells.get(&(ix + c1.0, iy + c1.1)) else {
+        return false;
+    };
+    let Some(mid2) = cells.get(&(ix + c2.0, iy + c2.1)) else {
+        return false;
+    };
+    cardinal_step_allowed(from, mid1, c1.0, c1.1) && cardinal_step_allowed(from, mid2, c2.0, c2.1)
+}
+
 /// True when a diagonal step is allowed (both adjacent cardinals must exist).
 pub fn diagonal_step_allowed(
     grid: &HashMap<(i32, i32), Vec2>,
@@ -218,9 +275,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn material_has_sixteen_variants() {
-        assert_eq!(Material::COUNT, 16);
+    fn material_has_eighteen_variants() {
+        assert_eq!(Material::COUNT, 18);
         assert_eq!(Material::BowAccent.idx(), 15);
+        assert_eq!(Material::MarinePanel.idx(), 16);
+        assert_eq!(Material::Door.idx(), 17);
     }
 
     #[test]
@@ -231,6 +290,67 @@ mod tests {
         assert!(!diagonal_step_allowed(&grid, 0, 0, 1, 1));
         grid.insert((0, 1), Vec2::Y);
         assert!(diagonal_step_allowed(&grid, 0, 0, 1, 1));
+    }
+
+    fn open_cell() -> Cell {
+        Cell::new(Material::DeckBase, RoomId(0))
+    }
+
+    fn walled_east(cell: &mut Cell) {
+        cell.wall1 = Material::MarinePanel;
+    }
+
+
+    #[test]
+    fn cardinal_blocked_when_wall_not_open() {
+        let mut cells = HashMap::new();
+        let mut a = open_cell();
+        walled_east(&mut a);
+        cells.insert((0, 0), a);
+        cells.insert((1, 0), open_cell());
+        assert!(!step_allowed(&cells, 0, 0, 1, 0));
+    }
+
+    #[test]
+    fn cardinal_allowed_when_both_edges_open() {
+        let mut cells = HashMap::new();
+        cells.insert((0, 0), open_cell());
+        cells.insert((1, 0), open_cell());
+        assert!(step_allowed(&cells, 0, 0, 1, 0));
+    }
+
+    #[test]
+    fn cardinal_allowed_through_door() {
+        let mut cells = HashMap::new();
+        let mut a = open_cell();
+        a.wall1 = Material::Door;
+        cells.insert((0, 0), a);
+        cells.insert((1, 0), open_cell());
+        assert!(step_allowed(&cells, 0, 0, 1, 0));
+    }
+
+    #[test]
+    fn cardinal_allowed_door_against_marine_panel() {
+        let mut cells = HashMap::new();
+        let mut a = open_cell();
+        a.wall1 = Material::Door;
+        let mut b = open_cell();
+        b.wall3 = Material::MarinePanel;
+        cells.insert((0, 0), a);
+        cells.insert((1, 0), b);
+        assert!(step_allowed(&cells, 0, 0, 1, 0));
+    }
+
+    #[test]
+    fn diagonal_blocked_if_one_cardinal_wall_closed() {
+        let mut cells = HashMap::new();
+        let mut a = open_cell();
+        walled_east(&mut a);
+        cells.insert((0, 0), a);
+        cells.insert((1, 0), open_cell());
+        cells.insert((0, 1), open_cell());
+        cells.insert((1, 1), open_cell());
+        assert!(!step_allowed(&cells, 0, 0, 1, 1));
     }
 
     #[test]

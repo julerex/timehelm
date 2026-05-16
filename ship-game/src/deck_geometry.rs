@@ -249,3 +249,72 @@ pub fn merged_plan_squares_mesh_colored(
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
         .with_inserted_indices(Indices::U32(indices))
 }
+
+/// Axis-aligned wall stroke on the plan (constant `x` or constant `y`).
+#[derive(Clone, Copy, Debug)]
+pub enum PlanWallEdge {
+    Vertical {
+        x: f32,
+        y0: f32,
+        y1: f32,
+    },
+    Horizontal {
+        y: f32,
+        x0: f32,
+        x1: f32,
+    },
+}
+
+/// Black (or custom) 5 cm-style wall borders as thin axis-aligned quads slightly above the floor.
+pub fn merged_plan_wall_borders_mesh(
+    edges: &[PlanWallEdge],
+    thickness_m: f32,
+    z: f32,
+    color: [f32; 4],
+) -> Mesh {
+    let mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    if edges.is_empty() {
+        return mesh;
+    }
+    let half_t = thickness_m * 0.5;
+    let n = edges.len();
+    let mut positions = Vec::with_capacity(n * 4);
+    let mut normals = Vec::with_capacity(n * 4);
+    let mut uvs = Vec::with_capacity(n * 4);
+    let mut colors = Vec::with_capacity(n * 4);
+    let mut indices = Vec::with_capacity(n * 6);
+
+    for (i, edge) in edges.iter().enumerate() {
+        let base = (i * 4) as u32;
+        let corners: [(f32, f32); 4] = match edge {
+            PlanWallEdge::Vertical { x, y0, y1 } => [
+                (*x - half_t, *y0),
+                (*x + half_t, *y0),
+                (*x + half_t, *y1),
+                (*x - half_t, *y1),
+            ],
+            PlanWallEdge::Horizontal { y, x0, x1 } => [
+                (*x0, *y - half_t),
+                (*x1, *y - half_t),
+                (*x1, *y + half_t),
+                (*x0, *y + half_t),
+            ],
+        };
+        for (px, py) in corners {
+            positions.push([px, py, z]);
+            normals.push([0.0, 0.0, 1.0]);
+            uvs.push([0.0, 0.0]);
+            colors.push(color);
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    mesh.with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+        .with_inserted_indices(Indices::U32(indices))
+}

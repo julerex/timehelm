@@ -1,6 +1,6 @@
 //! Procedural deck grid and cell zoning shared by 3D and 2D ship views (+Y bow).
 
-use crate::cell::{edge_wall_material, Cell, Material, RoomCatalog, RoomCategory, RoomId};
+use crate::cell::{Cell, Material, RoomCatalog, RoomCategory, RoomId};
 use crate::ship_hull::{
     deck_cell_centers, deck_cell_centers_upper, deck_hull_polygon_upper,
     FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M, SHIP_LENGTH_M,
@@ -15,7 +15,7 @@ pub const NUM_DECKS: usize = 20;
 pub const CELL_SIZE_M: f32 = 1.0;
 
 /// Cell inset versus grid spacing (matches 3D slab footprint).
-pub const CELL_VISUAL_SCALE: f32 = 0.92;
+pub const CELL_VISUAL_SCALE: f32 = 1.0;
 
 #[derive(Resource, Clone)]
 pub struct DeckLayouts(pub Vec<DeckCells>);
@@ -409,8 +409,220 @@ fn zone_floor_material(zone: ZoneBucket) -> Material {
     }
 }
 
+const CABIN_WIDTH_CELLS: i32 = 3;
+const CABIN_LENGTH_CELLS: i32 = 6;
+const CORRIDOR_WIDTH_CELLS: i32 = 2;
+
+/// Cardinal neighbor offset for each wall (`wall1`..`wall4`).
+const WALL_DELTAS: [(i32, i32); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+
 fn cabin_room_key(ix: i32, iy: i32) -> (i32, i32) {
-    (ix.div_euclid(3), iy.div_euclid(8))
+    (
+        ix.div_euclid(CABIN_WIDTH_CELLS),
+        iy.div_euclid(CABIN_LENGTH_CELLS),
+    )
+}
+
+fn cabin_local(ix: i32, iy: i32) -> (i32, i32) {
+    (
+        ix.rem_euclid(CABIN_WIDTH_CELLS),
+        iy.rem_euclid(CABIN_LENGTH_CELLS),
+    )
+}
+
+fn is_cabin_interior(lx: i32, ly: i32) -> bool {
+    lx == 1 && (1..=4).contains(&ly)
+}
+
+fn room_category_at(
+    catalog: &RoomCatalog,
+    room_map: &HashMap<(i32, i32), RoomId>,
+    coord: (i32, i32),
+) -> Option<RoomCategory> {
+    room_map
+        .get(&coord)
+        .and_then(|&id| catalog.category(id))
+}
+
+fn cabin_edge_wall(
+    occupied: &HashSet<(i32, i32)>,
+    from_room: RoomId,
+    to: (i32, i32),
+    room_map: &HashMap<(i32, i32), RoomId>,
+    catalog: &RoomCatalog,
+) -> Material {
+    if !occupied.contains(&to) {
+        return Material::Hull;
+    }
+    match room_map.get(&to) {
+        Some(&r) if r == from_room => Material::Open,
+        Some(&r) if catalog.category(r) == Some(RoomCategory::Corridor) => Material::MarinePanel,
+        Some(_) => Material::MarinePanel,
+        None => Material::Open,
+    }
+}
+
+fn insert_inboard_corridor_strip(
+    corridor: &mut HashSet<(i32, i32)>,
+    occupied: &HashSet<(i32, i32)>,
+    ix_inner: i32,
+    iy_min: i32,
+    iy_max: i32,
+    starboard: bool,
+) {
+    for iy in iy_min..=iy_max {
+        for delta in 1..=CORRIDOR_WIDTH_CELLS {
+            let ix = if starboard {
+                ix_inner - delta
+            } else {
+                ix_inner + delta
+            };
+            if starboard && ix <= 0 {
+                continue;
+            }
+            if !starboard && ix >= 0 {
+                continue;
+            }
+            let c = (ix, iy);
+            if occupied.contains(&c) {
+                corridor.insert(c);
+            }
+        }
+    }
+}
+
+/// Two-cell-wide inboard walkways beside port/starboard cabin stacks (all decks).
+fn build_corridor_cells(centers: &[Vec2], occupied: &HashSet<(i32, i32)>) -> HashSet<(i32, i32)> {
+    let perimeter: HashSet<_> = occupied
+        .iter()
+        .copied()
+        .filter(|&cell| is_perimeter_cell(cell, occupied))
+        .collect();
+
+    let mut star_outer = Vec::<(i32, i32)>::new();
+    let mut port_outer = Vec::<(i32, i32)>::new();
+    let mut star_inner = Vec::<(i32, i32)>::new();
+    let mut port_inner = Vec::<(i32, i32)>::new();
+
+    for &p in centers {
+        let cell = DeckCells::cell_coords(p);
+        let zone = ZoneBucket::classify(p, perimeter.contains(&cell));
+        match zone {
+            ZoneBucket::OuterCabin => match cell.0.signum() {
+                1 => star_outer.push(cell),
+                -1 => port_outer.push(cell),
+                _ => {}
+            },
+            ZoneBucket::InnerCabin => match cell.0.signum() {
+                1 => star_inner.push(cell),
+                -1 => port_inner.push(cell),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    let mut corridor = HashSet::new();
+
+    if !star_outer.is_empty() {
+        let ix_inner = star_outer.iter().map(|t| t.0).min().unwrap();
+        let iy_min = star_outer.iter().map(|t| t.1).min().unwrap();
+        let iy_max = star_outer.iter().map(|t| t.1).max().unwrap();
+        insert_inboard_corridor_strip(&mut corridor, occupied, ix_inner, iy_min, iy_max, true);
+    }
+
+    if !port_outer.is_empty() {
+        let ix_inner = port_outer.iter().map(|t| t.0).max().unwrap();
+        let iy_min = port_outer.iter().map(|t| t.1).min().unwrap();
+        let iy_max = port_outer.iter().map(|t| t.1).max().unwrap();
+        insert_inboard_corridor_strip(&mut corridor, occupied, ix_inner, iy_min, iy_max, false);
+    }
+
+    if !star_inner.is_empty() {
+        let ix_inner = star_inner.iter().map(|t| t.0).min().unwrap();
+        let iy_min = star_inner.iter().map(|t| t.1).min().unwrap();
+        let iy_max = star_inner.iter().map(|t| t.1).max().unwrap();
+        insert_inboard_corridor_strip(&mut corridor, occupied, ix_inner, iy_min, iy_max, true);
+    }
+
+    if !port_inner.is_empty() {
+        let ix_inner = port_inner.iter().map(|t| t.0).max().unwrap();
+        let iy_min = port_inner.iter().map(|t| t.1).min().unwrap();
+        let iy_max = port_inner.iter().map(|t| t.1).max().unwrap();
+        insert_inboard_corridor_strip(&mut corridor, occupied, ix_inner, iy_min, iy_max, false);
+    }
+
+    ensure_module_corridor_access(occupied, &mut corridor);
+
+    corridor
+}
+
+/// Add 2-wide inboard strips for cabin modules that do not yet touch a corridor cell.
+fn ensure_module_corridor_access(
+    occupied: &HashSet<(i32, i32)>,
+    corridor: &mut HashSet<(i32, i32)>,
+) {
+    let mut modules: HashMap<(i32, i32), Vec<(i32, i32)>> = HashMap::new();
+    for &coord in occupied.iter() {
+        if corridor.contains(&coord) {
+            continue;
+        }
+        modules
+            .entry(cabin_room_key(coord.0, coord.1))
+            .or_default()
+            .push(coord);
+    }
+
+    for cells in modules.values() {
+        let touches_corridor = cells.iter().any(|&(ix, iy)| {
+            WALL_DELTAS
+                .iter()
+                .any(|&(dx, dy)| corridor.contains(&(ix + dx, iy + dy)))
+        });
+        if touches_corridor {
+            continue;
+        }
+
+        let starboard = cells[0].0 > 0;
+        let mut by_iy: HashMap<i32, Vec<i32>> = HashMap::new();
+        for &(ix, iy) in cells {
+            by_iy.entry(iy).or_default().push(ix);
+        }
+        let toward = if starboard { -1 } else { 1 };
+        for (iy, ixs) in by_iy {
+            let anchor_ix = if starboard {
+                *ixs.iter().min().unwrap()
+            } else {
+                *ixs.iter().max().unwrap()
+            };
+            for delta in 1..=CORRIDOR_WIDTH_CELLS {
+                let c = (anchor_ix + toward * delta, iy);
+                if occupied.contains(&c) {
+                    corridor.insert(c);
+                }
+            }
+        }
+    }
+}
+
+fn corridor_floor_material(deck_index: usize) -> Material {
+    if deck_index == DECK_SEVEN_INDEX {
+        Material::CorridorWhite
+    } else {
+        Material::Corridor
+    }
+}
+
+fn room_for_cabin(
+    catalog: &mut RoomCatalog,
+    cabin_rooms: &mut HashMap<(i32, i32), RoomId>,
+    deck: u8,
+    ix: i32,
+    iy: i32,
+) -> RoomId {
+    *cabin_rooms
+        .entry(cabin_room_key(ix, iy))
+        .or_insert_with(|| catalog.insert("Cabin", deck, RoomCategory::Cabin))
 }
 
 fn room_for_zone(
@@ -447,9 +659,9 @@ fn room_for_zone(
             } else {
                 "Outer Cabin"
             };
-            *cabin_rooms.entry(key).or_insert_with(|| {
-                catalog.insert(name, deck, RoomCategory::Cabin)
-            })
+            *cabin_rooms
+                .entry(key)
+                .or_insert_with(|| catalog.insert(name, deck, RoomCategory::Cabin))
         }
         ZoneBucket::DeckBase => *shared
             .deck_base
@@ -471,7 +683,9 @@ fn floor_material_for_cell(
     zone: ZoneBucket,
     is_perimeter: bool,
 ) -> Material {
-    if let Some(mat) = deck_seven_floor_material(deck_index, p, cell, deck_seven_cache, is_perimeter) {
+    if let Some(mat) =
+        deck_seven_floor_material(deck_index, p, cell, deck_seven_cache, is_perimeter)
+    {
         return mat;
     }
     if let Some(amenity) = amenity_overlay(deck_index, p) {
@@ -487,55 +701,275 @@ fn floor_material_for_cell(
     zone_floor_material(zone)
 }
 
-fn assign_cell_walls(deck: &mut DeckCells, step_m: f32) {
+fn assign_non_cabin_walls(deck: &mut DeckCells) {
     let occupied: HashSet<_> = deck.cells.keys().copied().collect();
-    let perimeter = deck.perimeter();
     let room_map: HashMap<(i32, i32), RoomId> =
         deck.cells.iter().map(|(&c, cell)| (c, cell.room)).collect();
     let coords: Vec<(i32, i32)> = deck.cells.keys().copied().collect();
     for (ix, iy) in coords {
-        let p = Vec2::new(ix as f32 * step_m, iy as f32 * step_m);
-        let is_perimeter = perimeter.contains(&(ix, iy));
         let from_room = room_map[&(ix, iy)];
-        let ext = exterior_wall_material(p, is_perimeter);
-        let wall1_to = (ix + 1, iy);
-        let wall2_to = (ix, iy + 1);
-        let wall3_to = (ix - 1, iy);
-        let wall4_to = (ix, iy - 1);
+        if deck.rooms.category(from_room) == Some(RoomCategory::Cabin) {
+            continue;
+        }
         let cell = deck.cells.get_mut(&(ix, iy)).expect("cell");
-        cell.wall1 = edge_wall_material(
-            &occupied,
-            (ix, iy),
-            wall1_to,
-            from_room,
-            room_map.get(&wall1_to).copied(),
-            ext,
-        );
-        cell.wall2 = edge_wall_material(
-            &occupied,
-            (ix, iy),
-            wall2_to,
-            from_room,
-            room_map.get(&wall2_to).copied(),
-            ext,
-        );
-        cell.wall3 = edge_wall_material(
-            &occupied,
-            (ix, iy),
-            wall3_to,
-            from_room,
-            room_map.get(&wall3_to).copied(),
-            ext,
-        );
-        cell.wall4 = edge_wall_material(
-            &occupied,
-            (ix, iy),
-            wall4_to,
-            from_room,
-            room_map.get(&wall4_to).copied(),
-            ext,
-        );
+        for (wi, &(dx, dy)) in WALL_DELTAS.iter().enumerate() {
+            let wall = cabin_edge_wall(
+                &occupied,
+                from_room,
+                (ix + dx, iy + dy),
+                &room_map,
+                &deck.rooms,
+            );
+            match wi {
+                0 => cell.wall1 = wall,
+                1 => cell.wall2 = wall,
+                2 => cell.wall3 = wall,
+                _ => cell.wall4 = wall,
+            }
+        }
     }
+}
+
+fn assign_cabin_module_walls(deck: &mut DeckCells) {
+    let occupied: HashSet<_> = deck.cells.keys().copied().collect();
+    let room_map: HashMap<(i32, i32), RoomId> =
+        deck.cells.iter().map(|(&c, cell)| (c, cell.room)).collect();
+    let coords: Vec<(i32, i32)> = deck.cells.keys().copied().collect();
+    for (ix, iy) in coords {
+        let from_room = room_map[&(ix, iy)];
+        if deck.rooms.category(from_room) != Some(RoomCategory::Cabin) {
+            continue;
+        }
+        let (lx, ly) = cabin_local(ix, iy);
+        let cell = deck.cells.get_mut(&(ix, iy)).expect("cell");
+        if is_cabin_interior(lx, ly) {
+            cell.wall1 = Material::Open;
+            cell.wall2 = Material::Open;
+            cell.wall3 = Material::Open;
+            cell.wall4 = Material::Open;
+        } else {
+            cell.wall1 = cabin_edge_wall(
+                &occupied,
+                from_room,
+                (ix + 1, iy),
+                &room_map,
+                &deck.rooms,
+            );
+            cell.wall2 = cabin_edge_wall(
+                &occupied,
+                from_room,
+                (ix, iy + 1),
+                &room_map,
+                &deck.rooms,
+            );
+            cell.wall3 = cabin_edge_wall(
+                &occupied,
+                from_room,
+                (ix - 1, iy),
+                &room_map,
+                &deck.rooms,
+            );
+            cell.wall4 = cabin_edge_wall(
+                &occupied,
+                from_room,
+                (ix, iy - 1),
+                &room_map,
+                &deck.rooms,
+            );
+        }
+    }
+}
+
+fn wall_material_mut(cell: &mut Cell, wall_idx: usize) -> &mut Material {
+    match wall_idx {
+        0 => &mut cell.wall1,
+        1 => &mut cell.wall2,
+        2 => &mut cell.wall3,
+        _ => &mut cell.wall4,
+    }
+}
+
+fn wall_material(cell: &Cell, wall_idx: usize) -> Material {
+    match wall_idx {
+        0 => cell.wall1,
+        1 => cell.wall2,
+        2 => cell.wall3,
+        _ => cell.wall4,
+    }
+}
+
+fn opposite_wall(wall_idx: usize) -> usize {
+    match wall_idx {
+        0 => 2,
+        1 => 3,
+        2 => 0,
+        _ => 1,
+    }
+}
+
+fn neighbor_coord((ix, iy): (i32, i32), wall_idx: usize) -> (i32, i32) {
+    let (dx, dy) = WALL_DELTAS[wall_idx];
+    (ix + dx, iy + dy)
+}
+
+fn is_corridor_cell(
+    coord: (i32, i32),
+    corridor_cells: &HashSet<(i32, i32)>,
+    catalog: &RoomCatalog,
+    room_map: &HashMap<(i32, i32), RoomId>,
+) -> bool {
+    corridor_cells.contains(&coord)
+        || room_category_at(catalog, room_map, coord) == Some(RoomCategory::Corridor)
+}
+
+fn assign_cabin_openings(deck: &mut DeckCells, corridor_cells: &HashSet<(i32, i32)>) {
+    let room_map: HashMap<(i32, i32), RoomId> =
+        deck.cells.iter().map(|(&c, cell)| (c, cell.room)).collect();
+    let occupied: HashSet<_> = deck.cells.keys().copied().collect();
+
+    let mut cabin_rooms: HashSet<RoomId> = HashSet::new();
+    for (&coord, &room) in &room_map {
+        if deck.rooms.category(room) == Some(RoomCategory::Cabin) {
+            cabin_rooms.insert(room);
+        }
+        let _ = coord;
+    }
+
+    for room in cabin_rooms {
+        let mut module_cells = Vec::new();
+        for (&coord, &r) in &room_map {
+            if r == room {
+                module_cells.push(coord);
+            }
+        }
+
+        let mut door_candidates: Vec<((i32, i32), usize)> = Vec::new();
+        let mut window_candidates: Vec<((i32, i32), usize)> = Vec::new();
+        let mut has_hull_edge = false;
+
+        for &(ix, iy) in &module_cells {
+            let (lx, ly) = cabin_local(ix, iy);
+            if is_cabin_interior(lx, ly) {
+                continue;
+            }
+            for wall_idx in 0..4 {
+                let nb = neighbor_coord((ix, iy), wall_idx);
+                let wall = wall_material(deck.cells.get(&(ix, iy)).expect("cell"), wall_idx);
+                if wall == Material::MarinePanel
+                    && is_corridor_cell(nb, corridor_cells, &deck.rooms, &room_map)
+                {
+                    door_candidates.push(((ix, iy), wall_idx));
+                }
+                if wall == Material::Hull && !occupied.contains(&nb) {
+                    has_hull_edge = true;
+                    window_candidates.push(((ix, iy), wall_idx));
+                }
+            }
+        }
+
+        let door = pick_door(&door_candidates, &module_cells);
+        let window = if has_hull_edge {
+            pick_window(&window_candidates, door)
+        } else {
+            None
+        };
+
+        if let Some((coord, wall_idx)) = door {
+            let cell = deck.cells.get_mut(&coord).expect("cell");
+            let wall = wall_material_mut(cell, wall_idx);
+            if *wall != Material::Door {
+                *wall = Material::Door;
+            }
+        }
+        if let Some((coord, wall_idx)) = window {
+            *wall_material_mut(deck.cells.get_mut(&coord).expect("cell"), wall_idx) =
+                Material::Window;
+        }
+    }
+}
+
+fn pick_door(candidates: &[((i32, i32), usize)], module_cells: &[(i32, i32)]) -> Option<((i32, i32), usize)> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut best = candidates[0];
+    let mut best_score = door_candidate_score(best, module_cells);
+    for &cand in &candidates[1..] {
+        let score = door_candidate_score(cand, module_cells);
+        if score > best_score {
+            best = cand;
+            best_score = score;
+        }
+    }
+    Some(best)
+}
+
+fn door_candidate_score(((ix, iy), wall_idx): ((i32, i32), usize), module_cells: &[(i32, i32)]) -> i32 {
+    let (lx, ly) = cabin_local(ix, iy);
+    let mut score = 0;
+    // Prefer middle of the corridor-facing edge.
+    if lx == 1 || ly == 3 {
+        score += 10;
+    }
+    // Prefer edges with more corridor neighbors along the face.
+    let (dx, _dy) = WALL_DELTAS[wall_idx];
+    let along = if dx != 0 { (0, 1) } else { (1, 0) };
+    for &(mx, my) in module_cells {
+        if mx != ix && my != iy {
+            continue;
+        }
+        if (mx - ix, my - iy) == along || (mx - ix, my - iy) == (-along.0, -along.1) {
+            score += 1;
+        }
+    }
+    // Tie-break: closer to ship center.
+    score - ix.unsigned_abs() as i32
+}
+
+fn is_opposite_cabin_end((ix1, iy1): (i32, i32), (ix2, iy2): (i32, i32)) -> bool {
+    let (lx1, ly1) = cabin_local(ix1, iy1);
+    let (lx2, ly2) = cabin_local(ix2, iy2);
+    lx1 == 1
+        && lx2 == 1
+        && ((ly1 <= 1 && ly2 >= 4) || (ly1 >= 4 && ly2 <= 1))
+}
+
+fn pick_window(
+    candidates: &[((i32, i32), usize)],
+    door: Option<((i32, i32), usize)>,
+) -> Option<((i32, i32), usize)> {
+    let filtered: Vec<_> = candidates
+        .iter()
+        .copied()
+        .filter(|&(coord, _)| {
+            door.map(|(door_coord, _)| !is_opposite_cabin_end(door_coord, coord))
+                .unwrap_or(true)
+        })
+        .collect();
+    if filtered.is_empty() {
+        return None;
+    }
+    let pool = &filtered;
+    let mut best = pool[0];
+    let mut best_score = window_candidate_score(best);
+    for &cand in &pool[1..] {
+        let score = window_candidate_score(cand);
+        if score > best_score {
+            best = cand;
+            best_score = score;
+        }
+    }
+    Some(best)
+}
+
+fn window_candidate_score(((ix, iy), _wall_idx): ((i32, i32), usize)) -> i32 {
+    let (lx, ly) = cabin_local(ix, iy);
+    let mut score = ix.unsigned_abs() as i32;
+    if lx == 1 || ly == 3 {
+        score += 10;
+    }
+    let _ = ly;
+    score
 }
 
 /// All deck occupancy grids at `step_m` cell spacing.
@@ -546,53 +980,48 @@ pub fn deck_cell_layouts(step_m: f32) -> Vec<DeckCells> {
             .into_iter()
             .filter(|p| profile_allows_cell(deck_i, *p))
             .collect::<Vec<_>>();
-        let occupied: HashSet<(i32, i32)> = centers
+        let occupied: HashSet<_> = centers
             .iter()
-            .map(|c| DeckCells::cell_coords(*c))
+            .map(|&p| DeckCells::cell_coords(p))
             .collect();
-        let perimeter: HashSet<_> = occupied
-            .iter()
-            .copied()
-            .filter(|cell| is_perimeter_cell(*cell, &occupied))
-            .collect();
-        let deck_seven_cache = if deck_i == DECK_SEVEN_INDEX {
-            build_deck_seven_cache_inner(&centers, &perimeter, &occupied)
-        } else {
-            None
-        };
+        let corridor_cells = build_corridor_cells(&centers, &occupied);
+
         let mut rooms = RoomCatalog::default();
         let mut cabin_rooms = HashMap::new();
-        let mut shared_rooms = SharedDeckRooms {
-            exterior: None,
-            public_deck: None,
-            deck_base: None,
-        };
+        let corridor_room = rooms.insert("Corridor", deck_i as u8, RoomCategory::Corridor);
+        let corridor_floor = corridor_floor_material(deck_i);
+
         let mut cells = HashMap::new();
-        let cache_ref = deck_seven_cache.as_ref();
         for &p in &centers {
-            let cell_coord = DeckCells::cell_coords(p);
-            let is_perimeter = perimeter.contains(&cell_coord);
-            let zone = ZoneBucket::classify(p, is_perimeter);
-            let amenity = amenity_overlay(deck_i, p);
-            let room = room_for_zone(
-                &mut rooms,
-                &mut cabin_rooms,
-                &mut shared_rooms,
-                deck_i as u8,
-                zone,
-                cell_coord.0,
-                cell_coord.1,
-                amenity,
-            );
-            let floor = floor_material_for_cell(deck_i, p, cell_coord, cache_ref, zone, is_perimeter);
-            cells.insert(cell_coord, Cell::new(floor, room));
+            let coord = DeckCells::cell_coords(p);
+            if corridor_cells.contains(&coord) {
+                cells.insert(coord, Cell::new(corridor_floor, corridor_room));
+            } else {
+                let room = room_for_cabin(&mut rooms, &mut cabin_rooms, deck_i as u8, coord.0, coord.1);
+                cells.insert(coord, Cell::new(Material::CabinPartition, room));
+            }
         }
+
+        let deck_seven_cache = if corridor_cells.is_empty() {
+            None
+        } else {
+            Some(DeckSevenCache {
+                corridor: corridor_cells.clone(),
+                star_ix_inner: 0,
+                star_ix_outer: 0,
+                port_ix_inner: 0,
+                port_ix_outer: 0,
+            })
+        };
+
         let mut deck = DeckCells {
             cells,
             rooms,
             deck_seven_cache,
         };
-        assign_cell_walls(&mut deck, step_m);
+        assign_cabin_module_walls(&mut deck);
+        assign_non_cabin_walls(&mut deck);
+        assign_cabin_openings(&mut deck, &corridor_cells);
         out.push(deck);
     }
     out
@@ -933,5 +1362,285 @@ mod layout_tests {
         assert!(!deck.cells.is_empty());
         let cell = deck.cells.values().next().expect("cell");
         assert_ne!(cell.floor, Material::Open);
+    }
+
+    #[test]
+    fn deck_five_has_no_lattice_holes_anywhere() {
+        let deck = &deck_cell_layouts(CELL_SIZE_M)[4];
+        let occupied: std::collections::HashSet<_> = deck.cells.keys().copied().collect();
+        for &(ix, iy) in &occupied {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let nb = (ix + dx, iy + dy);
+                if occupied.contains(&(ix + 2 * dx, iy + 2 * dy)) && !occupied.contains(&nb) {
+                    panic!(
+                        "deck 5 lattice hole: {nb:?} between ({ix},{iy}) and {:?}",
+                        (ix + 2 * dx, iy + 2 * dy)
+                    );
+                }
+            }
+        }
+    }
+
+    fn all_walls_open(cell: &Cell) -> bool {
+        [cell.wall1, cell.wall2, cell.wall3, cell.wall4]
+            .iter()
+            .all(|&w| w == Material::Open)
+    }
+
+    fn is_full_cabin_module(deck: &DeckCells, ox: i32, oy: i32) -> Option<RoomId> {
+        let anchor = deck.cells.get(&(ox, oy))?;
+        let room = anchor.room;
+        for lx in 0..CABIN_WIDTH_CELLS {
+            for ly in 0..CABIN_LENGTH_CELLS {
+                let coord = (ox + lx, oy + ly);
+                let cell = deck.cells.get(&coord)?;
+                if cell.room != room {
+                    return None;
+                }
+            }
+        }
+        Some(room)
+    }
+
+    fn room_category(deck: &DeckCells, room: RoomId) -> RoomCategory {
+        deck.rooms.category(room).expect("room")
+    }
+
+    fn cell_has_door(cell: &Cell) -> Option<usize> {
+        [cell.wall1, cell.wall2, cell.wall3, cell.wall4]
+            .iter()
+            .position(|&w| w == Material::Door)
+    }
+
+    fn cell_has_window(cell: &Cell) -> Option<usize> {
+        [cell.wall1, cell.wall2, cell.wall3, cell.wall4]
+            .iter()
+            .position(|&w| w == Material::Window)
+    }
+
+    fn neighbor_is_corridor(deck: &DeckCells, coord: (i32, i32), wall_idx: usize) -> bool {
+        let nb = neighbor_coord(coord, wall_idx);
+        deck.cells.get(&nb).is_some_and(|c| {
+            room_category(deck, c.room) == RoomCategory::Corridor
+        })
+    }
+
+    fn module_has_hull_edge(deck: &DeckCells, ox: i32, oy: i32) -> bool {
+        let occupied: HashSet<_> = deck.cells.keys().copied().collect();
+        for lx in 0..CABIN_WIDTH_CELLS {
+            for ly in 0..CABIN_LENGTH_CELLS {
+                let (ix, iy) = (ox + lx, oy + ly);
+                for wall_idx in 0..4 {
+                    let nb = neighbor_coord((ix, iy), wall_idx);
+                    if !occupied.contains(&nb) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn deck_five_has_corridor_rooms() {
+        let deck = &deck_cell_layouts(CELL_SIZE_M)[4];
+        let corridor_cells: Vec<_> = deck
+            .cells
+            .iter()
+            .filter(|(_, c)| room_category(deck, c.room) == RoomCategory::Corridor)
+            .collect();
+        assert!(
+            !corridor_cells.is_empty(),
+            "expected corridor cells on deck 5"
+        );
+        for (_, cell) in &corridor_cells {
+            assert_eq!(room_category(deck, cell.room), RoomCategory::Corridor);
+        }
+    }
+
+    #[test]
+    fn corridor_is_two_tiles_wide_where_geometry_allows() {
+        let centers: Vec<_> = fallback_deck_cell_centers(4, CELL_SIZE_M)
+            .into_iter()
+            .filter(|p| profile_allows_cell(4, *p))
+            .collect();
+        let occupied: HashSet<_> = centers.iter().map(|p| DeckCells::cell_coords(*p)).collect();
+        let corridor = build_corridor_cells(&centers, &occupied);
+        assert!(!corridor.is_empty());
+
+        let mut star_by_iy: HashMap<i32, Vec<i32>> = HashMap::new();
+        let mut port_by_iy: HashMap<i32, Vec<i32>> = HashMap::new();
+        for &(ix, iy) in &corridor {
+            if ix > 0 {
+                star_by_iy.entry(iy).or_default().push(ix);
+            } else if ix < 0 {
+                port_by_iy.entry(iy).or_default().push(ix);
+            }
+        }
+        for iy_map in [&star_by_iy, &port_by_iy] {
+            for cols in iy_map.values() {
+                if cols.len() >= 2 {
+                    let mut sorted = cols.clone();
+                    sorted.sort_unstable();
+                    let width = sorted.last().unwrap() - sorted.first().unwrap() + 1;
+                    assert!(
+                        width >= 2,
+                        "expected at least two corridor columns per side, got {sorted:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn module_borders_corridor(deck: &DeckCells, ox: i32, oy: i32) -> bool {
+        for lx in 0..CABIN_WIDTH_CELLS {
+            for ly in 0..CABIN_LENGTH_CELLS {
+                let coord = (ox + lx, oy + ly);
+                for wall_idx in 0..4 {
+                    if neighbor_is_corridor(deck, coord, wall_idx) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn cabin_room_has_door(deck: &DeckCells, room: RoomId) -> bool {
+        deck.cells.values().any(|cell| {
+            cell.room == room && cell_has_door(cell).is_some()
+        })
+    }
+
+    #[test]
+    fn every_cabin_room_has_door_to_corridor() {
+        let deck = &deck_cell_layouts(CELL_SIZE_M)[4];
+        let mut cabin_rooms = HashSet::new();
+        for cell in deck.cells.values() {
+            if room_category(deck, cell.room) == RoomCategory::Cabin {
+                cabin_rooms.insert(cell.room);
+            }
+        }
+        for room in cabin_rooms {
+            assert!(
+                cabin_room_has_door(deck, room),
+                "cabin room {:?} should have a door",
+                room
+            );
+        }
+    }
+
+    fn room_has_hull_edge(deck: &DeckCells, room: RoomId) -> bool {
+        let occupied: HashSet<_> = deck.cells.keys().copied().collect();
+        deck.cells.iter().any(|(&(ix, iy), cell)| {
+            if cell.room != room {
+                return false;
+            }
+            WALL_DELTAS.iter().any(|&(dx, dy)| !occupied.contains(&(ix + dx, iy + dy)))
+        })
+    }
+
+    fn room_window_and_door(deck: &DeckCells, room: RoomId) -> (Option<((i32, i32), usize)>, Option<((i32, i32), usize)>) {
+        let mut door = None;
+        let mut window = None;
+        for (&coord, cell) in &deck.cells {
+            if cell.room != room {
+                continue;
+            }
+            if let Some(wi) = cell_has_door(cell) {
+                door = Some((coord, wi));
+            }
+            if let Some(wi) = cell_has_window(cell) {
+                window = Some((coord, wi));
+            }
+        }
+        (door, window)
+    }
+
+    #[test]
+    fn full_cabin_module_has_perimeter_walls_and_door_window() {
+        let deck = &deck_cell_layouts(CELL_SIZE_M)[4];
+        let mut found_full = false;
+        for &(ix, iy) in deck.cells.keys() {
+            let ox = ix.div_euclid(CABIN_WIDTH_CELLS) * CABIN_WIDTH_CELLS;
+            let oy = iy.div_euclid(CABIN_LENGTH_CELLS) * CABIN_LENGTH_CELLS;
+            if (ix, iy) != (ox, oy) {
+                continue;
+            }
+            let Some(room) = is_full_cabin_module(deck, ox, oy) else {
+                continue;
+            };
+            if room_category(deck, room) != RoomCategory::Cabin {
+                continue;
+            }
+            if !module_borders_corridor(deck, ox, oy) {
+                continue;
+            }
+            found_full = true;
+
+            let mut interior_open = 0u32;
+            let mut perimeter_with_wall = 0u32;
+            for lx in 0..CABIN_WIDTH_CELLS {
+                for ly in 0..CABIN_LENGTH_CELLS {
+                    let cell = deck.cells.get(&(ox + lx, oy + ly)).expect("cell");
+                    if is_cabin_interior(lx, ly) {
+                        assert!(
+                            all_walls_open(cell),
+                            "interior ({lx},{ly}) should have all Open walls"
+                        );
+                        interior_open += 1;
+                    } else if !all_walls_open(cell) {
+                        perimeter_with_wall += 1;
+                    }
+                }
+            }
+            assert_eq!(interior_open, 4, "expected four interior cells");
+            assert_eq!(perimeter_with_wall, 14, "expected fourteen perimeter cells with walls");
+        }
+        assert!(
+            found_full,
+            "expected at least one full 3×6 cabin module bordering corridor on deck 5"
+        );
+
+        let mut found_exterior = false;
+        let mut found_interior = false;
+        let mut cabin_rooms = HashSet::new();
+        for cell in deck.cells.values() {
+            if room_category(deck, cell.room) == RoomCategory::Cabin {
+                cabin_rooms.insert(cell.room);
+            }
+        }
+        let occupied: HashSet<_> = deck.cells.keys().copied().collect();
+        for room in cabin_rooms {
+            let exterior = room_has_hull_edge(deck, room);
+            let (door, window) = room_window_and_door(deck, room);
+            let (door_coord, door_wall) = door.expect("cabin room should have a door");
+            assert!(
+                neighbor_is_corridor(deck, door_coord, door_wall),
+                "door must face a corridor cell"
+            );
+            if exterior {
+                found_exterior = true;
+                let (window_coord, window_wall) =
+                    window.expect("exterior cabin room should have a window");
+                let nb = neighbor_coord(window_coord, window_wall);
+                assert!(
+                    !occupied.contains(&nb),
+                    "window must be on hull perimeter"
+                );
+                assert!(
+                    !is_opposite_cabin_end(door_coord, window_coord),
+                    "window must not be on the cabin end opposite the door"
+                );
+            } else {
+                found_interior = true;
+                assert!(
+                    window.is_none(),
+                    "interior cabin room should not have a window"
+                );
+            }
+        }
+        assert!(found_exterior, "expected at least one exterior cabin room on deck 5");
+        assert!(found_interior, "expected at least one interior cabin room on deck 5");
     }
 }

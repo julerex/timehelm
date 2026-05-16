@@ -12,8 +12,8 @@
 
 use crate::cell::Material as CellMaterial;
 use crate::deck_layout::{
-    deck_cell_layouts, deck_sim_footprint_polygon, DeckLayouts, NUM_DECKS, CELL_SIZE_M,
-    CELL_VISUAL_SCALE,
+    deck_cell_layouts, deck_sim_footprint_polygon, DeckLayouts, CELL_SIZE_M, CELL_VISUAL_SCALE,
+    NUM_DECKS,
 };
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{asset_plugin, primary_window};
@@ -323,6 +323,8 @@ fn material_from_idx(i: usize) -> CellMaterial {
         13 => CellMaterial::CabinStripeB,
         14 => CellMaterial::CorridorWhite,
         15 => CellMaterial::BowAccent,
+        16 => CellMaterial::MarinePanel,
+        17 => CellMaterial::Door,
         _ => CellMaterial::DeckBase,
     }
 }

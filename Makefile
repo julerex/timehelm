@@ -1,5 +1,8 @@
-.PHONY: dev build deploy install lint lint-server fmt build-ship run-ship build-ship-native run-ship-native run-ship-native-gl run-ship-native-vulkan \
+.PHONY: dev build deploy install lint lint-server fmt test build-ship run-ship build-ship-native run-ship-native run-ship-native-gl run-ship-native-vulkan \
 	gh-check ci ci-list ci-here ci-watch ci-watch-here ci-view ci-log ci-status
+
+# Cursor sets ARGV0 to its binary path, which breaks cargo's proxy detection.
+CARGO = env -u ARGV0 cargo
 
 # GitHub Actions (requires: gh CLI authenticated via `gh auth login`)
 WORKFLOW ?= deploy.yml
@@ -47,38 +50,43 @@ build-ship:
 # Run the ship game locally. Builds WASM, then starts Rust server. Open in browser:
 #   http://localhost:8080/
 run-ship: build-ship
-	cd server && cargo run
+	cd server && $(CARGO) run
 
 build-ship-native:
-	cd ship-game && cargo build
+	cd ship-game && $(CARGO) build
 
 run-ship-native:
-	cd ship-game && WGPU_BACKEND=$(WGPU_BACKEND) cargo run
+	cd ship-game && WGPU_BACKEND=$(WGPU_BACKEND) $(CARGO) run
 
 run-ship-native-gl:
-	cd ship-game && WGPU_BACKEND=gl cargo run
+	cd ship-game && WGPU_BACKEND=gl $(CARGO) run
 
 run-ship-native-vulkan:
-	cd ship-game && WGPU_BACKEND=vulkan cargo run
+	cd ship-game && WGPU_BACKEND=vulkan $(CARGO) run
 
 install:
-	cd server && cargo build
+	cd server && $(CARGO) build
 
 lint: lint-server
 
 lint-server:
-	cd server && cargo fmt --check
-	cd server && cargo clippy -- -D warnings
+	cd server && $(CARGO) fmt --check
+	cd server && $(CARGO) clippy -- -D warnings
 
 fmt:
-	cd server && cargo fmt
+	cd server && $(CARGO) fmt
+	cd ship-game && $(CARGO) fmt
+
+test:
+	cd server && $(CARGO) test
+	cd ship-game && $(CARGO) test
 
 dev-server:
-	cd server && cargo run
+	cd server && $(CARGO) run
 
 build:
 	./scripts/build-ship.sh
-	cd server && cargo build --release
+	cd server && $(CARGO) build --release
 
 deploy:
 	./build.sh
