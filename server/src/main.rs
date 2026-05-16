@@ -182,9 +182,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up HTTP routes
     let app = Router::new()
-        // Ship game: canonical URLs with trailing slash (static `2d/index.html`, `3d/index.html`)
+        // Ship game: canonical URLs with trailing slash (static `seacells/index.html`, `3d/index.html`)
         .route("/", get(|| async { Redirect::temporary("/3d/") }))
-        .route("/2d", get(|| async { Redirect::permanent("/2d/") }))
+        .route(
+            "/seacells",
+            get(|| async { Redirect::permanent("/seacells/") }),
+        )
+        .route("/2d", get(|| async { Redirect::permanent("/seacells/") }))
         .route("/3d", get(|| async { Redirect::permanent("/3d/") }))
         // WebSocket endpoint for game client connections
         .route("/ws", get(websocket_handler))
@@ -193,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
             "/favicon.ico",
             get(|| async { Redirect::temporary("/favicon.svg") }),
         )
-        // Serve static files from client/public (/3d/, /2d/, /ship/, etc.)
+        // Serve static files from client/public (/3d/, /seacells/, /ship/, etc.)
         .fallback_service(ServeDir::new(static_dir()).append_index_html_on_directories(true))
         // Enable CORS for all origins (development)
         .layer(CorsLayer::permissive())

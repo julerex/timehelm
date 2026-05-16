@@ -14,13 +14,13 @@ canvas?.addEventListener('keydown', (event) => {
     }
 }, { passive: false });
 
-/** Resolves run mode from URL path: `/2d` or `/3d` (with optional trailing slash). */
+/** Resolves run mode from URL path: `/seacells` or `/3d` (with optional trailing slash). */
 function modeFromPathname() {
     let path = window.location.pathname;
     while (path.length > 1 && path.endsWith('/')) {
         path = path.slice(0, -1);
     }
-    if (path === '/2d') {
+    if (path === '/seacells') {
         return 1;
     }
     if (path === '/3d') {
@@ -63,5 +63,5 @@ if (mode !== null) {
         }
     });
 } else {
-    console.error('Time Helm: open /2d/ or /3d/');
+    console.error('Time Helm: open /seacells/ or /3d/');
 }

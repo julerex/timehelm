@@ -10,9 +10,10 @@
 //! fine cuboid tiles; smaller buckets use **automatic GPU instancing** (shared mesh/material per tile),
 //! larger buckets stay **CPU-merged**. [`crate::deck_geometry`] holds mesh helpers.
 
+use crate::cell::Material as CellMaterial;
 use crate::deck_layout::{
-    deck_layouts, deck_seven_paint_tone, deck_sim_footprint_polygon, DeckLayouts, DeckSevenTone,
-    DeckTileBucket, DECK_SEVEN_INDEX, NUM_DECKS, TILE_CELL_M, TILE_VISUAL_SCALE,
+    deck_cell_layouts, deck_sim_footprint_polygon, DeckLayouts, NUM_DECKS, CELL_SIZE_M,
+    CELL_VISUAL_SCALE,
 };
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{asset_plugin, primary_window};
@@ -28,17 +29,6 @@ use std::collections::HashSet;
 
 const SIM_DECK_INDEX: usize = 4; // Deck 5 (human-facing numbering)
 
-const DECK_SEVEN_BUCKET_COUNT: usize = 5;
-
-fn deck_seven_bucket_index(tone: DeckSevenTone) -> usize {
-    match tone {
-        DeckSevenTone::Corridor => 0,
-        DeckSevenTone::CabinA => 1,
-        DeckSevenTone::CabinB => 2,
-        DeckSevenTone::BowMagentaLight => 3,
-        DeckSevenTone::BowMagentaDeep => 4,
-    }
-}
 const SIM_NPC_SCALE: f32 = 0.6;
 const SIM_NPC_SPEED_M_S: f32 = 2.8;
 const SIM_TARGET_REACHED_M: f32 = 0.45;
@@ -117,8 +107,8 @@ const CAM_PITCH_MAX: f32 = 1.42;
 const LOD_COARSE_BEYOND_M: f32 = 820.0;
 /// Inside this distance (m) we prefer fine cuboid tiles (merged or batched instances).
 const LOD_FINE_WITHIN_M: f32 = 680.0;
-/// Tile counts at or below this use per-tile entities (Bevy automatic GPU instancing / batching).
-const DECK_TILE_AUTOMATIC_INSTANCE_CAP: usize = 1600;
+/// Cell counts at or below this use per-cell entities (Bevy automatic GPU instancing / batching).
+const DECK_CELL_AUTOMATIC_INSTANCE_CAP: usize = 1600;
 const VERSION_NUMBER: i64 = 128;
 
 const CLIP_SHADER_FORWARD: &str = concat!(
@@ -315,8 +305,30 @@ fn camera_rig_transform(rig: &CameraRig) -> Transform {
 }
 
 /// Axis-aligned deck slab (XY footprint, +Z up), vertex colours for the clip shader.
-fn deck_tile_cuboid_mesh(cell_m: f32, thickness_m: f32, color: Color) -> Mesh {
-    let s = cell_m * TILE_VISUAL_SCALE;
+fn material_from_idx(i: usize) -> CellMaterial {
+    match i {
+        0 => CellMaterial::Open,
+        1 => CellMaterial::Hull,
+        2 => CellMaterial::Window,
+        3 => CellMaterial::CabinPartition,
+        4 => CellMaterial::Corridor,
+        5 => CellMaterial::PublicShell,
+        6 => CellMaterial::DeckBase,
+        7 => CellMaterial::Theatre,
+        8 => CellMaterial::Dining,
+        9 => CellMaterial::Buffet,
+        10 => CellMaterial::Pool,
+        11 => CellMaterial::Casino,
+        12 => CellMaterial::CabinStripeA,
+        13 => CellMaterial::CabinStripeB,
+        14 => CellMaterial::CorridorWhite,
+        15 => CellMaterial::BowAccent,
+        _ => CellMaterial::DeckBase,
+    }
+}
+
+fn deck_cell_cuboid_mesh(cell_m: f32, thickness_m: f32, color: Color) -> Mesh {
+    let s = cell_m * CELL_VISUAL_SCALE;
     let mut mesh = Mesh::from(Cuboid::new(s, s, thickness_m));
     let n = mesh.count_vertices();
     let c: LinearRgba = color.into();
@@ -374,34 +386,22 @@ fn setup(
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
     ));
 
-    let layouts = deck_layouts(TILE_CELL_M);
+    let layouts = deck_cell_layouts(CELL_SIZE_M);
     commands.insert_resource(DeckLayouts(layouts.clone()));
 
-    let edge_deck = Color::srgb(0.38, 0.3, 0.24);
-    let window_color = Color::srgb(0.42, 0.62, 0.9);
-    let outer_cabin = Color::srgb(0.95, 0.82, 0.35);
-    let inner_cabin = Color::srgb(0.92, 0.55, 0.72);
-    let public_deck = Color::srgb(0.78, 0.86, 0.92);
-
-    let proto_hull = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, edge_deck);
-    let proto_window = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, window_color);
-    let proto_outer = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, outer_cabin);
-    let proto_inner = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, inner_cabin);
-    let proto_public = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, public_deck);
-
-    let hull_mesh_h = meshes.add(proto_hull.clone());
-    let window_mesh_h = meshes.add(proto_window.clone());
-    let outer_mesh_h = meshes.add(proto_outer.clone());
-    let inner_mesh_h = meshes.add(proto_inner.clone());
-    let public_mesh_h = meshes.add(proto_public.clone());
+    let material_protos: [Mesh; CellMaterial::COUNT] = std::array::from_fn(|i| {
+        deck_cell_cuboid_mesh(
+            CELL_SIZE_M,
+            DECK_SLAB_THICKNESS_M,
+            material_from_idx(i).color(),
+        )
+    });
+    let material_mesh_handles: [Handle<Mesh>; CellMaterial::COUNT] =
+        std::array::from_fn(|i| meshes.add(material_protos[i].clone()));
 
     let slab_local_z = DECK_SLAB_THICKNESS_M * 0.5;
 
     for (deck_i, layout) in layouts.iter().enumerate() {
-        let hue = 0.52 + (deck_i as f32 * 0.012);
-        let base_tint = Color::hsl(hue * 360.0 % 360.0, 0.28, 0.42);
-        let proto_base = deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, base_tint);
-
         let deck_z = deck_i as f32 * DECK_FLOOR_SPACING_M;
 
         let hull_outline = deck_sim_footprint_polygon(deck_i);
@@ -421,114 +421,30 @@ fn setup(
             DeckLodCoarseTier(deck_i),
         ));
 
-        let mut buckets: [Vec<Vec3>; DeckTileBucket::COUNT] = std::array::from_fn(|_| Vec::new());
-        let mut deck_seven_buckets: [Vec<Vec3>; DECK_SEVEN_BUCKET_COUNT] =
-            std::array::from_fn(|_| Vec::new());
+        let mut buckets: [Vec<Vec3>; CellMaterial::COUNT] = std::array::from_fn(|_| Vec::new());
 
-        let deck7_bundle = if deck_i == DECK_SEVEN_INDEX {
-            let tone_meshes = std::array::from_fn::<_, DECK_SEVEN_BUCKET_COUNT, _>(|i| {
-                let tone = [
-                    DeckSevenTone::Corridor,
-                    DeckSevenTone::CabinA,
-                    DeckSevenTone::CabinB,
-                    DeckSevenTone::BowMagentaLight,
-                    DeckSevenTone::BowMagentaDeep,
-                ][i];
-                deck_tile_cuboid_mesh(TILE_CELL_M, DECK_SLAB_THICKNESS_M, tone.color())
-            });
-            let handles = std::array::from_fn::<_, DECK_SEVEN_BUCKET_COUNT, _>(|i| {
-                meshes.add(tone_meshes[i].clone())
-            });
-            Some((tone_meshes, handles))
-        } else {
-            None
-        };
-
-        for c in &layout.centers {
-            let cell = (
-                (c.x / TILE_CELL_M).round() as i32,
-                (c.y / TILE_CELL_M).round() as i32,
+        for (&(ix, iy), cell) in &layout.cells {
+            if cell.floor == CellMaterial::Open {
+                continue;
+            }
+            let p = Vec3::new(
+                ix as f32 * CELL_SIZE_M,
+                iy as f32 * CELL_SIZE_M,
+                slab_local_z,
             );
-            if deck_i == DECK_SEVEN_INDEX {
-                if let Some(tone) = deck_seven_paint_tone(deck_i, *c, cell, layout) {
-                    let ti = deck_seven_bucket_index(tone);
-                    deck_seven_buckets[ti].push(Vec3::new(c.x, c.y, slab_local_z));
-                    continue;
-                }
-            }
-            let bucket = DeckTileBucket::classify(*c, layout.perimeter.contains(&cell));
-            buckets[bucket.idx()].push(Vec3::new(c.x, c.y, slab_local_z));
+            buckets[cell.floor.idx()].push(p);
         }
 
-        if let Some((ref protos_d7, d7_handles)) = deck7_bundle {
-            for ti in 0..DECK_SEVEN_BUCKET_COUNT {
-                let bucket_centers = std::mem::take(&mut deck_seven_buckets[ti]);
-                if bucket_centers.is_empty() {
-                    continue;
-                }
-                let proto = &protos_d7[ti];
-                let mesh_h = d7_handles[ti].clone();
-                if bucket_centers.len() <= DECK_TILE_AUTOMATIC_INSTANCE_CAP {
-                    let tiles = bucket_centers;
-                    let clip_inst = clip_handle.clone();
-                    commands.spawn_batch(tiles.into_iter().map(move |t| {
-                        (
-                            Mesh3d(mesh_h.clone()),
-                            MeshMaterial3d(clip_inst.clone()),
-                            Transform::from_xyz(t.x, t.y, deck_z + t.z),
-                            Visibility::Hidden,
-                            DeckLayer(deck_i),
-                            DeckLodFineTier(deck_i),
-                        )
-                    }));
-                } else if let Some(merged) =
-                    crate::deck_geometry::accumulate_translated_tile_instances(
-                        proto,
-                        &bucket_centers,
-                    )
-                {
-                    let handle = meshes.add(merged);
-                    commands.spawn((
-                        Mesh3d(handle),
-                        MeshMaterial3d(clip_handle.clone()),
-                        Transform::from_xyz(0.0, 0.0, deck_z),
-                        Visibility::Hidden,
-                        DeckLayer(deck_i),
-                        DeckLodFineTier(deck_i),
-                    ));
-                }
-            }
-        }
-
-        let protos: [&Mesh; DeckTileBucket::COUNT] = [
-            &proto_hull,
-            &proto_window,
-            &proto_inner,
-            &proto_outer,
-            &proto_public,
-            &proto_base,
-        ];
-
-        let base_mesh_h = meshes.add(proto_base.clone());
-        let bucket_mesh_handles: [Handle<Mesh>; DeckTileBucket::COUNT] = [
-            hull_mesh_h.clone(),
-            window_mesh_h.clone(),
-            inner_mesh_h.clone(),
-            outer_mesh_h.clone(),
-            public_mesh_h.clone(),
-            base_mesh_h,
-        ];
-
-        for (bi, bucket_centers) in buckets.into_iter().enumerate() {
+        for (mi, bucket_centers) in buckets.into_iter().enumerate() {
             if bucket_centers.is_empty() {
                 continue;
             }
-            let proto = protos[bi];
-            let mesh_h = bucket_mesh_handles[bi].clone();
-            if bucket_centers.len() <= DECK_TILE_AUTOMATIC_INSTANCE_CAP {
-                let tiles = bucket_centers.to_vec();
+            let proto = &material_protos[mi];
+            let mesh_h = material_mesh_handles[mi].clone();
+            if bucket_centers.len() <= DECK_CELL_AUTOMATIC_INSTANCE_CAP {
+                let cells = bucket_centers;
                 let clip_inst = clip_handle.clone();
-                commands.spawn_batch(tiles.into_iter().map(move |t| {
+                commands.spawn_batch(cells.into_iter().map(move |t| {
                     (
                         Mesh3d(mesh_h.clone()),
                         MeshMaterial3d(clip_inst.clone()),
@@ -539,7 +455,7 @@ fn setup(
                     )
                 }));
             } else if let Some(merged) =
-                crate::deck_geometry::accumulate_translated_tile_instances(proto, &bucket_centers)
+                crate::deck_geometry::accumulate_translated_cell_instances(proto, &bucket_centers)
             {
                 let handle = meshes.add(merged);
                 commands.spawn((
@@ -580,8 +496,7 @@ fn spawn_sim_npcs(
 ) {
     let deck_five_z = SIM_DECK_INDEX as f32 * DECK_FLOOR_SPACING_M + DECK_SLAB_THICKNESS_M;
     let walk_points: Vec<Vec3> = layouts.0[SIM_DECK_INDEX]
-        .centers
-        .clone()
+        .centers(CELL_SIZE_M)
         .into_iter()
         .map(|p| Vec3::new(p.x, p.y, deck_five_z))
         .collect();

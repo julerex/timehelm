@@ -4,10 +4,10 @@
 //! All 20 decks are baked to one vertex-coloured `Mesh2d` each at startup and share a single
 //! white `ColorMaterial`; deck switching just toggles `Visibility` on the relevant entity.
 
+use crate::cell::{diagonal_step_allowed, AgentId, CELL_NEIGHBOUR_OFFSETS};
 use crate::deck_geometry::merged_plan_squares_mesh_colored;
 use crate::deck_layout::{
-    amenity_overlay, deck_layouts, deck_seven_paint_tone, AmenityKind, DeckLayouts, DeckTileBucket,
-    DeckTiles, NUM_DECKS, TILE_CELL_M, TILE_VISUAL_SCALE,
+    deck_cell_layouts, DeckCells, DeckLayouts, NUM_DECKS, CELL_SIZE_M, CELL_VISUAL_SCALE,
 };
 use crate::shared::{asset_plugin, primary_window};
 use crate::ship_hull::SHIP_LENGTH_M;
@@ -19,21 +19,16 @@ use std::f32::consts::FRAC_PI_2;
 const SIM_DECK_INDEX: usize = 4;
 const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
 
-const Z_TILE_PLANE: f32 = 0.0;
+const Z_CELL_PLANE: f32 = 0.0;
 
-/// Simulated walkers: slight Z offset above the deck tile mesh.
+/// Simulated walkers: slight Z offset above the deck cell mesh.
 const Z_HUMAN: f32 = 0.012;
 
 const NUM_SIM_HUMANS: usize = 10_000;
 /// Light red human footprint (exactly 1 m × 1 m in plan space).
-const HUMAN_TILE_COLOR: Color = Color::srgba(0.96, 0.62, 0.62, 0.95);
-/// Orthogonal tile steps per second (discrete motion; interpreted as cadence).
+const HUMAN_CELL_COLOR: Color = Color::srgba(0.96, 0.62, 0.62, 0.95);
+/// Grid steps per second (cardinal and diagonal).
 const SIM_HUMAN_STEPS_PER_S: f32 = 2.8;
-
-/// Source-of-truth zone colours for the procedural deck mesh tinting (`build_deck_mesh`).
-const COLOR_OUTER_CABIN: Color = Color::srgb(0.95, 0.82, 0.35);
-const COLOR_WINDOW: Color = Color::srgb(0.42, 0.62, 0.9);
-const COLOR_PUBLIC_DECK: Color = Color::srgb(0.78, 0.86, 0.92);
 
 #[derive(Component)]
 struct ShipPlan2dRotateRoot;
@@ -41,16 +36,13 @@ struct ShipPlan2dRotateRoot;
 #[derive(Resource)]
 struct CurrentDeck(usize);
 
-/// Pre-built `Mesh2d` content entity for each deck, parented under the rotate root.
-/// Switching decks just toggles `Visibility` on these.
 #[derive(Resource)]
 struct DeckContentEntities([Entity; NUM_DECKS]);
 
-/// Per-deck map from 1 m grid cell to exact walk tile centre (`DeckTiles::centers`).
+/// Per-deck map from 1 m grid cell to exact walk cell centre.
 #[derive(Resource)]
 struct DeckWalkGrids(Vec<HashMap<(i32, i32), Vec2>>);
 
-/// Deterministic PRNG for human spawn paths and wandering (xoroshiroi-style mixing).
 #[derive(Resource)]
 struct SimRng {
     state: u64,
@@ -82,11 +74,15 @@ impl SimRng {
     }
 }
 
+#[derive(Resource)]
+struct NextAgentId(u64);
+
 #[derive(Component)]
 struct SimHuman {
+    agent_id: AgentId,
     deck_idx: usize,
+    last_cell: Option<(i32, i32)>,
     steps_per_second: f32,
-    /// Counts down until the next orthogonal hop on this agent’s cadence (`steps_per_second`).
     time_until_step: f32,
 }
 
@@ -100,64 +96,43 @@ fn color_to_linear_array(c: Color) -> [f32; 4] {
     [lr.red, lr.green, lr.blue, lr.alpha]
 }
 
-/// Per-deck base tint (slight hue walk so adjacent decks read as distinct).
-fn deck_base_tint(deck_index: usize) -> Color {
-    let hue = 0.52 + (deck_index as f32 * 0.012);
-    Color::hsla((hue * 360.0) % 360.0, 0.28, 0.42, 1.0)
-}
-
-/// Bake all of a deck's tiles into one vertex-coloured mesh.
-fn build_deck_mesh(deck_index: usize, layout: &DeckTiles) -> Mesh {
-    let half_tile = TILE_CELL_M * TILE_VISUAL_SCALE * 0.5;
-
-    let outer_cabin = color_to_linear_array(COLOR_OUTER_CABIN);
-    let bucket_colour: [[f32; 4]; DeckTileBucket::COUNT] = [
-        outer_cabin,
-        color_to_linear_array(COLOR_WINDOW),
-        outer_cabin,
-        outer_cabin,
-        color_to_linear_array(COLOR_PUBLIC_DECK),
-        color_to_linear_array(deck_base_tint(deck_index)),
-    ];
-    let amenity_colour: [[f32; 4]; AmenityKind::COUNT] =
-        std::array::from_fn(|i| color_to_linear_array(AmenityKind::ALL[i].color()));
-
-    let mut tile_colors = Vec::with_capacity(layout.centers.len());
-    for c in &layout.centers {
-        let cell = (
-            (c.x / TILE_CELL_M).round() as i32,
-            (c.y / TILE_CELL_M).round() as i32,
-        );
-        let color = if let Some(tone) = deck_seven_paint_tone(deck_index, *c, cell, layout) {
-            color_to_linear_array(tone.color())
-        } else if let Some(amenity) = amenity_overlay(deck_index, *c) {
-            amenity_colour[amenity.idx()]
-        } else {
-            // Plan view: outer brown perimeter + pink/yellow cabin zoning reads like two nested hulls.
-            // Fold hull-edge and inner blocks into the outboard cabin colour so the outline is one mass (3D keeps zones).
-            let mut b = DeckTileBucket::classify(*c, layout.perimeter.contains(&cell));
-            if matches!(b, DeckTileBucket::HullEdge | DeckTileBucket::InnerCabin) {
-                b = DeckTileBucket::OuterCabin;
-            }
-            bucket_colour[b.idx()]
-        };
-        tile_colors.push(color);
+/// Bake all of a deck's cells into one vertex-coloured mesh.
+fn build_deck_mesh(deck_index: usize, layout: &DeckCells) -> Mesh {
+    let half = CELL_SIZE_M * CELL_VISUAL_SCALE * 0.5;
+    let mut centers = Vec::with_capacity(layout.cells.len());
+    let mut colors = Vec::with_capacity(layout.cells.len());
+    for (&(ix, iy), cell) in &layout.cells {
+        let p = Vec2::new(ix as f32 * CELL_SIZE_M, iy as f32 * CELL_SIZE_M);
+        centers.push(p);
+        colors.push(color_to_linear_array(
+            cell.floor.plan_floor_color(deck_index),
+        ));
     }
-
-    merged_plan_squares_mesh_colored(&layout.centers, &tile_colors, half_tile, Z_TILE_PLANE)
+    merged_plan_squares_mesh_colored(&centers, &colors, half, Z_CELL_PLANE)
 }
 
-/// Spawn assignments: `(initial_xy, wander_target_xy)` per human, partitioned by deck.
-fn humans_per_deck(layouts: &DeckLayouts, rng: &mut SimRng) -> [Vec<(Vec2, Vec2)>; NUM_DECKS] {
+fn random_walk_point(grid: &HashMap<(i32, i32), Vec2>, rng: &mut SimRng) -> Option<Vec2> {
+    if grid.is_empty() {
+        return None;
+    }
+    let skip = rng.next_usize(grid.len());
+    grid.values().nth(skip).copied()
+}
+
+fn humans_per_deck(
+    grids: &DeckWalkGrids,
+    layouts: &DeckLayouts,
+    rng: &mut SimRng,
+) -> [Vec<(Vec2, Vec2)>; NUM_DECKS] {
     fn nonempty_deck(rng: &mut SimRng, layouts: &DeckLayouts) -> usize {
         for _ in 0..128 {
             let d = rng.next_usize(NUM_DECKS);
-            if !layouts.0[d].centers.is_empty() {
+            if !layouts.0[d].cells.is_empty() {
                 return d;
             }
         }
         (0..NUM_DECKS)
-            .find(|i| !layouts.0[*i].centers.is_empty())
+            .find(|i| !layouts.0[*i].cells.is_empty())
             .unwrap_or(0)
     }
 
@@ -165,30 +140,23 @@ fn humans_per_deck(layouts: &DeckLayouts, rng: &mut SimRng) -> [Vec<(Vec2, Vec2)
 
     for _ in 0..NUM_SIM_HUMANS {
         let deck_idx = rng.next_usize(NUM_DECKS);
-        let centers = &layouts.0[deck_idx].centers;
-        let (deck_idx, centers) = if centers.is_empty() {
+        let grid = &grids.0[deck_idx];
+        let (deck_idx, grid) = if grid.is_empty() {
             let d = nonempty_deck(rng, layouts);
-            (d, &layouts.0[d].centers)
+            (d, &grids.0[d])
         } else {
-            (deck_idx, centers)
+            (deck_idx, grid)
         };
-        if centers.is_empty() {
+        let Some(spawn) = random_walk_point(grid, rng) else {
             continue;
-        }
-        let spawn_i = rng.next_usize(centers.len());
-        let tgt_i = rng.next_usize(centers.len());
-        per_deck[deck_idx].push((centers[spawn_i], centers[tgt_i]));
+        };
+        let Some(target) = random_walk_point(grid, rng) else {
+            continue;
+        };
+        per_deck[deck_idx].push((spawn, target));
     }
 
     per_deck
-}
-
-#[inline]
-fn deck_tile_cell(p: Vec2) -> (i32, i32) {
-    (
-        (p.x / TILE_CELL_M).round() as i32,
-        (p.y / TILE_CELL_M).round() as i32,
-    )
 }
 
 fn deck_walk_grids(layouts: &DeckLayouts) -> DeckWalkGrids {
@@ -198,8 +166,11 @@ fn deck_walk_grids(layouts: &DeckLayouts) -> DeckWalkGrids {
             .iter()
             .map(|deck| {
                 let mut m = HashMap::new();
-                for &p in &deck.centers {
-                    m.insert(deck_tile_cell(p), p);
+                for (&(ix, iy), _) in &deck.cells {
+                    m.insert(
+                        (ix, iy),
+                        Vec2::new(ix as f32 * CELL_SIZE_M, iy as f32 * CELL_SIZE_M),
+                    );
                 }
                 m
             })
@@ -207,9 +178,24 @@ fn deck_walk_grids(layouts: &DeckLayouts) -> DeckWalkGrids {
     )
 }
 
-const CELL_NEIGHBOURS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+fn register_agent_on_cell(layouts: &mut DeckLayouts, deck_idx: usize, coord: (i32, i32), agent: AgentId) {
+    if let Some(cell) = layouts.0[deck_idx].cell_mut(coord) {
+        cell.contents.insert(agent);
+    }
+}
 
-/// Chooses among orthogonal neighbours that strictly reduce distance-to-target (`None` dead end).
+fn unregister_agent_from_cell(
+    layouts: &mut DeckLayouts,
+    deck_idx: usize,
+    coord: (i32, i32),
+    agent: AgentId,
+) {
+    if let Some(cell) = layouts.0[deck_idx].cell_mut(coord) {
+        cell.contents.remove(agent);
+    }
+}
+
+/// Chooses among neighbours (8-way with corner cutting) that strictly reduce distance-to-target.
 fn pick_strictly_closer_neighbour(
     grid: &HashMap<(i32, i32), Vec2>,
     rng: &mut SimRng,
@@ -223,7 +209,10 @@ fn pick_strictly_closer_neighbour(
     let mut best_d = f32::INFINITY;
     let mut best: Vec<Vec2> = Vec::new();
 
-    for (dx, dy) in CELL_NEIGHBOURS {
+    for (dx, dy) in CELL_NEIGHBOUR_OFFSETS {
+        if !diagonal_step_allowed(grid, ix, iy, dx, dy) {
+            continue;
+        }
         let Some(&p) = grid.get(&(ix + dx, iy + dy)) else {
             continue;
         };
@@ -255,8 +244,9 @@ pub fn run_app_2d() {
                 .set(ImagePlugin::default_nearest()),
         )
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
-        .insert_resource(DeckLayouts(deck_layouts(TILE_CELL_M)))
+        .insert_resource(DeckLayouts(deck_cell_layouts(CELL_SIZE_M)))
         .insert_resource(SimRng::default())
+        .insert_resource(NextAgentId(1))
         .insert_resource(ClearColor(Color::srgb(0.04, 0.09, 0.16)))
         .add_systems(Startup, setup_2d)
         .add_systems(
@@ -268,8 +258,9 @@ pub fn run_app_2d() {
 
 fn setup_2d(
     mut commands: Commands,
-    layouts: Res<DeckLayouts>,
+    mut layouts: ResMut<DeckLayouts>,
     mut rng: ResMut<SimRng>,
+    mut next_agent: ResMut<NextAgentId>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -295,13 +286,12 @@ fn setup_2d(
         ))
         .id();
 
-    // One shared white material for every deck — vertex colours do all the work, so we never need
-    // to allocate a `ColorMaterial` per bucket / per deck switch.
     let shared_material = materials.add(ColorMaterial::from(Color::WHITE));
-    let human_mesh = meshes.add(Mesh::from(Rectangle::new(TILE_CELL_M, TILE_CELL_M)));
-    let human_material = materials.add(ColorMaterial::from(HUMAN_TILE_COLOR));
-    let per_deck = humans_per_deck(&layouts, &mut rng);
-    commands.insert_resource(deck_walk_grids(&layouts));
+    let human_mesh = meshes.add(Mesh::from(Rectangle::new(CELL_SIZE_M, CELL_SIZE_M)));
+    let human_material = materials.add(ColorMaterial::from(HUMAN_CELL_COLOR));
+    let walk_grids = deck_walk_grids(&layouts);
+    let per_deck = humans_per_deck(&walk_grids, &layouts, &mut rng);
+    commands.insert_resource(walk_grids);
     let step_period = SIM_HUMAN_STEPS_PER_S.recip();
 
     let mut deck_entities = [Entity::PLACEHOLDER; NUM_DECKS];
@@ -323,6 +313,10 @@ fn setup_2d(
             .with_children(|plan| {
                 let deck_placements = &per_deck[deck_i];
                 for &(pos_xy, tgt_xy) in deck_placements {
+                    let agent_id = AgentId(next_agent.0);
+                    next_agent.0 += 1;
+                    let cell = DeckCells::cell_coords(pos_xy);
+                    register_agent_on_cell(&mut layouts, deck_i, cell, agent_id);
                     let stagger =
                         (rng.next_u32() as f32 / u32::MAX as f32).clamp(0.0, 1.0) * step_period;
                     plan.spawn((
@@ -330,7 +324,9 @@ fn setup_2d(
                         MeshMaterial2d(human_material.clone()),
                         Transform::from_xyz(pos_xy.x, pos_xy.y, Z_HUMAN),
                         SimHuman {
+                            agent_id,
                             deck_idx: deck_i,
+                            last_cell: Some(cell),
                             steps_per_second: SIM_HUMAN_STEPS_PER_S,
                             time_until_step: stagger,
                         },
@@ -357,8 +353,6 @@ fn deck_switch_2d(keyboard: Res<ButtonInput<KeyCode>>, mut current_deck: ResMut<
     }
 }
 
-/// Hide the previously-visible deck entity and show the new one. All deck meshes/materials are
-/// already on the GPU from startup, so deck switching is essentially free.
 fn sync_plan_deck_visibility(
     current: Res<CurrentDeck>,
     entities: Res<DeckContentEntities>,
@@ -381,7 +375,7 @@ fn sync_plan_deck_visibility(
 
 fn human_wander_2d(
     time: Res<Time>,
-    layouts: Res<DeckLayouts>,
+    mut layouts: ResMut<DeckLayouts>,
     grids: Res<DeckWalkGrids>,
     mut rng: ResMut<SimRng>,
     mut humans: Query<(&mut SimHuman, &mut Transform, &mut HumanWander)>,
@@ -389,11 +383,11 @@ fn human_wander_2d(
     let dt = time.delta_secs();
 
     for (mut human, mut tf, mut wander) in &mut humans {
-        let centers = &layouts.0[human.deck_idx].centers;
-        let Some(grid) = grids.0.get(human.deck_idx) else {
+        let deck_idx = human.deck_idx;
+        let Some(grid) = grids.0.get(deck_idx) else {
             continue;
         };
-        if centers.is_empty() || grid.is_empty() {
+        if grid.is_empty() {
             continue;
         }
 
@@ -404,30 +398,57 @@ fn human_wander_2d(
 
         human.time_until_step += human.steps_per_second.recip().max(1e-4);
 
-        let (ix, iy) = deck_tile_cell(tf.translation.xy());
+        let (ix, iy) = DeckCells::cell_coords(tf.translation.xy());
         let Some(pos_snapped) = grid.get(&(ix, iy)).copied() else {
-            let p = centers[rng.next_usize(centers.len())];
+            let Some(p) = random_walk_point(grid, &mut rng) else {
+                continue;
+            };
+            if let Some(prev) = human.last_cell {
+                unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
+            }
+            let cell = DeckCells::cell_coords(p);
+            register_agent_on_cell(&mut layouts, deck_idx, cell, human.agent_id);
+            human.last_cell = Some(cell);
             tf.translation.x = p.x;
             tf.translation.y = p.y;
-            wander.target = centers[rng.next_usize(centers.len())];
+            if let Some(t) = random_walk_point(grid, &mut rng) {
+                wander.target = t;
+            }
             continue;
         };
         tf.translation.x = pos_snapped.x;
         tf.translation.y = pos_snapped.y;
 
-        let target_cell = deck_tile_cell(wander.target);
+        if human.last_cell != Some((ix, iy)) {
+            if let Some(prev) = human.last_cell {
+                unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
+            }
+            register_agent_on_cell(&mut layouts, deck_idx, (ix, iy), human.agent_id);
+            human.last_cell = Some((ix, iy));
+        }
+
+        let target_cell = DeckCells::cell_coords(wander.target);
         if (ix, iy) == target_cell {
-            wander.target = centers[rng.next_usize(centers.len())];
+            if let Some(t) = random_walk_point(grid, &mut rng) {
+                wander.target = t;
+            }
             continue;
         }
 
-        if let Some(next_pos) =
-            pick_strictly_closer_neighbour(grid, &mut rng, ix, iy, wander.target)
+        if let Some(next_pos) = pick_strictly_closer_neighbour(grid, &mut rng, ix, iy, wander.target)
         {
+            let next_cell = DeckCells::cell_coords(next_pos);
+            if human.last_cell != Some(next_cell) {
+                if let Some(prev) = human.last_cell {
+                    unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
+                }
+                register_agent_on_cell(&mut layouts, deck_idx, next_cell, human.agent_id);
+                human.last_cell = Some(next_cell);
+            }
             tf.translation.x = next_pos.x;
             tf.translation.y = next_pos.y;
-        } else {
-            wander.target = centers[rng.next_usize(centers.len())];
+        } else if let Some(t) = random_walk_point(grid, &mut rng) {
+            wander.target = t;
         }
     }
 }

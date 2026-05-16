@@ -145,7 +145,7 @@ pub fn deck_hull_polygon_upper() -> Vec<Vec2> {
     v
 }
 
-fn deck_tile_centers_in_poly(step_m: f32, poly: &[Vec2]) -> Vec<Vec2> {
+fn deck_cell_centers_in_poly(step_m: f32, poly: &[Vec2]) -> Vec<Vec2> {
     let half_len = SHIP_LENGTH_M * 0.5;
     let pad = step_m;
     let half_b = SHIP_BEAM_M * 0.5 + pad;
@@ -190,18 +190,18 @@ pub fn point_in_polygon(point: Vec2, poly: &[Vec2]) -> bool {
 }
 
 /// Cell centres for axis-aligned squares of side `step_m` inside the legacy (lower-deck) hull.
-pub fn deck_tile_centers(step_m: f32) -> Vec<Vec2> {
+pub fn deck_cell_centers(step_m: f32) -> Vec<Vec2> {
     let poly = deck_hull_polygon();
-    deck_tile_centers_in_poly(step_m, &poly)
+    deck_cell_centers_in_poly(step_m, &poly)
 }
 
 /// Cell centres inside [`deck_hull_polygon_upper`] (courtyard + U-stern).
-pub fn deck_tile_centers_upper(step_m: f32) -> Vec<Vec2> {
+pub fn deck_cell_centers_upper(step_m: f32) -> Vec<Vec2> {
     let poly = deck_hull_polygon_upper();
-    deck_tile_centers_in_poly(step_m, &poly)
+    deck_cell_centers_in_poly(step_m, &poly)
 }
 
-pub fn is_perimeter_tile(center: Vec2, step_m: f32, poly: &[Vec2]) -> bool {
+pub fn is_perimeter_cell_at(center: Vec2, step_m: f32, poly: &[Vec2]) -> bool {
     const NEI: [(f32, f32); 4] = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
     for (kx, ky) in NEI {
         let q = Vec2::new(center.x + kx * step_m, center.y + ky * step_m);

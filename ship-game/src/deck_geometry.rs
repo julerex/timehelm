@@ -135,7 +135,7 @@ pub fn procedural_deck_plan_texture_image() -> Image {
 }
 
 /// Merge translated cuboids (`prototype` includes [`Mesh::ATTRIBUTE_COLOR`]) or `None` when empty.
-pub fn accumulate_translated_tile_instances(
+pub fn accumulate_translated_cell_instances(
     prototype: &Mesh,
     translations: &[Vec3],
 ) -> Option<Mesh> {
@@ -205,17 +205,17 @@ pub fn accumulate_translated_tile_instances(
     )
 }
 
-/// Merge axis-aligned XY squares centred at each point, each tile painted with its own
+/// Merge axis-aligned XY squares centred at each point, each cell painted with its own
 /// linear-RGBA vertex colour. Lets a single `Mesh2d` + `ColorMaterial { color: WHITE }` render
 /// every bucket and amenity overlay in one draw call (Bevy's `ColorMaterial` shader multiplies
 /// by `Mesh::ATTRIBUTE_COLOR` when present).
 pub fn merged_plan_squares_mesh_colored(
     centers: &[Vec2],
-    tile_colors: &[[f32; 4]],
+    cell_colors: &[[f32; 4]],
     half_size: f32,
     z: f32,
 ) -> Mesh {
-    debug_assert_eq!(centers.len(), tile_colors.len());
+    debug_assert_eq!(centers.len(), cell_colors.len());
     let mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
@@ -230,7 +230,7 @@ pub fn merged_plan_squares_mesh_colored(
     let mut colors = Vec::with_capacity(n * 4);
     let mut indices = Vec::with_capacity(n * 6);
     let h = half_size;
-    for (i, (c, col)) in centers.iter().zip(tile_colors.iter()).enumerate() {
+    for (i, (c, col)) in centers.iter().zip(cell_colors.iter()).enumerate() {
         let base = (i * 4) as u32;
         positions.push([c.x - h, c.y - h, z]);
         positions.push([c.x + h, c.y - h, z]);
