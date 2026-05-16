@@ -6,25 +6,31 @@
 
 use crate::deck_geometry::merged_plan_squares_mesh_colored;
 use crate::deck_layout::{
-    amenity_overlay, deck_layouts, AmenityKind, DeckLayouts, DeckTileBucket, DeckTiles, NUM_DECKS,
-    TILE_CELL_M, TILE_VISUAL_SCALE,
+    amenity_overlay, deck_layouts, deck_seven_paint_tone, AmenityKind, DeckLayouts, DeckTileBucket,
+    DeckTiles, NUM_DECKS, TILE_CELL_M, TILE_VISUAL_SCALE,
 };
 use crate::shared::{asset_plugin, primary_window};
-use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
-use bevy::camera::visibility::RenderLayers;
+use crate::ship_hull::SHIP_LENGTH_M;
 use bevy::camera::{OrthographicProjection, Projection, ScalingMode};
-use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
-use bevy::sprite::Anchor;
+use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 
 const SIM_DECK_INDEX: usize = 4;
-const VERSION_NUMBER: i64 = 128;
 const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
 
 const Z_TILE_PLANE: f32 = 0.0;
 
-/// Source-of-truth zone colours (shared by the mesh builder and on-map labels).
+/// Simulated walkers: slight Z offset above the deck tile mesh.
+const Z_HUMAN: f32 = 0.012;
+
+const NUM_SIM_HUMANS: usize = 10_000;
+/// Light red human footprint (exactly 1 m × 1 m in plan space).
+const HUMAN_TILE_COLOR: Color = Color::srgba(0.96, 0.62, 0.62, 0.95);
+/// Orthogonal tile steps per second (discrete motion; interpreted as cadence).
+const SIM_HUMAN_STEPS_PER_S: f32 = 2.8;
+
+/// Source-of-truth zone colours for the procedural deck mesh tinting (`build_deck_mesh`).
 const COLOR_OUTER_CABIN: Color = Color::srgb(0.95, 0.82, 0.35);
 const COLOR_WINDOW: Color = Color::srgb(0.42, 0.62, 0.9);
 const COLOR_PUBLIC_DECK: Color = Color::srgb(0.78, 0.86, 0.92);
@@ -40,44 +46,53 @@ struct CurrentDeck(usize);
 #[derive(Resource)]
 struct DeckContentEntities([Entity; NUM_DECKS]);
 
-#[derive(Component)]
-struct DeckLabel;
+/// Per-deck map from 1 m grid cell to exact walk tile centre (`DeckTiles::centers`).
+#[derive(Resource)]
+struct DeckWalkGrids(Vec<HashMap<(i32, i32), Vec2>>);
+
+/// Deterministic PRNG for human spawn paths and wandering (xoroshiroi-style mixing).
+#[derive(Resource)]
+struct SimRng {
+    state: u64,
+}
+
+impl Default for SimRng {
+    fn default() -> Self {
+        Self {
+            state: 0x2f50_794f_dcae_b5a3,
+        }
+    }
+}
+
+impl SimRng {
+    fn next_u32(&mut self) -> u32 {
+        self.state ^= self.state >> 12;
+        self.state ^= self.state << 25;
+        self.state ^= self.state >> 27;
+        let mixed = self.state.wrapping_mul(0x2545_f491_4f6c_dd1d);
+        (mixed >> 32) as u32
+    }
+
+    fn next_usize(&mut self, upper_exclusive: usize) -> usize {
+        if upper_exclusive <= 1 {
+            0
+        } else {
+            (self.next_u32() as usize) % upper_exclusive
+        }
+    }
+}
 
 #[derive(Component)]
-struct UiCamera;
+struct SimHuman {
+    deck_idx: usize,
+    steps_per_second: f32,
+    /// Counts down until the next orthogonal hop on this agent’s cadence (`steps_per_second`).
+    time_until_step: f32,
+}
 
-const DECK_NAMES: [&str; NUM_DECKS] = [
-    "Engine Deck",
-    "Orlop Deck",
-    "Hold Deck",
-    "Lower Deck",
-    "Second Deck",
-    "First Deck",
-    "Main Deck",
-    "Upper Deck",
-    "Promenade Deck",
-    "Lido Deck",
-    "Boat Deck",
-    "Bridge Deck",
-    "Sports Deck",
-    "Observation Deck",
-    "Spa Deck",
-    "Pool Deck",
-    "Sky Deck",
-    "Terrace Deck",
-    "Crown Deck",
-    "Sun Deck",
-];
-
-fn deck_label_text(deck: usize) -> String {
-    format!(
-        "Version {VERSION_NUMBER} — 2D plan\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nPgUp/PgDn: decks | Bow → right\nZone & amenity labels match the visible deck only.",
-        deck + 1,
-        NUM_DECKS,
-        DECK_NAMES[deck],
-        SHIP_LENGTH_M,
-        SHIP_BEAM_M,
-    )
+#[derive(Component)]
+struct HumanWander {
+    target: Vec2,
 }
 
 fn color_to_linear_array(c: Color) -> [f32; 4] {
@@ -113,7 +128,9 @@ fn build_deck_mesh(deck_index: usize, layout: &DeckTiles) -> Mesh {
             (c.x / TILE_CELL_M).round() as i32,
             (c.y / TILE_CELL_M).round() as i32,
         );
-        let color = if let Some(amenity) = amenity_overlay(deck_index, *c) {
+        let color = if let Some(tone) = deck_seven_paint_tone(deck_index, *c, cell, layout) {
+            color_to_linear_array(tone.color())
+        } else if let Some(amenity) = amenity_overlay(deck_index, *c) {
             amenity_colour[amenity.idx()]
         } else {
             // Plan view: outer brown perimeter + pink/yellow cabin zoning reads like two nested hulls.
@@ -130,102 +147,100 @@ fn build_deck_mesh(deck_index: usize, layout: &DeckTiles) -> Mesh {
     merged_plan_squares_mesh_colored(&layout.centers, &tile_colors, half_tile, Z_TILE_PLANE)
 }
 
-/// Slightly above tile mesh; below ad-hoc compass glyphs (`0.025`).
-const Z_PLAN_LABELS: f32 = 0.035;
+/// Spawn assignments: `(initial_xy, wander_target_xy)` per human, partitioned by deck.
+fn humans_per_deck(layouts: &DeckLayouts, rng: &mut SimRng) -> [Vec<(Vec2, Vec2)>; NUM_DECKS] {
+    fn nonempty_deck(rng: &mut SimRng, layouts: &DeckLayouts) -> usize {
+        for _ in 0..128 {
+            let d = rng.next_usize(NUM_DECKS);
+            if !layouts.0[d].centers.is_empty() {
+                return d;
+            }
+        }
+        (0..NUM_DECKS)
+            .find(|i| !layouts.0[*i].centers.is_empty())
+            .unwrap_or(0)
+    }
 
-/// On-map text sizes (world `TextFont` units). Kept small so labels stay readable without dominating the plan.
-const FONT_COMPASS: f32 = 12.5;
-const FONT_PLAN_ZONE: f32 = 7.75;
-const FONT_PLAN_AMENITY: f32 = 6.75;
+    let mut per_deck: [Vec<(Vec2, Vec2)>; NUM_DECKS] = std::array::from_fn(|_| Vec::new());
 
-/// Parent [`ShipPlan2dRotateRoot`] applies −90° Z so bow runs left→right on screen; counter-spin
-/// keeps zone text horizontal while positions stay in ship metres (+Y bow).
-fn plan_label_bundle(
-    text: impl Into<String>,
-    translation: Vec3,
-    font_size: f32,
-    color: Color,
-) -> impl Bundle {
+    for _ in 0..NUM_SIM_HUMANS {
+        let deck_idx = rng.next_usize(NUM_DECKS);
+        let centers = &layouts.0[deck_idx].centers;
+        let (deck_idx, centers) = if centers.is_empty() {
+            let d = nonempty_deck(rng, layouts);
+            (d, &layouts.0[d].centers)
+        } else {
+            (deck_idx, centers)
+        };
+        if centers.is_empty() {
+            continue;
+        }
+        let spawn_i = rng.next_usize(centers.len());
+        let tgt_i = rng.next_usize(centers.len());
+        per_deck[deck_idx].push((centers[spawn_i], centers[tgt_i]));
+    }
+
+    per_deck
+}
+
+#[inline]
+fn deck_tile_cell(p: Vec2) -> (i32, i32) {
     (
-        Text2d::new(text),
-        TextFont {
-            font_size,
-            ..default()
-        },
-        TextColor(color),
-        Anchor::CENTER,
-        Transform::from_translation(translation).with_rotation(Quat::from_rotation_z(FRAC_PI_2)),
+        (p.x / TILE_CELL_M).round() as i32,
+        (p.y / TILE_CELL_M).round() as i32,
     )
 }
 
-/// Zone + amenity names parented under each deck mesh so [`sync_plan_deck_visibility`] shows only the
-/// active deck’s overlays.
-fn spawn_deck_overlay_labels(parent: &mut ChildSpawnerCommands<'_>, deck_i: usize) {
-    parent.spawn(plan_label_bundle(
-        "Cabins & hull perimeter (plan)",
-        Vec3::new(-SHIP_BEAM_M * 0.34, 14.0, Z_PLAN_LABELS),
-        FONT_PLAN_ZONE,
-        Color::srgb(0.16, 0.12, 0.04),
-    ));
-    parent.spawn(plan_label_bundle(
-        "Forward windows",
-        Vec3::new(SHIP_BEAM_M * 0.36, SHIP_LENGTH_M * 0.21, Z_PLAN_LABELS),
-        FONT_PLAN_ZONE,
-        Color::srgba(0.98, 0.99, 1.0, 0.96),
-    ));
-    parent.spawn(plan_label_bundle(
-        "Public / aft venues",
-        Vec3::new(0.0, -SHIP_LENGTH_M * 0.36, Z_PLAN_LABELS),
-        FONT_PLAN_ZONE,
-        Color::srgb(0.1, 0.14, 0.2),
-    ));
-    parent.spawn(plan_label_bundle(
-        "Interior structure (tint ↑ with deck)",
-        Vec3::new(0.0, SHIP_LENGTH_M * 0.04, Z_PLAN_LABELS),
-        FONT_PLAN_ZONE * 0.97,
-        Color::srgba(0.96, 0.98, 1.0, 0.96),
-    ));
+fn deck_walk_grids(layouts: &DeckLayouts) -> DeckWalkGrids {
+    DeckWalkGrids(
+        layouts
+            .0
+            .iter()
+            .map(|deck| {
+                let mut m = HashMap::new();
+                for &p in &deck.centers {
+                    m.insert(deck_tile_cell(p), p);
+                }
+                m
+            })
+            .collect(),
+    )
+}
 
-    if (5..=10).contains(&deck_i) {
-        parent.spawn(plan_label_bundle(
-            AmenityKind::Theatre.label(),
-            Vec3::new(0.0, SHIP_LENGTH_M * 0.425, Z_PLAN_LABELS),
-            FONT_PLAN_AMENITY,
-            Color::srgba(0.98, 0.97, 1.0, 0.96),
-        ));
+const CELL_NEIGHBOURS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+
+/// Chooses among orthogonal neighbours that strictly reduce distance-to-target (`None` dead end).
+fn pick_strictly_closer_neighbour(
+    grid: &HashMap<(i32, i32), Vec2>,
+    rng: &mut SimRng,
+    ix: i32,
+    iy: i32,
+    target: Vec2,
+) -> Option<Vec2> {
+    let &current = grid.get(&(ix, iy))?;
+    let d0 = current.distance_squared(target);
+
+    let mut best_d = f32::INFINITY;
+    let mut best: Vec<Vec2> = Vec::new();
+
+    for (dx, dy) in CELL_NEIGHBOURS {
+        let Some(&p) = grid.get(&(ix + dx, iy + dy)) else {
+            continue;
+        };
+        let d = p.distance_squared(target);
+        if d + 1e-5 >= d0 {
+            continue;
+        }
+        if d + 1e-5 < best_d {
+            best_d = d;
+            best.clear();
+            best.push(p);
+        } else if (d - best_d).abs() < 1e-5 {
+            best.push(p);
+        }
     }
-    if (4..=7).contains(&deck_i) {
-        parent.spawn(plan_label_bundle(
-            AmenityKind::MainDining.label(),
-            Vec3::new(0.0, -SHIP_LENGTH_M * 0.23, Z_PLAN_LABELS),
-            FONT_PLAN_AMENITY,
-            Color::srgb(0.12, 0.06, 0.02),
-        ));
-    }
-    if (8..=12).contains(&deck_i) {
-        parent.spawn(plan_label_bundle(
-            AmenityKind::Buffet.label(),
-            Vec3::new(-SHIP_BEAM_M * 0.28, SHIP_LENGTH_M * 0.17, Z_PLAN_LABELS),
-            FONT_PLAN_AMENITY * 0.97,
-            Color::srgb(0.05, 0.12, 0.06),
-        ));
-    }
-    if (11..=16).contains(&deck_i) {
-        parent.spawn(plan_label_bundle(
-            AmenityKind::Pools.label(),
-            Vec3::new(0.0, SHIP_LENGTH_M * 0.28, Z_PLAN_LABELS),
-            FONT_PLAN_AMENITY,
-            Color::srgb(0.04, 0.1, 0.14),
-        ));
-    }
-    if (6..=9).contains(&deck_i) {
-        parent.spawn(plan_label_bundle(
-            AmenityKind::Casino.label(),
-            Vec3::new(SHIP_BEAM_M * 0.33, SHIP_LENGTH_M * 0.04, Z_PLAN_LABELS),
-            FONT_PLAN_AMENITY * 0.97,
-            Color::srgba(1.0, 0.96, 0.98, 0.96),
-        ));
-    }
+
+    (!best.is_empty()).then(|| best[rng.next_usize(best.len())])
 }
 
 pub fn run_app_2d() {
@@ -241,15 +256,12 @@ pub fn run_app_2d() {
         )
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
         .insert_resource(DeckLayouts(deck_layouts(TILE_CELL_M)))
+        .insert_resource(SimRng::default())
         .insert_resource(ClearColor(Color::srgb(0.04, 0.09, 0.16)))
         .add_systems(Startup, setup_2d)
         .add_systems(
             Update,
-            (
-                deck_switch_2d,
-                sync_plan_deck_visibility,
-                update_deck_label_2d,
-            ),
+            (deck_switch_2d, sync_plan_deck_visibility, human_wander_2d),
         )
         .run();
 }
@@ -257,6 +269,7 @@ pub fn run_app_2d() {
 fn setup_2d(
     mut commands: Commands,
     layouts: Res<DeckLayouts>,
+    mut rng: ResMut<SimRng>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -273,23 +286,6 @@ fn setup_2d(
         Projection::from(world_ortho),
     ));
 
-    // World plan meshes and Text2d use the default render layer (0). The UI camera must *not* draw
-    // those: its orthographic projection is pixel/window space, so sharing layer 0 would composite a
-    // second, wrongly scaled copy of the ship (a "ghost" miniature). UI still reaches this camera via
-    // `UiTargetCamera`; extraction does not rely on matching `RenderLayers`.
-    let ui_camera = commands
-        .spawn((
-            Camera2d,
-            Camera {
-                order: 1,
-                clear_color: ClearColorConfig::None,
-                ..default()
-            },
-            RenderLayers::layer(1),
-            UiCamera,
-        ))
-        .id();
-
     let rotate_root = commands
         .spawn((
             ShipPlan2dRotateRoot,
@@ -299,29 +295,14 @@ fn setup_2d(
         ))
         .id();
 
-    commands.entity(rotate_root).with_children(|markers| {
-        for (label, pos) in [
-            ("Bow (+Y)", Vec3::new(0.0, SHIP_LENGTH_M * 0.53, 0.025)),
-            ("Stern (−Y)", Vec3::new(0.0, -SHIP_LENGTH_M * 0.53, 0.025)),
-            ("Port (−X)", Vec3::new(-SHIP_BEAM_M * 0.56, -6.0, 0.025)),
-            ("Starboard (+X)", Vec3::new(SHIP_BEAM_M * 0.56, -6.0, 0.025)),
-        ] {
-            markers.spawn((
-                Text2d::new(label),
-                TextFont {
-                    font_size: FONT_COMPASS,
-                    ..default()
-                },
-                TextColor(Color::srgba(0.96, 0.97, 1.0, 0.93)),
-                Anchor::CENTER,
-                Transform::from_translation(pos),
-            ));
-        }
-    });
-
     // One shared white material for every deck — vertex colours do all the work, so we never need
     // to allocate a `ColorMaterial` per bucket / per deck switch.
     let shared_material = materials.add(ColorMaterial::from(Color::WHITE));
+    let human_mesh = meshes.add(Mesh::from(Rectangle::new(TILE_CELL_M, TILE_CELL_M)));
+    let human_material = materials.add(ColorMaterial::from(HUMAN_TILE_COLOR));
+    let per_deck = humans_per_deck(&layouts, &mut rng);
+    commands.insert_resource(deck_walk_grids(&layouts));
+    let step_period = SIM_HUMAN_STEPS_PER_S.recip();
 
     let mut deck_entities = [Entity::PLACEHOLDER; NUM_DECKS];
     for (deck_i, slot) in deck_entities.iter_mut().enumerate() {
@@ -340,28 +321,26 @@ fn setup_2d(
                 ChildOf(rotate_root),
             ))
             .with_children(|plan| {
-                spawn_deck_overlay_labels(plan, deck_i);
+                let deck_placements = &per_deck[deck_i];
+                for &(pos_xy, tgt_xy) in deck_placements {
+                    let stagger =
+                        (rng.next_u32() as f32 / u32::MAX as f32).clamp(0.0, 1.0) * step_period;
+                    plan.spawn((
+                        Mesh2d(human_mesh.clone()),
+                        MeshMaterial2d(human_material.clone()),
+                        Transform::from_xyz(pos_xy.x, pos_xy.y, Z_HUMAN),
+                        SimHuman {
+                            deck_idx: deck_i,
+                            steps_per_second: SIM_HUMAN_STEPS_PER_S,
+                            time_until_step: stagger,
+                        },
+                        HumanWander { target: tgt_xy },
+                    ));
+                }
             })
             .id();
     }
     commands.insert_resource(DeckContentEntities(deck_entities));
-
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(10.0),
-            left: Val::Px(10.0),
-            ..default()
-        },
-        Text::new(deck_label_text(SIM_DECK_INDEX)),
-        TextFont {
-            font_size: 22.0,
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        UiTargetCamera(ui_camera),
-        DeckLabel,
-    ));
 }
 
 fn deck_switch_2d(keyboard: Res<ButtonInput<KeyCode>>, mut current_deck: ResMut<CurrentDeck>) {
@@ -400,14 +379,55 @@ fn sync_plan_deck_visibility(
     *last = Some(current.0);
 }
 
-fn update_deck_label_2d(
-    current_deck: Res<CurrentDeck>,
-    mut query: Query<&mut Text, With<DeckLabel>>,
+fn human_wander_2d(
+    time: Res<Time>,
+    layouts: Res<DeckLayouts>,
+    grids: Res<DeckWalkGrids>,
+    mut rng: ResMut<SimRng>,
+    mut humans: Query<(&mut SimHuman, &mut Transform, &mut HumanWander)>,
 ) {
-    if !current_deck.is_changed() {
-        return;
-    }
-    for mut text in &mut query {
-        text.0 = deck_label_text(current_deck.0);
+    let dt = time.delta_secs();
+
+    for (mut human, mut tf, mut wander) in &mut humans {
+        let centers = &layouts.0[human.deck_idx].centers;
+        let Some(grid) = grids.0.get(human.deck_idx) else {
+            continue;
+        };
+        if centers.is_empty() || grid.is_empty() {
+            continue;
+        }
+
+        human.time_until_step -= dt;
+        if human.time_until_step > 0.0 {
+            continue;
+        }
+
+        human.time_until_step += human.steps_per_second.recip().max(1e-4);
+
+        let (ix, iy) = deck_tile_cell(tf.translation.xy());
+        let Some(pos_snapped) = grid.get(&(ix, iy)).copied() else {
+            let p = centers[rng.next_usize(centers.len())];
+            tf.translation.x = p.x;
+            tf.translation.y = p.y;
+            wander.target = centers[rng.next_usize(centers.len())];
+            continue;
+        };
+        tf.translation.x = pos_snapped.x;
+        tf.translation.y = pos_snapped.y;
+
+        let target_cell = deck_tile_cell(wander.target);
+        if (ix, iy) == target_cell {
+            wander.target = centers[rng.next_usize(centers.len())];
+            continue;
+        }
+
+        if let Some(next_pos) =
+            pick_strictly_closer_neighbour(grid, &mut rng, ix, iy, wander.target)
+        {
+            tf.translation.x = next_pos.x;
+            tf.translation.y = next_pos.y;
+        } else {
+            wander.target = centers[rng.next_usize(centers.len())];
+        }
     }
 }

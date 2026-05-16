@@ -19,12 +19,25 @@ pub const TILE_VISUAL_SCALE: f32 = 0.92;
 #[derive(Resource, Clone)]
 pub struct DeckLayouts(pub Vec<DeckTiles>);
 
+/// Precomputed corridors and striping bounds on deck seven (sea-facing cabin ring).
+#[derive(Clone, Debug)]
+pub struct DeckSevenCache {
+    /// Occupied walkway cells painted white (`2 tiles wide`).
+    pub corridor: HashSet<(i32, i32)>,
+    pub star_ix_inner: i32,
+    pub star_ix_outer: i32,
+    pub port_ix_inner: i32,
+    pub port_ix_outer: i32,
+}
+
 #[derive(Clone)]
 pub struct DeckTiles {
     pub centers: Vec<Vec2>,
     /// Cells whose 4-neighbourhood contains at least one empty cell. Precomputed once so
     /// per-tile classification only needs a single hash lookup instead of four.
     pub perimeter: HashSet<(i32, i32)>,
+    /// Human-facing deck 7 (`DECK_SEVEN_INDEX`): exterior cabin striping + dual corridor.
+    pub deck_seven_cache: Option<DeckSevenCache>,
 }
 
 #[derive(Clone, Copy)]
@@ -368,7 +381,16 @@ pub fn deck_layouts(step_m: f32) -> Vec<DeckTiles> {
             .copied()
             .filter(|cell| is_perimeter_cell(*cell, &occupied))
             .collect::<HashSet<_>>();
-        out.push(DeckTiles { centers, perimeter });
+        let deck_seven_cache = if deck_i == DECK_SEVEN_INDEX {
+            build_deck_seven_cache_inner(&centers, &perimeter, &occupied)
+        } else {
+            None
+        };
+        out.push(DeckTiles {
+            centers,
+            perimeter,
+            deck_seven_cache,
+        });
     }
     out
 }
@@ -382,7 +404,236 @@ fn is_perimeter_cell(cell: (i32, i32), occupied: &HashSet<(i32, i32)>) -> bool {
     false
 }
 
-#[derive(Clone, Copy)]
+/// Human-facing passenger **deck seven** (“Main deck” tier). **0-based** layout index [`DECK_SEVEN_INDEX`].
+pub const DECK_SEVEN_INDEX: usize = 6;
+
+const DECK_SEV_CABINX: i32 = 3;
+/// Target cabin module depth along the ship (±Y metres); reused for bow banding.
+const DECK_SEV_CABINY: i32 = 8;
+
+/// Forward dense interior cabin wedge at the bow (plan view), Centreline-heavy.
+#[inline]
+fn deck_seven_bow_interior_geom(p: Vec2) -> bool {
+    p.y > SHIP_LENGTH_M * 0.195 && p.y < SHIP_LENGTH_M * 0.46 && p.x.abs() < SHIP_BEAM_M * 0.29
+}
+
+fn deck_seven_bow_paint_allowed(raw: DeckTileBucket, p: Vec2) -> bool {
+    if matches!(
+        raw,
+        DeckTileBucket::WindowStrip | DeckTileBucket::PublicDeck
+    ) {
+        return false;
+    }
+    if !deck_seven_bow_interior_geom(p) {
+        return false;
+    }
+    match raw {
+        DeckTileBucket::InnerCabin | DeckTileBucket::DeckBase => true,
+        DeckTileBucket::HullEdge => p.x.abs() < SHIP_BEAM_M * 0.32,
+        DeckTileBucket::OuterCabin => p.x.abs() < SHIP_BEAM_M * 0.34,
+        _ => false,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeckSevenTone {
+    Corridor,
+    /// Sea-facing façade columns; alternates along beam (`cab_col`), unbroken fore–aft (`CabinB`).
+    CabinA,
+    CabinB,
+    BowMagentaLight,
+    BowMagentaDeep,
+}
+
+impl DeckSevenTone {
+    #[inline]
+    pub fn color(self) -> Color {
+        match self {
+            DeckSevenTone::Corridor => Color::srgb(0.97, 0.97, 0.995),
+            // Saturated cobalt so it reads clearly against green.
+            DeckSevenTone::CabinA => Color::srgb(0.06, 0.38, 0.96),
+            DeckSevenTone::CabinB => Color::srgb(0.55, 0.90, 0.58),
+            DeckSevenTone::BowMagentaLight => Color::srgb(0.94, 0.72, 0.82),
+            DeckSevenTone::BowMagentaDeep => Color::srgb(0.82, 0.38, 0.62),
+        }
+    }
+}
+
+fn build_deck_seven_cache_inner(
+    centers: &[Vec2],
+    perimeter: &HashSet<(i32, i32)>,
+    occupied: &HashSet<(i32, i32)>,
+) -> Option<DeckSevenCache> {
+    let mut star = Vec::<(i32, i32)>::new();
+    let mut port = Vec::<(i32, i32)>::new();
+    for &p in centers {
+        let cell = (
+            (p.x / TILE_CELL_M).round() as i32,
+            (p.y / TILE_CELL_M).round() as i32,
+        );
+        if DeckTileBucket::classify(p, perimeter.contains(&cell)) != DeckTileBucket::OuterCabin {
+            continue;
+        }
+        match cell.0.signum() {
+            1 => star.push(cell),
+            -1 => port.push(cell),
+            _ => {}
+        }
+    }
+
+    if star.is_empty() && port.is_empty() {
+        return None;
+    }
+
+    let (star_ix_inner, star_ix_outer, star_iy_min, star_iy_max) = if star.is_empty() {
+        (1, 0, 0, -1)
+    } else {
+        let xi_in = star.iter().map(|t| t.0).min().unwrap();
+        let xi_out = star.iter().map(|t| t.0).max().unwrap();
+        let yi_lo = star.iter().map(|t| t.1).min().unwrap();
+        let yi_hi = star.iter().map(|t| t.1).max().unwrap();
+        (xi_in, xi_out, yi_lo, yi_hi)
+    };
+
+    let (port_ix_inner, port_ix_outer, port_iy_min, port_iy_max) = if port.is_empty() {
+        (-1, 0, 0, -1)
+    } else {
+        let xi_in = port.iter().map(|t| t.0).max().unwrap();
+        let xi_out = port.iter().map(|t| t.0).min().unwrap();
+        let yi_lo = port.iter().map(|t| t.1).min().unwrap();
+        let yi_hi = port.iter().map(|t| t.1).max().unwrap();
+        (xi_in, xi_out, yi_lo, yi_hi)
+    };
+
+    let mut corridor = HashSet::<(i32, i32)>::new();
+
+    if !star.is_empty() && star_ix_inner <= star_ix_outer && star_iy_min <= star_iy_max {
+        for iy in star_iy_min..=star_iy_max {
+            for delta in [1_i32, 2] {
+                let ix = star_ix_inner - delta;
+                if ix <= 0 {
+                    continue;
+                }
+                let c = (ix, iy);
+                if occupied.contains(&c) {
+                    corridor.insert(c);
+                }
+            }
+        }
+    }
+
+    if !port.is_empty() && port_ix_outer <= port_ix_inner && port_iy_min <= port_iy_max {
+        for iy in port_iy_min..=port_iy_max {
+            for delta in [1_i32, 2] {
+                let ix = port_ix_inner.saturating_add(delta);
+                if ix >= 0 {
+                    continue;
+                }
+                let c = (ix, iy);
+                if occupied.contains(&c) {
+                    corridor.insert(c);
+                }
+            }
+        }
+    }
+
+    Some(DeckSevenCache {
+        corridor,
+        star_ix_inner,
+        star_ix_outer,
+        port_ix_inner,
+        port_ix_outer,
+    })
+}
+
+/// Per-tile paint for exterior cabins + dual corridor band on [`DECK_SEVEN_INDEX`].
+pub fn deck_seven_paint_tone(
+    deck_index: usize,
+    p: Vec2,
+    cell: (i32, i32),
+    layout: &DeckTiles,
+) -> Option<DeckSevenTone> {
+    if deck_index != DECK_SEVEN_INDEX {
+        return None;
+    }
+    let is_perimeter = layout.perimeter.contains(&cell);
+    let raw = DeckTileBucket::classify(p, is_perimeter);
+
+    if layout
+        .deck_seven_cache
+        .as_ref()
+        .is_some_and(|c| c.corridor.contains(&cell))
+    {
+        return Some(DeckSevenTone::Corridor);
+    }
+
+    if deck_seven_bow_paint_allowed(raw, p) {
+        let alt_bow = cell.1.div_euclid(DECK_SEV_CABINY).rem_euclid(2) == 0;
+        return Some(if alt_bow {
+            DeckSevenTone::BowMagentaLight
+        } else {
+            DeckSevenTone::BowMagentaDeep
+        });
+    }
+
+    let cache = layout.deck_seven_cache.as_ref()?;
+
+    // Sea-facing outer cabins + HullEdge façade: beam-wide stripes (parity by `cab_col` only).
+    // Same hue runs full vessel length inside each 3 m band so every cabin slab meets the corridor.
+    if matches!(raw, DeckTileBucket::HullEdge | DeckTileBucket::OuterCabin)
+        && outer_cabin_zone(p)
+        && !window_strip_zone(p)
+    {
+        if cell.0 > 0 && cache.star_ix_inner <= cache.star_ix_outer {
+            if let Some(is_blue_strip) = starboard_strip_is_blue(cell.0, cache) {
+                return Some(exterior_tone_from_blue(is_blue_strip));
+            }
+        }
+        if cell.0 < 0 && cache.port_ix_outer <= cache.port_ix_inner {
+            if let Some(is_blue_strip) = portside_strip_is_blue(cell.0, cache) {
+                return Some(exterior_tone_from_blue(is_blue_strip));
+            }
+        }
+    }
+
+    None
+}
+
+#[inline]
+fn exterior_tone_from_blue(is_blue_strip: bool) -> DeckSevenTone {
+    if is_blue_strip {
+        DeckSevenTone::CabinA
+    } else {
+        DeckSevenTone::CabinB
+    }
+}
+
+/// Starboard façade (`ix > 0`): map hull perimeter columns to the same alternating beam bands as inboard cabins.
+#[inline]
+fn starboard_strip_is_blue(ix: i32, cache: &DeckSevenCache) -> Option<bool> {
+    if ix <= 0 || cache.star_ix_inner > cache.star_ix_outer {
+        return None;
+    }
+    if ix >= cache.star_ix_inner {
+        let cab_col = (ix - cache.star_ix_inner).div_euclid(DECK_SEV_CABINX);
+        return Some(cab_col.rem_euclid(2) == 0);
+    }
+    None
+}
+
+#[inline]
+fn portside_strip_is_blue(ix: i32, cache: &DeckSevenCache) -> Option<bool> {
+    if ix >= 0 || cache.port_ix_outer > cache.port_ix_inner {
+        return None;
+    }
+    if ix <= cache.port_ix_inner {
+        let cab_col = (cache.port_ix_inner - ix).div_euclid(DECK_SEV_CABINX);
+        return Some(cab_col.rem_euclid(2) == 0);
+    }
+    None
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DeckTileBucket {
     HullEdge,
     WindowStrip,
@@ -461,16 +712,6 @@ impl AmenityKind {
             Self::Buffet => Color::srgb(0.42, 0.70, 0.50),
             Self::Pools => Color::srgb(0.32, 0.74, 0.88),
             Self::Casino => Color::srgb(0.72, 0.22, 0.42),
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Theatre => "Theatre / aqua show",
-            Self::MainDining => "Main dining",
-            Self::Buffet => "Buffet / speciality dining",
-            Self::Pools => "Pools / sports deck",
-            Self::Casino => "Casino / nightclub band",
         }
     }
 }
