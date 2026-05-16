@@ -1,0 +1,24 @@
+{
+  "folders": [
+    {
+      "path": ".",
+      "name": "Time Helm"
+    }
+  ],
+  "settings": {
+    "rust-analyzer.linkedProjects": [
+      "server/Cargo.toml",
+      "ship-game/Cargo.toml"
+    ],
+    "terminal.integrated.env.linux": {
+      "ARGV0": ""
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "rust-lang.rust-analyzer",
+      "tamasfe.even-better-toml",
+      "vadimcn.vscode-lldb"
+    ]
+  }
+}
