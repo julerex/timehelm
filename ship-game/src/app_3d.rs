@@ -10,10 +10,11 @@
 //! fine cuboid tiles; smaller buckets use **automatic GPU instancing** (shared mesh/material per tile),
 //! larger buckets stay **CPU-merged**. [`crate::deck_geometry`] holds mesh helpers.
 
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use crate::cell::Material as CellMaterial;
-use crate::deck_layout::{
-    deck_sim_footprint_polygon, DeckLayouts, CELL_SIZE_M, CELL_VISUAL_SCALE, NUM_DECKS,
-};
+use crate::cell_box;
+use crate::deck_layout::{deck_sim_footprint_polygon, DeckLayouts, CELL_VISUAL_SCALE, NUM_DECKS};
 use crate::load_screen::{spawn_load_menu, GamePhase, LoadScreenPlugin};
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{
@@ -355,9 +356,10 @@ fn material_from_idx(i: usize) -> CellMaterial {
     }
 }
 
-fn deck_cell_cuboid_mesh(cell_m: f32, thickness_m: f32, color: Color) -> Mesh {
-    let s = cell_m * CELL_VISUAL_SCALE;
-    let mut mesh = Mesh::from(Cuboid::new(s, s, thickness_m));
+fn deck_cell_cuboid_mesh(thickness_m: f32, color: Color) -> Mesh {
+    let half_beam = cell_box::beam_cell_m() * CELL_VISUAL_SCALE * 0.5;
+    let half_length = cell_box::length_cell_m() * CELL_VISUAL_SCALE * 0.5;
+    let mut mesh = Mesh::from(Cuboid::new(half_beam * 2.0, half_length * 2.0, thickness_m));
     let n = mesh.count_vertices();
     let c: LinearRgba = color.into();
     let ca = c.to_f32_array();
@@ -372,11 +374,7 @@ fn spawn_deck_meshes(
     layouts: &DeckLayouts,
 ) {
     let material_protos: [Mesh; CellMaterial::COUNT] = std::array::from_fn(|i| {
-        deck_cell_cuboid_mesh(
-            CELL_SIZE_M,
-            DECK_SLAB_THICKNESS_M,
-            material_from_idx(i).color(),
-        )
+        deck_cell_cuboid_mesh(DECK_SLAB_THICKNESS_M, material_from_idx(i).color())
     });
     let material_mesh_handles: [Handle<Mesh>; CellMaterial::COUNT] =
         std::array::from_fn(|i| meshes.add(material_protos[i].clone()));

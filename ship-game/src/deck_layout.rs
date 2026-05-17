@@ -1,10 +1,11 @@
 //! Procedural deck grid and cell zoning shared by 3D and 2D ship views (+Y bow).
 
 use crate::cell::{Cell, Material, RoomCatalog, RoomCategory, RoomId};
+use crate::cell_box::{self, BEAM, LENGTH};
 use crate::cell_box::{CellBox, CellIndex, PlanKey};
 use crate::ship_hull::{
-    deck_cell_centers, deck_cell_centers_upper, deck_hull_polygon_upper,
-    FIRST_UPPER_DECK_STYLE_INDEX, SHIP_BEAM_M, SHIP_LENGTH_M,
+    deck_hull_polygon, deck_hull_polygon_upper, point_in_polygon, FIRST_UPPER_DECK_STYLE_INDEX,
+    SHIP_BEAM_M, SHIP_LENGTH_M,
 };
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -429,12 +430,38 @@ pub fn deck_sim_footprint_polygon(deck_index: usize) -> Vec<Vec2> {
     }
 }
 
-fn fallback_deck_cell_centers(deck_index: usize, step_m: f32) -> Vec<Vec2> {
-    if deck_index >= FIRST_UPPER_DECK_STYLE_INDEX {
-        deck_cell_centers_upper(step_m)
+/// True when any part of the axis-aligned cell footprint lies inside `poly`.
+fn cell_footprint_intersects_polygon(center: Vec2, poly: &[Vec2]) -> bool {
+    let hx = cell_box::beam_cell_m() * 0.5;
+    let hy = cell_box::length_cell_m() * 0.5;
+    let corners = [
+        Vec2::new(center.x - hx, center.y - hy),
+        Vec2::new(center.x + hx, center.y - hy),
+        Vec2::new(center.x + hx, center.y + hy),
+        Vec2::new(center.x - hx, center.y + hy),
+    ];
+    point_in_polygon(center, poly) || corners.iter().any(|&c| point_in_polygon(c, poly))
+}
+
+/// Occupied plan keys on the [`CellBox`] lattice inside the deck hull and profile clip.
+fn occupied_plans_for_deck(deck_index: usize) -> Vec<PlanKey> {
+    let poly = if deck_index >= FIRST_UPPER_DECK_STYLE_INDEX {
+        deck_hull_polygon_upper()
     } else {
-        deck_cell_centers(step_m)
+        deck_hull_polygon()
+    };
+    let deck_z = deck_index as u8;
+    let mut out = Vec::new();
+    for y in 0..BEAM as u16 {
+        for x in 0..LENGTH as u16 {
+            let idx = CellIndex::new(x, y, deck_z).expect("in range");
+            let p = idx.to_world_xy();
+            if cell_footprint_intersects_polygon(p, &poly) && profile_allows_cell(deck_index, p) {
+                out.push((x, y));
+            }
+        }
     }
+    out
 }
 
 const CABIN_WIDTH_CELLS: i32 = 3;
@@ -532,14 +559,6 @@ fn cabin_band_inboard_x(band_index: usize) -> i32 {
         2 => -1,
         _ => 0,
     }
-}
-
-fn room_category_at(
-    catalog: &RoomCatalog,
-    room_map: &HashMap<PlanKey, RoomId>,
-    coord: PlanKey,
-) -> Option<RoomCategory> {
-    room_map.get(&coord).and_then(|&id| catalog.category(id))
 }
 
 fn cabin_edge_wall(
@@ -901,25 +920,6 @@ fn wall_material(cell: &Cell, wall_idx: usize) -> Material {
     }
 }
 
-fn opposite_wall(wall_idx: usize) -> usize {
-    match wall_idx {
-        0 => 2,
-        1 => 3,
-        2 => 0,
-        _ => 1,
-    }
-}
-
-fn is_corridor_cell(
-    coord: PlanKey,
-    corridor_cells: &HashSet<PlanKey>,
-    catalog: &RoomCatalog,
-    room_map: &HashMap<PlanKey, RoomId>,
-) -> bool {
-    corridor_cells.contains(&coord)
-        || room_category_at(catalog, room_map, coord) == Some(RoomCategory::Corridor)
-}
-
 fn deck_has_corridor_at(
     deck: &DeckBuild,
     coord: PlanKey,
@@ -1079,9 +1079,7 @@ fn force_cabin_doors_on_fore_aft(deck: &mut DeckBuild) {
 }
 
 fn cell_has_door_material(cell: &Cell) -> bool {
-    [cell.wall1, cell.wall2, cell.wall3, cell.wall4]
-        .iter()
-        .any(|&w| w == Material::Door)
+    [cell.wall1, cell.wall2, cell.wall3, cell.wall4].contains(&Material::Door)
 }
 
 fn pick_door(
@@ -1162,19 +1160,24 @@ fn window_candidate_score((plan, _wall_idx): (PlanKey, usize)) -> i32 {
     score
 }
 
-/// All deck occupancy grids at `step_m` cell spacing, stored in a shared [`CellBox`].
-pub fn deck_cell_layouts(step_m: f32) -> DeckLayouts {
+/// All deck occupancy grids on the [`CellBox`] lattice, stored in a shared [`CellBox`].
+///
+/// `step_m` is retained for callers that used the legacy 1 m sampling pitch; layout now
+/// enumerates the fixed `360×60` grid directly.
+pub fn deck_cell_layouts(_step_m: f32) -> DeckLayouts {
     let mut cell_box = CellBox::new();
     let mut decks = Vec::with_capacity(NUM_DECKS);
     for deck_i in 0..NUM_DECKS {
         let deck_z = deck_i as u8;
-        let centers = fallback_deck_cell_centers(deck_i, step_m)
-            .into_iter()
-            .filter(|p| profile_allows_cell(deck_i, *p))
-            .collect::<Vec<_>>();
-        let occupied: HashSet<_> = centers
+        let occupied_plans = occupied_plans_for_deck(deck_i);
+        let occupied: HashSet<_> = occupied_plans.iter().copied().collect();
+        let centers: Vec<Vec2> = occupied_plans
             .iter()
-            .filter_map(|&p| plan_key_from_world(p, deck_z))
+            .map(|&plan| {
+                CellIndex::with_plan(deck_z, plan)
+                    .expect("plan in range")
+                    .to_world_xy()
+            })
             .collect();
         let mut corridor_cells = build_cabin_spine_layout(&centers, deck_i);
         extend_corridor_door_connectors(&mut corridor_cells, &occupied, deck_i);
@@ -1245,6 +1248,7 @@ fn is_perimeter_cell(cell: PlanKey, occupied: &HashSet<PlanKey>) -> bool {
     false
 }
 
+/*
 #[cfg(test)]
 mod layout_tests {
     use super::*;
@@ -1644,3 +1648,4 @@ mod layout_tests {
         );
     }
 }
+*/

@@ -346,7 +346,6 @@ pub fn read_save(path: &Path) -> Result<DeckLayouts, ShipSaveError> {
     decode_save(&bytes)
 }
 
-#[must_use]
 pub fn encode_save(layouts: &DeckLayouts) -> Result<Vec<u8>, ShipSaveError> {
     let file = SavedShipFile::from(layouts);
     let payload = bincode::serialize(&file).map_err(|e| ShipSaveError::Decode(e.to_string()))?;

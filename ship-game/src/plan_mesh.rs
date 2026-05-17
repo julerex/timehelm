@@ -3,7 +3,7 @@
 use crate::cell::Material;
 use crate::cell_box;
 use crate::deck_geometry::{
-    merged_plan_squares_mesh_colored, merged_plan_wall_borders_mesh_varied, PlanWallEdge,
+    merged_plan_rectangles_mesh_colored, merged_plan_wall_borders_mesh_varied, PlanWallEdge,
 };
 use crate::deck_layout::{DeckCells, DeckLayouts, CELL_VISUAL_SCALE, NUM_DECKS};
 use bevy::prelude::*;
@@ -38,7 +38,7 @@ pub fn build_deck_mesh(deck_index: usize, deck: DeckCells<'_>) -> Mesh {
             cell.floor.plan_floor_color(deck_index),
         ));
     }
-    merged_plan_squares_mesh_colored(&centers, &colors, half_x.min(half_y), Z_CELL_PLANE)
+    merged_plan_rectangles_mesh_colored(&centers, &colors, half_x, half_y, Z_CELL_PLANE)
 }
 
 fn collect_wall_edges(deck: DeckCells<'_>) -> Vec<(PlanWallEdge, f32)> {

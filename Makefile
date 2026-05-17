@@ -1,4 +1,4 @@
-.PHONY: dev build deploy install lint lint-server fmt test build-ship run-ship build-ship-native run-ship-native run-ship-native-gl run-ship-native-vulkan \
+.PHONY: dev build deploy install lint lint-server lint-ship fmt test build-ship run-ship build-ship-native run-ship-native run-ship-native-gl run-ship-native-vulkan \
 	gh-check ci ci-list ci-here ci-watch ci-watch-here ci-view ci-log ci-status \
 	inspect-ship write-ship-default
 
@@ -74,11 +74,15 @@ run-ship-native-vulkan:
 install:
 	cd server && $(CARGO) build
 
-lint: lint-server
+lint: lint-server lint-ship
 
 lint-server:
 	cd server && $(CARGO) fmt --check
 	cd server && $(CARGO) clippy -- -D warnings
+
+lint-ship:
+	cd ship-game && $(CARGO) fmt --check
+	cd ship-game && $(CARGO) clippy -- -D warnings
 
 fmt:
 	cd server && $(CARGO) fmt

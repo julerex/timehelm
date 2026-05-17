@@ -145,27 +145,6 @@ pub fn deck_hull_polygon_upper() -> Vec<Vec2> {
     v
 }
 
-fn deck_cell_centers_in_poly(step_m: f32, poly: &[Vec2]) -> Vec<Vec2> {
-    let half_len = SHIP_LENGTH_M * 0.5;
-    let half_b = SHIP_BEAM_M * 0.5 + step_m;
-    let mut out = Vec::new();
-    // Integer lattice (ix, iy) → world (ix * step, iy * step). Half-offset sampling made
-    // `cell_coords` round −0.5 → −1 and +0.5 → +1, so index 0 was never occupied (centreline cross gap).
-    let ix_min = ((-half_b) / step_m).ceil() as i32;
-    let ix_max = (half_b / step_m).floor() as i32;
-    let iy_min = ((-half_len) / step_m).ceil() as i32;
-    let iy_max = (half_len / step_m).floor() as i32;
-    for iy in iy_min..=iy_max {
-        for ix in ix_min..=ix_max {
-            let p = Vec2::new(ix as f32 * step_m, iy as f32 * step_m);
-            if point_in_polygon(p, poly) {
-                out.push(p);
-            }
-        }
-    }
-    out
-}
-
 /// Ray-cast point-in-polygon (robust for deck footprint).
 pub fn point_in_polygon(point: Vec2, poly: &[Vec2]) -> bool {
     if poly.len() < 3 {
@@ -188,29 +167,6 @@ pub fn point_in_polygon(point: Vec2, poly: &[Vec2]) -> bool {
         }
     }
     inside
-}
-
-/// Cell centres for axis-aligned squares of side `step_m` inside the legacy (lower-deck) hull.
-pub fn deck_cell_centers(step_m: f32) -> Vec<Vec2> {
-    let poly = deck_hull_polygon();
-    deck_cell_centers_in_poly(step_m, &poly)
-}
-
-/// Cell centres inside [`deck_hull_polygon_upper`] (courtyard + U-stern).
-pub fn deck_cell_centers_upper(step_m: f32) -> Vec<Vec2> {
-    let poly = deck_hull_polygon_upper();
-    deck_cell_centers_in_poly(step_m, &poly)
-}
-
-pub fn is_perimeter_cell_at(center: Vec2, step_m: f32, poly: &[Vec2]) -> bool {
-    const NEI: [(f32, f32); 4] = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
-    for (kx, ky) in NEI {
-        let q = Vec2::new(center.x + kx * step_m, center.y + ky * step_m);
-        if !point_in_polygon(q, poly) {
-            return true;
-        }
-    }
-    false
 }
 
 #[cfg(test)]

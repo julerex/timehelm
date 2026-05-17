@@ -4,6 +4,8 @@
 //! All 20 decks are baked to one vertex-coloured `Mesh2d` each at startup and share a single
 //! white `ColorMaterial`; deck switching just toggles `Visibility` on the relevant entity.
 
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use crate::cell::{AgentId, CELL_NEIGHBOUR_OFFSETS};
 use crate::cell_box::{deck_walk_grid, step_allowed, CellIndex, PlanKey};
 use crate::deck_layout::{DeckCells, DeckLayouts, CELL_SIZE_M, NUM_DECKS};

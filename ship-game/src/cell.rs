@@ -299,6 +299,7 @@ pub fn cardinal_step_allowed(from: &Cell, to: &Cell, dx: i32, dy: i32) -> bool {
 }
 
 /// True when a step to `(ix + dx, iy + dy)` exists and every crossed edge is passable.
+#[cfg(test)]
 pub fn step_allowed(cells: &HashMap<(i32, i32), Cell>, ix: i32, iy: i32, dx: i32, dy: i32) -> bool {
     let Some(from) = cells.get(&(ix, iy)) else {
         return false;
@@ -324,6 +325,7 @@ pub fn step_allowed(cells: &HashMap<(i32, i32), Cell>, ix: i32, iy: i32, dx: i32
 }
 
 /// True when a diagonal step is allowed (both adjacent cardinals must exist).
+#[cfg(test)]
 pub fn diagonal_step_allowed(
     grid: &HashMap<(i32, i32), Vec2>,
     ix: i32,
@@ -338,6 +340,7 @@ pub fn diagonal_step_allowed(
 }
 
 /// Edge wall material between two cells (or exterior when neighbour missing).
+#[cfg(test)]
 pub fn edge_wall_material(
     occupied: &std::collections::HashSet<(i32, i32)>,
     _from: (i32, i32),

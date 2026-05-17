@@ -1,12 +1,15 @@
 //! Plan-view edit mode: select cells and edit floor / wall materials from the HUD.
 
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use crate::app_2d::{
     plan_world_render_layers, CurrentDeck, DeckContentEntities, DeckWalkGrids, GamePlanCamera2d,
     ShipPlan2dRotateRoot,
 };
 use crate::cell::{Material, RoomId};
+use crate::cell_box;
 use crate::cell_box::{CellIndex, PlanKey};
-use crate::deck_layout::{DeckLayouts, CELL_SIZE_M};
+use crate::deck_layout::DeckLayouts;
 use crate::load_screen::GamePhase;
 use crate::plan_mesh::{rebuild_plan_deck_meshes, DeckPlanMeshes};
 use crate::shared::cursor_in_game_viewport;
@@ -135,10 +138,9 @@ struct EditModeBannerText;
 #[derive(Component)]
 struct EditModeCellSummaryText;
 
+/// Marks a material-field row in the edit panel (field identity lives on child widgets).
 #[derive(Component)]
-struct MaterialFieldRow {
-    field: CellMaterialField,
-}
+struct MaterialFieldRow;
 
 #[derive(Component)]
 struct MaterialDropdownButton {
@@ -275,7 +277,7 @@ fn spawn_material_field_row(parent: &mut ChildSpawnerCommands, field: CellMateri
                 display: Display::None,
                 ..default()
             },
-            MaterialFieldRow { field },
+            MaterialFieldRow,
         ))
         .with_children(|row| {
             row.spawn((
@@ -636,10 +638,9 @@ fn clipboard_hotkeys(
     edit_mode: Res<PlanEditMode>,
     keyboard: Res<ButtonInput<KeyCode>>,
     current_deck: Res<CurrentDeck>,
-    layouts: Res<DeckLayouts>,
     selected: Res<SelectedPlanCells>,
     mut clipboard: ResMut<PlanCellClipboard>,
-    mut layouts_mut: ResMut<DeckLayouts>,
+    mut layouts: ResMut<DeckLayouts>,
     mut walk_grids: ResMut<DeckWalkGrids>,
     mut dirty: ResMut<PlanDeckMeshDirty>,
     window: Single<&Window>,
@@ -682,8 +683,8 @@ fn clipboard_hotkeys(
         let anchor = anchor_idx.plan();
         let mut changed = false;
         for &(dx, dy, snapshot) in &clipboard.entries {
-            let tx = i32::from(anchor.0) + i32::from(dx);
-            let ty = i32::from(anchor.1) + i32::from(dy);
+            let tx = i32::from(anchor.0) + dx;
+            let ty = i32::from(anchor.1) + dy;
             if tx < 0 || ty < 0 {
                 continue;
             }
@@ -691,7 +692,7 @@ fn clipboard_hotkeys(
             let Some(index) = CellIndex::with_plan(deck_i as u8, target) else {
                 continue;
             };
-            let Some(cell) = layouts_mut.cell_mut(index) else {
+            let Some(cell) = layouts.cell_mut(index) else {
                 continue;
             };
             snapshot.apply(cell);
@@ -699,8 +700,7 @@ fn clipboard_hotkeys(
         }
         if changed {
             dirty.0 = Some(deck_i);
-            walk_grids.0[deck_i] =
-                crate::cell_box::deck_walk_grid(&layouts_mut.cells, deck_i as u8);
+            walk_grids.0[deck_i] = crate::cell_box::deck_walk_grid(&layouts.cells, deck_i as u8);
         }
     }
 }
@@ -956,8 +956,12 @@ fn sync_selected_cell_highlights(
         highlights.remove(&key);
     }
 
-    let mesh = mesh_handle
-        .get_or_insert_with(|| meshes.add(Mesh::from(Rectangle::new(CELL_SIZE_M, CELL_SIZE_M))));
+    let mesh = mesh_handle.get_or_insert_with(|| {
+        meshes.add(Mesh::from(Rectangle::new(
+            cell_box::beam_cell_m(),
+            cell_box::length_cell_m(),
+        )))
+    });
     let material = material_handle.get_or_insert_with(|| {
         materials.add(ColorMaterial::from(Color::srgba(1.0, 0.92, 0.2, 0.45)))
     });

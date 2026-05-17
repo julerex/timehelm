@@ -1,5 +1,7 @@
 //! Save-game picker shown before the ship layout is loaded (replaces procedural startup).
 
+#![allow(clippy::type_complexity)]
+
 use crate::deck_layout::DeckLayouts;
 #[cfg(target_arch = "wasm32")]
 use crate::ship_save::{decode_save, saved_ship_manifest_url, saved_ship_url, SavedShipManifest};
@@ -150,7 +152,6 @@ fn discover_saves(
         if available.files.is_empty() {
             status.0 = "No saves in saved_ships/ — run make write-ship-default".into();
         }
-        return;
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -315,6 +315,33 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_length_cells_share_an_edge() {
+        let a = CellIndex::new(10, 30, 0).unwrap();
+        let b = CellIndex::new(11, 30, 0).unwrap();
+        let half = length_cell_m() * 0.5;
+        let gap = (b.to_world_xy().y - half) - (a.to_world_xy().y + half);
+        assert!(gap.abs() < 1e-5, "gap along stern→bow: {gap}");
+    }
+
+    #[test]
+    fn legacy_one_metre_lattice_skips_length_indices() {
+        let mut prev: Option<u16> = None;
+        let mut skips = 0u32;
+        for iy in -170..170 {
+            let Some(idx) = CellIndex::from_legacy_xy_deck(0, iy, 0) else {
+                continue;
+            };
+            if let Some(p) = prev {
+                if idx.x > p + 1 {
+                    skips += 1;
+                }
+            }
+            prev = Some(idx.x);
+        }
+        assert!(skips > 0, "expected legacy lattice to skip grid X indices");
+    }
+
+    #[test]
     fn insert_and_get() {
         let mut box_ = CellBox::new();
         let idx = CellIndex::new(10, 20, 3).unwrap();

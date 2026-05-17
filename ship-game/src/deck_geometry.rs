@@ -205,14 +205,15 @@ pub fn accumulate_translated_cell_instances(
     )
 }
 
-/// Merge axis-aligned XY squares centred at each point, each cell painted with its own
+/// Merge axis-aligned XY rectangles centred at each point, each cell painted with its own
 /// linear-RGBA vertex colour. Lets a single `Mesh2d` + `ColorMaterial { color: WHITE }` render
 /// every bucket and amenity overlay in one draw call (Bevy's `ColorMaterial` shader multiplies
 /// by `Mesh::ATTRIBUTE_COLOR` when present).
-pub fn merged_plan_squares_mesh_colored(
+pub fn merged_plan_rectangles_mesh_colored(
     centers: &[Vec2],
     cell_colors: &[[f32; 4]],
-    half_size: f32,
+    half_x: f32,
+    half_y: f32,
     z: f32,
 ) -> Mesh {
     debug_assert_eq!(centers.len(), cell_colors.len());
@@ -229,13 +230,12 @@ pub fn merged_plan_squares_mesh_colored(
     let mut uvs = Vec::with_capacity(n * 4);
     let mut colors = Vec::with_capacity(n * 4);
     let mut indices = Vec::with_capacity(n * 6);
-    let h = half_size;
     for (i, (c, col)) in centers.iter().zip(cell_colors.iter()).enumerate() {
         let base = (i * 4) as u32;
-        positions.push([c.x - h, c.y - h, z]);
-        positions.push([c.x + h, c.y - h, z]);
-        positions.push([c.x + h, c.y + h, z]);
-        positions.push([c.x - h, c.y + h, z]);
+        positions.push([c.x - half_x, c.y - half_y, z]);
+        positions.push([c.x + half_x, c.y - half_y, z]);
+        positions.push([c.x + half_x, c.y + half_y, z]);
+        positions.push([c.x - half_x, c.y + half_y, z]);
         for _ in 0..4 {
             normals.push([0.0, 0.0, 1.0]);
             uvs.push([0.0, 0.0]);
@@ -255,17 +255,6 @@ pub fn merged_plan_squares_mesh_colored(
 pub enum PlanWallEdge {
     Vertical { x: f32, y0: f32, y1: f32 },
     Horizontal { y: f32, x0: f32, x1: f32 },
-}
-
-/// Black (or custom) wall borders as thin axis-aligned quads slightly above the floor.
-pub fn merged_plan_wall_borders_mesh(
-    edges: &[PlanWallEdge],
-    thickness_m: f32,
-    z: f32,
-    color: [f32; 4],
-) -> Mesh {
-    let varied: Vec<_> = edges.iter().map(|e| (*e, thickness_m)).collect();
-    merged_plan_wall_borders_mesh_varied(&varied, z, color)
 }
 
 /// Wall borders with per-edge thickness (e.g. 10 cm cabin partitions vs 5 cm hull strokes).
