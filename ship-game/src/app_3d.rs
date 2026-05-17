@@ -16,7 +16,10 @@ use crate::deck_layout::{
     NUM_DECKS,
 };
 use crate::shader_embed::ShipShaderEmbedPlugin;
-use crate::shared::{asset_plugin, primary_window};
+use crate::shared::{
+    asset_plugin, cursor_in_game_viewport, deck_info_text_3d, format_cell_hover_line,
+    game_camera_viewport, primary_window,
+};
 use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
 use bevy::camera::primitives::Aabb;
 use bevy::ecs::system::ParamSet;
@@ -53,29 +56,6 @@ const SIM_NPC_MODEL_PATHS: [&str; 18] = [
     "character-r.glb",
 ];
 
-const DECK_NAMES: [&str; NUM_DECKS] = [
-    "Engine Deck",
-    "Orlop Deck",
-    "Hold Deck",
-    "Lower Deck",
-    "Second Deck",
-    "First Deck",
-    "Main Deck",
-    "Upper Deck",
-    "Promenade Deck",
-    "Lido Deck",
-    "Boat Deck",
-    "Bridge Deck",
-    "Sports Deck",
-    "Observation Deck",
-    "Spa Deck",
-    "Pool Deck",
-    "Sky Deck",
-    "Terrace Deck",
-    "Crown Deck",
-    "Sun Deck",
-];
-
 /// Vertical spacing between deck floors (m along world +Z): **one deck level every 3 m**.
 const DECK_FLOOR_SPACING_M: f32 = 3.0;
 /// Extruded slab thickness (m); slightly under spacing so slabs do not z-fight deck-to-deck.
@@ -109,8 +89,6 @@ const LOD_COARSE_BEYOND_M: f32 = 820.0;
 const LOD_FINE_WITHIN_M: f32 = 680.0;
 /// Cell counts at or below this use per-cell entities (Bevy automatic GPU instancing / batching).
 const DECK_CELL_AUTOMATIC_INSTANCE_CAP: usize = 1600;
-const VERSION_NUMBER: i64 = 128;
-
 const CLIP_SHADER_FORWARD: &str = concat!(
     "embedded://",
     env!("CARGO_CRATE_NAME"),
@@ -129,7 +107,13 @@ struct GameCamera3d;
 struct UiCamera;
 
 #[derive(Component)]
-struct DeckLabel;
+struct HudRoot;
+
+#[derive(Component)]
+struct DeckInfoText;
+
+#[derive(Component)]
+struct HoverCellText;
 
 #[derive(Component)]
 struct DeckLayer(#[allow(dead_code)] usize);
@@ -207,8 +191,8 @@ impl Material for ShipClipMaterial {
 }
 
 pub fn run_app_3d() {
-    App::new()
-        .add_plugins(
+    let mut app = App::new();
+    app.add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(primary_window()),
@@ -218,14 +202,24 @@ pub fn run_app_3d() {
                 .set(ImagePlugin::default_nearest()),
         )
         .add_plugins(ShipShaderEmbedPlugin)
-        .add_plugins(MaterialPlugin::<ShipClipMaterial>::default())
+        .add_plugins(MaterialPlugin::<ShipClipMaterial>::default());
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_plugins(crate::ship_save::ShipSavePlugin);
+    app
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
         .insert_resource(CameraRig::default())
         .insert_resource(SimRng::default())
         .insert_resource(NpcHeightLogState::default())
         .insert_resource(ClearColor::default())
         .insert_resource(DeckLodFinePreferred::default())
-        .add_systems(Startup, (setup, spawn_sim_npcs.after(setup)))
+        .add_systems(
+            Startup,
+            (
+                setup,
+                spawn_sim_npcs.after(setup),
+                init_deck_info_text.after(setup),
+            ),
+        )
         .add_systems(
             Update,
             (
@@ -235,11 +229,14 @@ pub fn run_app_3d() {
                 sim_npc_wander,
                 sync_clip_material,
                 cull_npcs_above_cut,
+                (sync_game_camera_viewport, update_hover_cell_label).chain(),
                 update_deck_label,
                 log_npc_heights_once,
             ),
-        )
-        .run();
+        );
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(Update, reload_deck_meshes_after_load);
+    app.run();
 }
 
 impl Default for CameraRig {
@@ -293,6 +290,23 @@ fn focused_deck_target_z(deck_index: usize) -> f32 {
     (deck_index as f32 + 0.5) * DECK_FLOOR_SPACING_M
 }
 
+/// World Z of the top face of a deck slab (m).
+fn deck_top_z(deck_index: usize) -> f32 {
+    deck_index as f32 * DECK_FLOOR_SPACING_M + DECK_SLAB_THICKNESS_M
+}
+
+fn ray_hit_plane_z(ray: Ray3d, plane_z: f32) -> Option<Vec3> {
+    let dir = ray.direction.as_vec3();
+    if dir.z.abs() < 1e-6 {
+        return None;
+    }
+    let t = (plane_z - ray.origin.z) / dir.z;
+    if t < 0.0 {
+        return None;
+    }
+    Some(ray.origin + dir * t)
+}
+
 fn dir_from_yaw_pitch(yaw: f32, pitch: f32) -> Vec3 {
     let cp = pitch.cos();
     Vec3::new(cp * yaw.cos(), cp * yaw.sin(), pitch.sin())
@@ -339,57 +353,12 @@ fn deck_cell_cuboid_mesh(cell_m: f32, thickness_m: f32, color: Color) -> Mesh {
     mesh
 }
 
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ShipClipMaterial>>,
-    mut images: ResMut<Assets<Image>>,
+fn spawn_deck_meshes(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    clip_handle: &Handle<ShipClipMaterial>,
+    layouts: &DeckLayouts,
 ) {
-    let deck_pattern = images.add(crate::deck_geometry::procedural_deck_plan_texture_image());
-    let clip_handle = materials.add(ShipClipMaterial {
-        clip_data: Vec4::new(cut_plane_world_z(NUM_DECKS - 1), ABOVE_DECK_ALPHA, 0.0, 0.0),
-        deck_pattern,
-    });
-    commands.insert_resource(SharedClipMaterial(clip_handle.clone()));
-
-    let rig = CameraRig::default();
-    commands.spawn((
-        Camera3d::default(),
-        Camera {
-            order: 0,
-            ..default()
-        },
-        camera_rig_transform(&rig),
-        GameCamera3d,
-    ));
-
-    let ui_camera = commands
-        .spawn((
-            Camera2d,
-            Camera {
-                order: 1,
-                clear_color: ClearColorConfig::None,
-                ..default()
-            },
-            UiCamera,
-        ))
-        .id();
-
-    commands.insert_resource(GlobalAmbientLight {
-        color: Color::WHITE,
-        brightness: 40.0,
-        affects_lightmapped_meshes: true,
-    });
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 12000.0,
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
-    ));
-
-    let layouts = deck_cell_layouts(CELL_SIZE_M);
-
     let material_protos: [Mesh; CellMaterial::COUNT] = std::array::from_fn(|i| {
         deck_cell_cuboid_mesh(
             CELL_SIZE_M,
@@ -468,25 +437,169 @@ fn setup(
             }
         }
     }
+}
 
+#[cfg(not(target_arch = "wasm32"))]
+fn reload_deck_meshes_after_load(
+    mut events: MessageReader<crate::ship_save::ShipLayoutsReplaced>,
+    mut commands: Commands,
+    layouts: Res<DeckLayouts>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    clip: Res<SharedClipMaterial>,
+    deck_entities: Query<Entity, With<DeckLayer>>,
+    mut walk_points: ResMut<DeckFiveWalkPoints>,
+) {
+    for _ in events.read() {
+        for entity in &deck_entities {
+            commands.entity(entity).despawn();
+        }
+        spawn_deck_meshes(&mut commands, &mut meshes, &clip.0, &layouts);
+        let deck_five_z = SIM_DECK_INDEX as f32 * DECK_FLOOR_SPACING_M;
+        walk_points.0 = layouts
+            .deck(SIM_DECK_INDEX)
+            .centers()
+            .into_iter()
+            .map(|p| Vec3::new(p.x, p.y, deck_five_z))
+            .collect();
+    }
+}
+
+fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ShipClipMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let deck_pattern = images.add(crate::deck_geometry::procedural_deck_plan_texture_image());
+    let clip_handle = materials.add(ShipClipMaterial {
+        clip_data: Vec4::new(cut_plane_world_z(NUM_DECKS - 1), ABOVE_DECK_ALPHA, 0.0, 0.0),
+        deck_pattern,
+    });
+    commands.insert_resource(SharedClipMaterial(clip_handle.clone()));
+
+    let rig = CameraRig::default();
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            order: 0,
+            ..default()
+        },
+        camera_rig_transform(&rig),
+        GameCamera3d,
+    ));
+
+    let ui_camera = commands
+        .spawn((
+            Camera2d,
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            UiCamera,
+        ))
+        .id();
+
+    commands.insert_resource(GlobalAmbientLight {
+        color: Color::WHITE,
+        brightness: 40.0,
+        affects_lightmapped_meshes: true,
+    });
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 12000.0,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
+    ));
+
+    let layouts = deck_cell_layouts(CELL_SIZE_M);
+    spawn_deck_meshes(&mut commands, &mut meshes, &clip_handle, &layouts);
     commands.insert_resource(layouts);
 
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(10.0),
-            left: Val::Px(10.0),
-            ..default()
-        },
-        Text::new(""),
-        TextFont {
-            font_size: 22.0,
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        UiTargetCamera(ui_camera),
-        DeckLabel,
-    ));
+    commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(50.0),
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(12.0)),
+                row_gap: Val::Px(8.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.05, 0.08, 0.12, 0.88)),
+            UiTargetCamera(ui_camera),
+            HudRoot,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new(""),
+                TextFont {
+                    font_size: 20.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                DeckInfoText,
+            ));
+            parent.spawn((
+                Text::new("Hover: —"),
+                TextFont {
+                    font_size: 18.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.75, 0.82, 0.9)),
+                HoverCellText,
+            ));
+        });
+}
+
+fn sync_game_camera_viewport(
+    window: Single<&Window>,
+    mut cameras: Query<&mut Camera, With<GameCamera3d>>,
+) {
+    let viewport = game_camera_viewport(&window);
+    for mut camera in &mut cameras {
+        camera.viewport = Some(viewport.clone());
+    }
+}
+
+fn hover_cell_line(
+    window: &Window,
+    current_deck: usize,
+    layouts: &DeckLayouts,
+    cameras: &Query<(&Camera, &GlobalTransform), With<GameCamera3d>>,
+) -> String {
+    let Ok((camera, cam_tf)) = cameras.single() else {
+        return "Hover: —".to_string();
+    };
+    let Some(cursor) = cursor_in_game_viewport(window, camera) else {
+        return "Hover: —".to_string();
+    };
+    let Ok(ray) = camera.viewport_to_world(cam_tf, cursor) else {
+        return "Hover: —".to_string();
+    };
+    let deck_z = deck_top_z(current_deck);
+    let Some(hit) = ray_hit_plane_z(ray, deck_z) else {
+        return "Hover: —".to_string();
+    };
+    let hull_xy = Vec2::new(hit.x, hit.y);
+    format_cell_hover_line(hull_xy, current_deck, layouts)
+}
+
+fn update_hover_cell_label(
+    window: Single<&Window>,
+    current_deck: Res<CurrentDeck>,
+    layouts: Res<DeckLayouts>,
+    cameras: Query<(&Camera, &GlobalTransform), With<GameCamera3d>>,
+    mut texts: Query<&mut Text, With<HoverCellText>>,
+) {
+    let hover_line = hover_cell_line(&window, current_deck.0, &layouts, &cameras);
+    for mut text in &mut texts {
+        text.0 = hover_line.clone();
+    }
 }
 
 fn spawn_sim_npcs(
@@ -747,20 +860,22 @@ fn sim_npc_wander(
 fn update_deck_label(
     current_deck: Res<CurrentDeck>,
     rig: Res<CameraRig>,
-    mut query: Query<&mut Text, With<DeckLabel>>,
+    mut query: Query<&mut Text, With<DeckInfoText>>,
 ) {
     if !current_deck.is_changed() && !rig.is_changed() {
         return;
     }
     for mut text in &mut query {
-        text.0 = format!(
-            "Version {VERSION_NUMBER}\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nQ/E: orbit | WASD: pan | R/F: vertical | Z/X: zoom | RMB: orbit | MMB: pan | wheel: zoom | PgUp/PgDn: deck\nTile zones (fine LOD): hull edge · bow windows · inner/outer cabins · public aft · shell tint",
-            current_deck.0 + 1,
-            NUM_DECKS,
-            DECK_NAMES[current_deck.0],
-            SHIP_LENGTH_M,
-            SHIP_BEAM_M,
-        );
+        text.0 = deck_info_text_3d(current_deck.0);
+    }
+}
+
+fn init_deck_info_text(
+    current_deck: Res<CurrentDeck>,
+    mut query: Query<&mut Text, With<DeckInfoText>>,
+) {
+    for mut text in &mut query {
+        text.0 = deck_info_text_3d(current_deck.0);
     }
 }
 

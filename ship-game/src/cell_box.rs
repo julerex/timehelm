@@ -102,8 +102,10 @@ impl CellIndex {
     /// World metres from legacy centred indices (`ix` = world X, `iy` = world Y at 1 m pitch).
     #[must_use]
     pub fn from_legacy_xy_deck(ix: i32, iy: i32, deck: u8) -> Option<Self> {
-        let world =
-            bevy::prelude::Vec2::new(ix as f32 * LEGACY_CELL_SIZE_M, iy as f32 * LEGACY_CELL_SIZE_M);
+        let world = bevy::prelude::Vec2::new(
+            ix as f32 * LEGACY_CELL_SIZE_M,
+            iy as f32 * LEGACY_CELL_SIZE_M,
+        );
         Self::from_world_xy_deck(world, deck)
     }
 
@@ -140,7 +142,10 @@ impl Default for CellBox {
 impl CellBox {
     #[must_use]
     pub fn new() -> Self {
-        let cells = (0..VOLUME).map(|_| None).collect::<Vec<_>>().into_boxed_slice();
+        let cells = (0..VOLUME)
+            .map(|_| None)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self { cells }
     }
 
@@ -185,14 +190,19 @@ impl CellBox {
     }
 
     pub fn iter_occupied(&self) -> impl Iterator<Item = (CellIndex, &Cell)> + '_ {
-        self.cells
-            .iter()
-            .enumerate()
-            .filter_map(|(i, cell)| {
-                let cell = cell.as_ref()?;
-                let index = CellIndex::from_linear_index(i)?;
-                Some((index, cell))
-            })
+        self.cells.iter().enumerate().filter_map(|(i, cell)| {
+            let cell = cell.as_ref()?;
+            let index = CellIndex::from_linear_index(i)?;
+            Some((index, cell))
+        })
+    }
+
+    pub fn iter_occupied_mut(&mut self) -> impl Iterator<Item = (CellIndex, &mut Cell)> + '_ {
+        self.cells.iter_mut().enumerate().filter_map(|(i, cell)| {
+            let cell = cell.as_mut()?;
+            let index = CellIndex::from_linear_index(i)?;
+            Some((index, cell))
+        })
     }
 
     pub fn iter_deck(&self, deck: u8) -> impl Iterator<Item = (CellIndex, &Cell)> + '_ {

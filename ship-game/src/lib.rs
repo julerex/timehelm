@@ -7,10 +7,14 @@ mod app_3d;
 mod cell;
 pub mod cell_box;
 mod deck_geometry;
-mod deck_layout;
+pub mod deck_layout;
+mod edit_mode_2d;
+mod plan_mesh;
 mod shader_embed;
 mod shared;
 mod ship_hull;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ship_save;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

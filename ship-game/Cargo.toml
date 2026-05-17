@@ -43,3 +43,6 @@ wasm-bindgen = "0.2"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1", features = ["js"] }
 earcutr = "0.5"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+zstd = "0.13"

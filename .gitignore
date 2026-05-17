@@ -18,6 +18,10 @@ client/public/ship/*
 .env
 .env.local
 
+# Local ship saves (use make write-ship-default for a fixture)
+saved_ships/*
+!saved_ships/.gitkeep
+
 # IDE
 .vscode/
 .idea/

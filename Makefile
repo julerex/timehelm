@@ -1,5 +1,12 @@
 .PHONY: dev build deploy install lint lint-server fmt test build-ship run-ship build-ship-native run-ship-native run-ship-native-gl run-ship-native-vulkan \
-	gh-check ci ci-list ci-here ci-watch ci-watch-here ci-view ci-log ci-status
+	gh-check ci ci-list ci-here ci-watch ci-watch-here ci-view ci-log ci-status \
+	inspect-ship write-ship-default
+
+# Compressed ship save for agent analysis (override: make inspect-ship SAVE_SHIP=path/to/file.ship.zst)
+SAVE_SHIP ?= saved_ships/latest.ship.zst
+ifdef SAVE
+SAVE_SHIP := $(SAVE)
+endif
 
 # Cursor sets ARGV0 to its binary path, which breaks cargo's proxy detection.
 CARGO = env -u ARGV0 cargo
@@ -97,3 +104,12 @@ fly-db-connect:
 
 fly-logs:
 	fly logs --app timehelm
+
+# Deserialize a saved ship and print CellBox / deck summary (for agents).
+inspect-ship:
+	cd ship-game && SAVE_SHIP=$(abspath $(SAVE_SHIP)) $(CARGO) test --lib ship_save::tests::inspect_ship_save -- --exact --ignored --nocapture
+
+# Write procedural default layout to saved_ships/default.ship.zst (for testing inspect-ship).
+write-ship-default:
+	@mkdir -p saved_ships
+	cd ship-game && $(CARGO) test --lib ship_save::tests::write_default_ship_save -- --exact --nocapture

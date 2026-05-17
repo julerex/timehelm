@@ -253,16 +253,8 @@ pub fn merged_plan_squares_mesh_colored(
 /// Axis-aligned wall stroke on the plan (constant `x` or constant `y`).
 #[derive(Clone, Copy, Debug)]
 pub enum PlanWallEdge {
-    Vertical {
-        x: f32,
-        y0: f32,
-        y1: f32,
-    },
-    Horizontal {
-        y: f32,
-        x0: f32,
-        x1: f32,
-    },
+    Vertical { x: f32, y0: f32, y1: f32 },
+    Horizontal { y: f32, x0: f32, x1: f32 },
 }
 
 /// Black (or custom) 5 cm-style wall borders as thin axis-aligned quads slightly above the floor.

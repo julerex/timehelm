@@ -4,15 +4,17 @@
 //! All 20 decks are baked to one vertex-coloured `Mesh2d` each at startup and share a single
 //! white `ColorMaterial`; deck switching just toggles `Visibility` on the relevant entity.
 
-use crate::cell::{AgentId, Material, CELL_NEIGHBOUR_OFFSETS};
-use crate::cell_box::{self, deck_walk_grid, step_allowed, CellIndex, PlanKey};
-use crate::deck_geometry::{
-    merged_plan_squares_mesh_colored, merged_plan_wall_borders_mesh, PlanWallEdge,
-};
+use crate::cell::{AgentId, CELL_NEIGHBOUR_OFFSETS};
+use crate::cell_box::{deck_walk_grid, step_allowed, CellIndex, PlanKey};
 use crate::deck_layout::{
-    deck_cell_layouts, DeckCells, DeckLayouts, CELL_SIZE_M, CELL_VISUAL_SCALE, NUM_DECKS,
+    deck_cell_layouts, DeckCells, DeckLayouts, CELL_SIZE_M, NUM_DECKS,
 };
-use crate::shared::{asset_plugin, primary_window};
+use crate::edit_mode_2d::{spawn_edit_mode_panel, PlanEditPlugin};
+use crate::plan_mesh::{build_deck_mesh, build_deck_wall_mesh, DeckPlanMeshes};
+use crate::shared::{
+    asset_plugin, cursor_in_game_viewport, deck_info_text_2d, format_cell_hover_line,
+    game_camera_viewport, primary_window,
+};
 use crate::ship_hull::SHIP_LENGTH_M;
 use bevy::camera::{OrthographicProjection, Projection, ScalingMode};
 use bevy::prelude::*;
@@ -21,13 +23,6 @@ use std::f32::consts::FRAC_PI_2;
 
 const SIM_DECK_INDEX: usize = 4;
 const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
-
-const Z_CELL_PLANE: f32 = 0.0;
-/// Wall strokes sit slightly above floor quads to avoid z-fighting.
-const Z_WALL_PLANE: f32 = 0.001;
-/// Plan-view wall border thickness (m).
-const WALL_BORDER_THICKNESS_M: f32 = 0.05;
-const WALL_BORDER_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// Simulated walkers: slight Z offset above the deck cell mesh.
 const Z_HUMAN: f32 = 0.012;
@@ -39,17 +34,29 @@ const HUMAN_CELL_COLOR: Color = Color::srgba(0.96, 0.62, 0.62, 0.95);
 const SIM_HUMAN_STEPS_PER_S: f32 = 2.8;
 
 #[derive(Component)]
-struct ShipPlan2dRotateRoot;
+pub(crate) struct ShipPlan2dRotateRoot;
+
+#[derive(Component)]
+pub(crate) struct GamePlanCamera2d;
+
+#[derive(Component)]
+struct UiCamera2d;
+
+#[derive(Component)]
+struct DeckInfoText2d;
+
+#[derive(Component)]
+struct HoverCellText2d;
 
 #[derive(Resource)]
-struct CurrentDeck(usize);
+pub(crate) struct CurrentDeck(pub(crate) usize);
 
 #[derive(Resource)]
-struct DeckContentEntities([Entity; NUM_DECKS]);
+pub(crate) struct DeckContentEntities(pub(crate) [Entity; NUM_DECKS]);
 
 /// Per-deck map from 1 m grid cell to exact walk cell centre.
 #[derive(Resource)]
-struct DeckWalkGrids(Vec<HashMap<PlanKey, Vec2>>);
+pub(crate) struct DeckWalkGrids(pub(crate) Vec<HashMap<PlanKey, Vec2>>);
 
 #[derive(Resource)]
 struct SimRng {
@@ -97,96 +104,6 @@ struct SimHuman {
 #[derive(Component)]
 struct HumanWander {
     target: Vec2,
-}
-
-fn color_to_linear_array(c: Color) -> [f32; 4] {
-    let lr: LinearRgba = c.into();
-    [lr.red, lr.green, lr.blue, lr.alpha]
-}
-
-/// Bake all of a deck's cells into one vertex-coloured mesh.
-fn build_deck_mesh(deck_index: usize, deck: DeckCells<'_>) -> Mesh {
-    let half_x = cell_box::length_cell_m() * CELL_VISUAL_SCALE * 0.5;
-    let half_y = cell_box::beam_cell_m() * CELL_VISUAL_SCALE * 0.5;
-    let cells: Vec<_> = deck.iter_cells().collect();
-    let mut centers = Vec::with_capacity(cells.len());
-    let mut colors = Vec::with_capacity(cells.len());
-    for (plan, cell) in cells {
-        let p = deck.index(plan).to_world_xy();
-        centers.push(p);
-        colors.push(color_to_linear_array(
-            cell.floor.plan_floor_color(deck_index),
-        ));
-    }
-    merged_plan_squares_mesh_colored(&centers, &colors, half_x.min(half_y), Z_CELL_PLANE)
-}
-
-/// Collect axis-aligned wall edges once per shared boundary (5 cm strokes in plan view).
-fn collect_wall_edges(deck: DeckCells<'_>) -> Vec<PlanWallEdge> {
-    let half_x = cell_box::length_cell_m() * CELL_VISUAL_SCALE * 0.5;
-    let half_y = cell_box::beam_cell_m() * CELL_VISUAL_SCALE * 0.5;
-    let mut edges = Vec::new();
-    for (plan, cell) in deck.iter_cells() {
-        let c = deck.index(plan).to_world_xy();
-        let y0 = c.y - half_x;
-        let y1 = c.y + half_x;
-        let x0 = c.x - half_y;
-        let x1 = c.x + half_y;
-
-        if cell.wall1 != Material::Open {
-            edges.push(PlanWallEdge::Vertical {
-                x: x1,
-                y0,
-                y1,
-            });
-        }
-        if cell.wall2 != Material::Open {
-            edges.push(PlanWallEdge::Horizontal {
-                y: y1,
-                x0,
-                x1,
-            });
-        }
-        if cell.wall3 != Material::Open {
-            let west_draws = deck
-                .index(plan)
-                .offset(-1, 0, 0)
-                .and_then(|i| deck.get(i.plan()))
-                .is_none_or(|w| w.wall1 == Material::Open);
-            if west_draws {
-                edges.push(PlanWallEdge::Vertical {
-                    x: x0,
-                    y0,
-                    y1,
-                });
-            }
-        }
-        if cell.wall4 != Material::Open {
-            let south_draws = deck
-                .index(plan)
-                .offset(0, -1, 0)
-                .and_then(|i| deck.get(i.plan()))
-                .is_none_or(|s| s.wall2 == Material::Open);
-            if south_draws {
-                edges.push(PlanWallEdge::Horizontal {
-                    y: y0,
-                    x0,
-                    x1,
-                });
-            }
-        }
-    }
-    edges
-}
-
-fn build_deck_wall_mesh(deck: DeckCells<'_>) -> Mesh {
-    let edges = collect_wall_edges(deck);
-    merged_plan_wall_borders_mesh(
-        &edges,
-        WALL_BORDER_THICKNESS_M,
-        Z_WALL_PLANE,
-        WALL_BORDER_COLOR,
-    )
 }
 
 fn random_walk_point(grid: &HashMap<PlanKey, Vec2>, rng: &mut SimRng) -> Option<Vec2> {
@@ -311,9 +228,17 @@ fn pick_strictly_closer_neighbour(
     (!best.is_empty()).then(|| best[rng.next_usize(best.len())])
 }
 
+#[derive(Resource)]
+struct Plan2dVisualAssets {
+    rotate_root: Entity,
+    shared_material: Handle<ColorMaterial>,
+    human_mesh: Handle<Mesh>,
+    human_material: Handle<ColorMaterial>,
+}
+
 pub fn run_app_2d() {
-    App::new()
-        .add_plugins(
+    let mut app = App::new();
+    app.add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(primary_window()),
@@ -321,18 +246,141 @@ pub fn run_app_2d() {
                 })
                 .set(asset_plugin())
                 .set(ImagePlugin::default_nearest()),
-        )
+        );
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_plugins(crate::ship_save::ShipSavePlugin);
+    app.add_plugins(PlanEditPlugin)
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
         .insert_resource(deck_cell_layouts(crate::deck_layout::CELL_SIZE_M))
         .insert_resource(SimRng::default())
         .insert_resource(NextAgentId(1))
         .insert_resource(ClearColor(Color::srgb(0.04, 0.09, 0.16)))
-        .add_systems(Startup, setup_2d)
+        .add_systems(Startup, (setup_2d, init_deck_info_text_2d.after(setup_2d)))
         .add_systems(
             Update,
-            (deck_switch_2d, sync_plan_deck_visibility, human_wander_2d),
-        )
-        .run();
+            (
+                deck_switch_2d,
+                sync_plan_deck_visibility,
+                human_wander_2d,
+                (sync_plan_camera_viewport, update_hover_cell_label_2d).chain(),
+                update_deck_info_text_2d,
+            ),
+        );
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(Update, reload_plan_decks_after_load);
+    app.run();
+}
+
+fn spawn_plan_deck_entities(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    layouts: &mut DeckLayouts,
+    assets: &Plan2dVisualAssets,
+    current_deck: usize,
+    rng: &mut SimRng,
+    next_agent: &mut NextAgentId,
+) -> ([Entity; NUM_DECKS], DeckPlanMeshes) {
+    let walk_grids = deck_walk_grids(layouts);
+    let per_deck = humans_per_deck(&walk_grids, layouts, rng);
+    let step_period = SIM_HUMAN_STEPS_PER_S.recip();
+
+    let mut deck_entities = [Entity::PLACEHOLDER; NUM_DECKS];
+    let mut floor_meshes: [Handle<Mesh>; NUM_DECKS] =
+        std::array::from_fn(|_| Handle::default());
+    let mut wall_meshes: [Handle<Mesh>; NUM_DECKS] = std::array::from_fn(|_| Handle::default());
+    for (deck_i, slot) in deck_entities.iter_mut().enumerate() {
+        let mesh_handle = meshes.add(build_deck_mesh(deck_i, layouts.deck(deck_i)));
+        floor_meshes[deck_i] = mesh_handle.clone();
+        let visibility = if deck_i == current_deck {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        let wall_mesh_handle = meshes.add(build_deck_wall_mesh(layouts.deck(deck_i)));
+        wall_meshes[deck_i] = wall_mesh_handle.clone();
+        *slot = commands
+            .spawn((
+                Mesh2d(mesh_handle),
+                MeshMaterial2d(assets.shared_material.clone()),
+                Transform::IDENTITY,
+                visibility,
+                ChildOf(assets.rotate_root),
+            ))
+            .with_children(|plan| {
+                plan.spawn((
+                    Mesh2d(wall_mesh_handle),
+                    MeshMaterial2d(assets.shared_material.clone()),
+                    Transform::IDENTITY,
+                ));
+                let deck_placements = &per_deck[deck_i];
+                for &(pos_xy, tgt_xy) in deck_placements {
+                    let agent_id = AgentId(next_agent.0);
+                    next_agent.0 += 1;
+                    let cell =
+                        DeckCells::cell_coords_deck(pos_xy, deck_i as u8).expect("walk cell");
+                    register_agent_on_cell(layouts, deck_i, cell, agent_id);
+                    let stagger =
+                        (rng.next_u32() as f32 / u32::MAX as f32).clamp(0.0, 1.0) * step_period;
+                    plan.spawn((
+                        Mesh2d(assets.human_mesh.clone()),
+                        MeshMaterial2d(assets.human_material.clone()),
+                        Transform::from_xyz(pos_xy.x, pos_xy.y, Z_HUMAN),
+                        SimHuman {
+                            agent_id,
+                            deck_idx: deck_i,
+                            last_cell: Some(cell),
+                            steps_per_second: SIM_HUMAN_STEPS_PER_S,
+                            time_until_step: stagger,
+                        },
+                        HumanWander { target: tgt_xy },
+                    ));
+                }
+            })
+            .id();
+    }
+    (
+        deck_entities,
+        DeckPlanMeshes {
+            floors: floor_meshes,
+            walls: wall_meshes,
+        },
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn reload_plan_decks_after_load(
+    mut events: MessageReader<crate::ship_save::ShipLayoutsReplaced>,
+    mut commands: Commands,
+    mut layouts: ResMut<DeckLayouts>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    assets: Res<Plan2dVisualAssets>,
+    current_deck: Res<CurrentDeck>,
+    mut deck_entities: ResMut<DeckContentEntities>,
+    mut walk_grids: ResMut<DeckWalkGrids>,
+    mut rng: ResMut<SimRng>,
+    mut next_agent: ResMut<NextAgentId>,
+) {
+    for _ in events.read() {
+        for &entity in &deck_entities.0 {
+            commands.entity(entity).despawn();
+        }
+        for (_, cell) in layouts.cells.iter_occupied_mut() {
+            cell.contents = crate::cell::Bag::default();
+        }
+        next_agent.0 = 1;
+        let (new_entities, new_meshes) = spawn_plan_deck_entities(
+            &mut commands,
+            &mut meshes,
+            &mut layouts,
+            &assets,
+            current_deck.0,
+            &mut rng,
+            &mut next_agent,
+        );
+        *walk_grids = deck_walk_grids(&layouts);
+        *deck_entities = DeckContentEntities(new_entities);
+        commands.insert_resource(new_meshes);
+    }
 }
 
 fn setup_2d(
@@ -354,7 +402,68 @@ fn setup_2d(
             ..default()
         },
         Projection::from(world_ortho),
+        GamePlanCamera2d,
     ));
+
+    let ui_camera = commands
+        .spawn((
+            Camera2d,
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            UiCamera2d,
+        ))
+        .id();
+
+    commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(50.0),
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                flex_direction: FlexDirection::Row,
+                ..default()
+            },
+            UiTargetCamera(ui_camera),
+        ))
+        .with_children(|hud| {
+            hud.spawn((
+                Node {
+                    flex_grow: 1.0,
+                    height: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(12.0)),
+                    row_gap: Val::Px(8.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.05, 0.08, 0.12, 0.88)),
+            ))
+            .with_children(|left| {
+                left.spawn((
+                    Text::new(""),
+                    TextFont {
+                        font_size: 20.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    DeckInfoText2d,
+                ));
+                left.spawn((
+                    Text::new("Hover: —"),
+                    TextFont {
+                        font_size: 18.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.75, 0.82, 0.9)),
+                    HoverCellText2d,
+                ));
+            });
+        });
+    spawn_edit_mode_panel(&mut commands, ui_camera);
 
     let rotate_root = commands
         .spawn((
@@ -368,60 +477,101 @@ fn setup_2d(
     let shared_material = materials.add(ColorMaterial::from(Color::WHITE));
     let human_mesh = meshes.add(Mesh::from(Rectangle::new(CELL_SIZE_M, CELL_SIZE_M)));
     let human_material = materials.add(ColorMaterial::from(HUMAN_CELL_COLOR));
-    let walk_grids = deck_walk_grids(&layouts);
-    let per_deck = humans_per_deck(&walk_grids, &layouts, &mut rng);
-    commands.insert_resource(walk_grids);
-    let step_period = SIM_HUMAN_STEPS_PER_S.recip();
-
-    let mut deck_entities = [Entity::PLACEHOLDER; NUM_DECKS];
-    for (deck_i, slot) in deck_entities.iter_mut().enumerate() {
-        let mesh_handle = meshes.add(build_deck_mesh(deck_i, layouts.deck(deck_i)));
-        let visibility = if deck_i == SIM_DECK_INDEX {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        let wall_mesh_handle = meshes.add(build_deck_wall_mesh(layouts.deck(deck_i)));
-        *slot = commands
-            .spawn((
-                Mesh2d(mesh_handle),
-                MeshMaterial2d(shared_material.clone()),
-                Transform::IDENTITY,
-                visibility,
-                ChildOf(rotate_root),
-            ))
-            .with_children(|plan| {
-                plan.spawn((
-                    Mesh2d(wall_mesh_handle),
-                    MeshMaterial2d(shared_material.clone()),
-                    Transform::IDENTITY,
-                ));
-                let deck_placements = &per_deck[deck_i];
-                for &(pos_xy, tgt_xy) in deck_placements {
-                    let agent_id = AgentId(next_agent.0);
-                    next_agent.0 += 1;
-                    let cell = DeckCells::cell_coords_deck(pos_xy, deck_i as u8).expect("walk cell");
-                    register_agent_on_cell(&mut layouts, deck_i, cell, agent_id);
-                    let stagger =
-                        (rng.next_u32() as f32 / u32::MAX as f32).clamp(0.0, 1.0) * step_period;
-                    plan.spawn((
-                        Mesh2d(human_mesh.clone()),
-                        MeshMaterial2d(human_material.clone()),
-                        Transform::from_xyz(pos_xy.x, pos_xy.y, Z_HUMAN),
-                        SimHuman {
-                            agent_id,
-                            deck_idx: deck_i,
-                            last_cell: Some(cell),
-                            steps_per_second: SIM_HUMAN_STEPS_PER_S,
-                            time_until_step: stagger,
-                        },
-                        HumanWander { target: tgt_xy },
-                    ));
-                }
-            })
-            .id();
-    }
+    commands.insert_resource(Plan2dVisualAssets {
+        rotate_root,
+        shared_material: shared_material.clone(),
+        human_mesh: human_mesh.clone(),
+        human_material: human_material.clone(),
+    });
+    let (deck_entities, deck_meshes) = spawn_plan_deck_entities(
+        &mut commands,
+        &mut meshes,
+        &mut layouts,
+        &Plan2dVisualAssets {
+            rotate_root,
+            shared_material,
+            human_mesh,
+            human_material,
+        },
+        SIM_DECK_INDEX,
+        &mut rng,
+        &mut next_agent,
+    );
+    commands.insert_resource(deck_walk_grids(&layouts));
     commands.insert_resource(DeckContentEntities(deck_entities));
+    commands.insert_resource(deck_meshes);
+}
+
+fn sync_plan_camera_viewport(
+    window: Single<&Window>,
+    mut cameras: Query<&mut Camera, With<GamePlanCamera2d>>,
+) {
+    let viewport = game_camera_viewport(&window);
+    for mut camera in &mut cameras {
+        camera.viewport = Some(viewport.clone());
+    }
+}
+
+fn hover_cell_line_2d(
+    window: &Window,
+    current_deck: usize,
+    layouts: &DeckLayouts,
+    cameras: &Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
+    rotate_roots: &Query<&GlobalTransform, With<ShipPlan2dRotateRoot>>,
+) -> String {
+    let Ok((camera, cam_tf)) = cameras.single() else {
+        return "Hover: —".to_string();
+    };
+    let Some(cursor) = cursor_in_game_viewport(window, camera) else {
+        return "Hover: —".to_string();
+    };
+    let Ok(world_xy) = camera.viewport_to_world_2d(cam_tf, cursor) else {
+        return "Hover: —".to_string();
+    };
+    let Ok(plan_root_tf) = rotate_roots.single() else {
+        return "Hover: —".to_string();
+    };
+    let hull_xy = plan_root_tf
+        .affine()
+        .inverse()
+        .transform_point3(world_xy.extend(0.0))
+        .truncate();
+    format_cell_hover_line(hull_xy, current_deck, layouts)
+}
+
+fn update_hover_cell_label_2d(
+    window: Single<&Window>,
+    current_deck: Res<CurrentDeck>,
+    layouts: Res<DeckLayouts>,
+    cameras: Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
+    rotate_roots: Query<&GlobalTransform, With<ShipPlan2dRotateRoot>>,
+    mut texts: Query<&mut Text, With<HoverCellText2d>>,
+) {
+    let hover_line = hover_cell_line_2d(&window, current_deck.0, &layouts, &cameras, &rotate_roots);
+    for mut text in &mut texts {
+        text.0 = hover_line.clone();
+    }
+}
+
+fn update_deck_info_text_2d(
+    current_deck: Res<CurrentDeck>,
+    mut query: Query<&mut Text, With<DeckInfoText2d>>,
+) {
+    if !current_deck.is_changed() {
+        return;
+    }
+    for mut text in &mut query {
+        text.0 = deck_info_text_2d(current_deck.0);
+    }
+}
+
+fn init_deck_info_text_2d(
+    current_deck: Res<CurrentDeck>,
+    mut query: Query<&mut Text, With<DeckInfoText2d>>,
+) {
+    for mut text in &mut query {
+        text.0 = deck_info_text_2d(current_deck.0);
+    }
 }
 
 fn deck_switch_2d(keyboard: Res<ButtonInput<KeyCode>>, mut current_deck: ResMut<CurrentDeck>) {
@@ -460,11 +610,15 @@ fn sync_plan_deck_visibility(
 
 fn human_wander_2d(
     time: Res<Time>,
+    edit_mode: Res<crate::edit_mode_2d::PlanEditMode>,
     mut layouts: ResMut<DeckLayouts>,
     grids: Res<DeckWalkGrids>,
     mut rng: ResMut<SimRng>,
     mut humans: Query<(&mut SimHuman, &mut Transform, &mut HumanWander)>,
 ) {
+    if edit_mode.active {
+        return;
+    }
     let dt = time.delta_secs();
 
     for (mut human, mut tf, mut wander) in &mut humans {
@@ -483,8 +637,8 @@ fn human_wander_2d(
 
         human.time_until_step += human.steps_per_second.recip().max(1e-4);
 
-        let plan = CellIndex::from_world_xy_deck(tf.translation.xy(), deck_idx as u8)
-            .map(CellIndex::plan);
+        let plan =
+            CellIndex::from_world_xy_deck(tf.translation.xy(), deck_idx as u8).map(CellIndex::plan);
         let Some(plan) = plan else {
             let Some(p) = random_walk_point(grid, &mut rng) else {
                 continue;
@@ -534,8 +688,8 @@ fn human_wander_2d(
             human.last_cell = Some(plan);
         }
 
-        let target_cell = CellIndex::from_world_xy_deck(wander.target, deck_idx as u8)
-            .map(CellIndex::plan);
+        let target_cell =
+            CellIndex::from_world_xy_deck(wander.target, deck_idx as u8).map(CellIndex::plan);
         if target_cell == Some(plan) {
             if let Some(t) = random_walk_point(grid, &mut rng) {
                 wander.target = t;
@@ -543,14 +697,8 @@ fn human_wander_2d(
             continue;
         }
 
-        let next_pos = pick_strictly_closer_neighbour(
-            &layouts,
-            deck_idx,
-            grid,
-            &mut rng,
-            plan,
-            wander.target,
-        );
+        let next_pos =
+            pick_strictly_closer_neighbour(&layouts, deck_idx, grid, &mut rng, plan, wander.target);
         if let Some(next_pos) = next_pos {
             let next_cell = CellIndex::from_world_xy_deck(next_pos, deck_idx as u8)
                 .expect("walk cell")

@@ -27,8 +27,6 @@ pub struct DeckLayouts {
 #[derive(Clone)]
 pub struct DeckMeta {
     pub rooms: RoomCatalog,
-    /// Human-facing deck 7 (`DECK_SEVEN_INDEX`): exterior cabin striping + dual corridor.
-    pub deck_seven_cache: Option<DeckSevenCache>,
 }
 
 /// Per-deck metadata and cell access (backed by [`DeckLayouts::cells`]).
@@ -37,18 +35,6 @@ pub struct DeckCells<'a> {
     pub deck: u8,
     pub cells: &'a CellBox,
     pub rooms: &'a RoomCatalog,
-    pub deck_seven_cache: Option<&'a DeckSevenCache>,
-}
-
-/// Precomputed corridors and striping bounds on deck seven (sea-facing cabin ring).
-#[derive(Clone, Debug)]
-pub struct DeckSevenCache {
-    /// Occupied walkway cells painted white (`2 tiles wide`).
-    pub corridor: HashSet<PlanKey>,
-    pub star_ix_inner: u16,
-    pub star_ix_outer: u16,
-    pub port_ix_inner: u16,
-    pub port_ix_outer: u16,
 }
 
 impl DeckLayouts {
@@ -58,7 +44,6 @@ impl DeckLayouts {
             deck: deck_index as u8,
             cells: &self.cells,
             rooms: &self.decks[deck_index].rooms,
-            deck_seven_cache: self.decks[deck_index].deck_seven_cache.as_ref(),
         }
     }
 
@@ -105,9 +90,7 @@ impl<'a> DeckCells<'a> {
     }
 
     pub fn plan_keys(&self) -> impl Iterator<Item = PlanKey> + 'a {
-        self.cells
-            .iter_deck(self.deck)
-            .map(|(idx, _)| idx.plan())
+        self.cells.iter_deck(self.deck).map(|(idx, _)| idx.plan())
     }
 
     pub fn iter_cells(&self) -> impl Iterator<Item = (PlanKey, &'a Cell)> + 'a {
@@ -134,12 +117,13 @@ fn neighbor_plan(plan: PlanKey, wall_idx: usize) -> Option<PlanKey> {
 struct DeckBuild {
     cells: HashMap<PlanKey, Cell>,
     rooms: RoomCatalog,
-    deck_seven_cache: Option<DeckSevenCache>,
 }
 
 impl DeckBuild {
     fn plan_world(plan: PlanKey, deck: u8) -> Vec2 {
-        CellIndex::with_plan(deck, plan).expect("plan in range").to_world_xy()
+        CellIndex::with_plan(deck, plan)
+            .expect("plan in range")
+            .to_world_xy()
     }
 }
 
@@ -153,19 +137,6 @@ struct DeckProfile {
     courtyard_half_width: f32,
     courtyard_y_aft: f32,
     courtyard_y_fwd: f32,
-}
-
-/// Rough zones inspired by the reference floorplan (outer yellow cabins, inner pink block).
-fn outer_cabin_zone(p: Vec2) -> bool {
-    p.x.abs() > SHIP_BEAM_M * 0.32 && p.y > -SHIP_LENGTH_M * 0.36 && p.y < SHIP_LENGTH_M * 0.26
-}
-
-fn inner_cabin_zone(p: Vec2) -> bool {
-    p.x.abs() < SHIP_BEAM_M * 0.24 && p.y > -SHIP_LENGTH_M * 0.32 && p.y < SHIP_LENGTH_M * 0.22
-}
-
-fn window_strip_zone(p: Vec2) -> bool {
-    p.y > SHIP_LENGTH_M * 0.12 && p.x.abs() > SHIP_BEAM_M * 0.34
 }
 
 fn deck_profile(deck_index: usize) -> DeckProfile {
@@ -466,24 +437,6 @@ fn fallback_deck_cell_centers(deck_index: usize, step_m: f32) -> Vec<Vec2> {
     }
 }
 
-fn exterior_wall_material(p: Vec2, is_perimeter: bool) -> Material {
-    if is_perimeter && window_strip_zone(p) {
-        Material::Window
-    } else {
-        Material::Hull
-    }
-}
-
-fn zone_floor_material(zone: ZoneBucket) -> Material {
-    match zone {
-        ZoneBucket::HullEdge => Material::Hull,
-        ZoneBucket::WindowStrip => Material::Window,
-        ZoneBucket::InnerCabin | ZoneBucket::OuterCabin => Material::CabinPartition,
-        ZoneBucket::PublicDeck => Material::PublicShell,
-        ZoneBucket::DeckBase => Material::DeckBase,
-    }
-}
-
 const CABIN_WIDTH_CELLS: i32 = 3;
 const CABIN_LENGTH_CELLS: i32 = 6;
 const CABIN_COLUMN_WIDTH_M: f32 = 3.0;
@@ -569,13 +522,7 @@ fn module_x_span(module_cells: &[PlanKey]) -> (u16, u16) {
     (min_x, max_x)
 }
 
-fn is_module_fore_aft_door_wall(
-    wall_idx: usize,
-    _lx: i32,
-    x: u16,
-    min_x: u16,
-    max_x: u16,
-) -> bool {
+fn is_module_fore_aft_door_wall(wall_idx: usize, _lx: i32, x: u16, min_x: u16, max_x: u16) -> bool {
     if wall_idx != 1 && wall_idx != 3 {
         return false;
     }
@@ -596,9 +543,7 @@ fn room_category_at(
     room_map: &HashMap<PlanKey, RoomId>,
     coord: PlanKey,
 ) -> Option<RoomCategory> {
-    room_map
-        .get(&coord)
-        .and_then(|&id| catalog.category(id))
+    room_map.get(&coord).and_then(|&id| catalog.category(id))
 }
 
 fn cabin_edge_wall(
@@ -804,8 +749,8 @@ fn ensure_cabin_corridor_touch(
 
         let mut changed = false;
         for coord in cabin_coords {
-            let has_corridor = (0..4)
-                .any(|wi| neighbor_plan(coord, wi).is_some_and(|nb| corridor.contains(&nb)));
+            let has_corridor =
+                (0..4).any(|wi| neighbor_plan(coord, wi).is_some_and(|nb| corridor.contains(&nb)));
             if has_corridor {
                 continue;
             }
@@ -832,9 +777,9 @@ fn ensure_cabin_corridor_touch(
                 }
             }
 
-            let fore_aft_has_corridor = [3, 1].iter().any(|&wi| {
-                neighbor_plan(coord, wi).is_some_and(|nb| corridor.contains(&nb))
-            });
+            let fore_aft_has_corridor = [3, 1]
+                .iter()
+                .any(|&wi| neighbor_plan(coord, wi).is_some_and(|nb| corridor.contains(&nb)));
             if fore_aft_has_corridor {
                 continue;
             }
@@ -853,12 +798,8 @@ fn ensure_cabin_corridor_touch(
     }
 }
 
-fn corridor_floor_material(deck_index: usize) -> Material {
-    if deck_index == DECK_SEVEN_INDEX {
-        Material::CorridorWhite
-    } else {
-        Material::Corridor
-    }
+fn corridor_floor_material() -> Material {
+    Material::Corridor
 }
 
 fn room_for_cabin(
@@ -870,81 +811,6 @@ fn room_for_cabin(
     *cabin_rooms
         .entry(cabin_room_key(plan))
         .or_insert_with(|| catalog.insert("Cabin", deck, RoomCategory::Cabin))
-}
-
-fn room_for_zone(
-    catalog: &mut RoomCatalog,
-    cabin_rooms: &mut HashMap<(i32, i32), RoomId>,
-    shared: &mut SharedDeckRooms,
-    deck: u8,
-    zone: ZoneBucket,
-    plan: PlanKey,
-    amenity: Option<AmenityKind>,
-) -> RoomId {
-    if let Some(a) = amenity {
-        let (name, category) = match a {
-            AmenityKind::Theatre => ("Theatre", RoomCategory::Amenity),
-            AmenityKind::MainDining => ("Main Dining", RoomCategory::Amenity),
-            AmenityKind::Buffet => ("Buffet", RoomCategory::Amenity),
-            AmenityKind::Pools => ("Pools", RoomCategory::Amenity),
-            AmenityKind::Casino => ("Casino", RoomCategory::Amenity),
-        };
-        return catalog.insert(name, deck, category);
-    }
-    match zone {
-        ZoneBucket::HullEdge | ZoneBucket::WindowStrip => *shared
-            .exterior
-            .get_or_insert_with(|| catalog.insert("Exterior", deck, RoomCategory::Exterior)),
-        ZoneBucket::PublicDeck => *shared
-            .public_deck
-            .get_or_insert_with(|| catalog.insert("Public Deck", deck, RoomCategory::Public)),
-        ZoneBucket::InnerCabin | ZoneBucket::OuterCabin => {
-            let key = cabin_room_key(plan);
-            let name = if matches!(zone, ZoneBucket::InnerCabin) {
-                "Inner Cabin"
-            } else {
-                "Outer Cabin"
-            };
-            *cabin_rooms
-                .entry(key)
-                .or_insert_with(|| catalog.insert(name, deck, RoomCategory::Cabin))
-        }
-        ZoneBucket::DeckBase => *shared
-            .deck_base
-            .get_or_insert_with(|| catalog.insert("Deck", deck, RoomCategory::Cabin)),
-    }
-}
-
-struct SharedDeckRooms {
-    exterior: Option<RoomId>,
-    public_deck: Option<RoomId>,
-    deck_base: Option<RoomId>,
-}
-
-fn floor_material_for_cell(
-    deck_index: usize,
-    p: Vec2,
-    cell: PlanKey,
-    deck_seven_cache: Option<&DeckSevenCache>,
-    zone: ZoneBucket,
-    is_perimeter: bool,
-) -> Material {
-    if let Some(mat) =
-        deck_seven_floor_material(deck_index, p, cell, deck_seven_cache, is_perimeter)
-    {
-        return mat;
-    }
-    if let Some(amenity) = amenity_overlay(deck_index, p) {
-        return match amenity {
-            AmenityKind::Theatre => Material::Theatre,
-            AmenityKind::MainDining => Material::Dining,
-            AmenityKind::Buffet => Material::Buffet,
-            AmenityKind::Pools => Material::Pool,
-            AmenityKind::Casino => Material::Casino,
-        };
-    }
-    let _ = is_perimeter;
-    zone_floor_material(zone)
 }
 
 fn edge_wall(
@@ -1134,9 +1000,8 @@ fn assign_cabin_openings(deck: &mut DeckBuild, _corridor_cells: &HashSet<PlanKey
             }
         }
 
-        let door = pick_door(&door_candidates, &module_cells).or_else(|| {
-            door_candidates.first().copied()
-        });
+        let door =
+            pick_door(&door_candidates, &module_cells).or_else(|| door_candidates.first().copied());
         let window = if has_hull_edge {
             pick_window(&window_candidates, door)
         } else {
@@ -1175,11 +1040,10 @@ fn force_cabin_doors_on_fore_aft(deck: &mut DeckBuild) {
         if cells.len() < 4 {
             continue;
         }
-        if cells.iter().any(|&coord| {
-            deck.cells
-                .get(&coord)
-                .is_some_and(cell_has_door_material)
-        }) {
+        if cells
+            .iter()
+            .any(|&coord| deck.cells.get(&coord).is_some_and(cell_has_door_material))
+        {
             continue;
         }
 
@@ -1208,7 +1072,10 @@ fn cell_has_door_material(cell: &Cell) -> bool {
         .any(|&w| w == Material::Door)
 }
 
-fn pick_door(candidates: &[(PlanKey, usize)], module_cells: &[PlanKey]) -> Option<(PlanKey, usize)> {
+fn pick_door(
+    candidates: &[(PlanKey, usize)],
+    module_cells: &[PlanKey],
+) -> Option<(PlanKey, usize)> {
     if candidates.is_empty() {
         return None;
     }
@@ -1242,9 +1109,7 @@ fn door_candidate_score((plan, wall_idx): (PlanKey, usize), module_cells: &[Plan
 fn is_opposite_cabin_end(plan1: PlanKey, plan2: PlanKey) -> bool {
     let (lx1, ly1) = cabin_local(plan1);
     let (lx2, ly2) = cabin_local(plan2);
-    lx1 == 1
-        && lx2 == 1
-        && ((ly1 <= 1 && ly2 >= 4) || (ly1 >= 4 && ly2 <= 1))
+    lx1 == 1 && lx2 == 1 && ((ly1 <= 1 && ly2 >= 4) || (ly1 >= 4 && ly2 <= 1))
 }
 
 fn pick_window(
@@ -1306,7 +1171,7 @@ pub fn deck_cell_layouts(step_m: f32) -> DeckLayouts {
         let mut rooms = RoomCatalog::default();
         let mut cabin_rooms = HashMap::new();
         let corridor_room = rooms.insert("Corridor", deck_z, RoomCategory::Corridor);
-        let corridor_floor = corridor_floor_material(deck_i);
+        let corridor_floor = corridor_floor_material();
 
         let mut cells = HashMap::new();
         for &p in &centers {
@@ -1332,23 +1197,7 @@ pub fn deck_cell_layouts(step_m: f32) -> DeckLayouts {
             }
         }
 
-        let deck_seven_cache = if corridor_cells.is_empty() {
-            None
-        } else {
-            Some(DeckSevenCache {
-                corridor: corridor_cells.clone(),
-                star_ix_inner: 0,
-                star_ix_outer: 0,
-                port_ix_inner: 0,
-                port_ix_outer: 0,
-            })
-        };
-
-        let mut build = DeckBuild {
-            cells,
-            rooms,
-            deck_seven_cache,
-        };
+        let mut build = DeckBuild { cells, rooms };
         assign_cabin_module_walls(&mut build);
         assign_non_cabin_walls(&mut build);
         prime_fore_aft_walls_toward_corridor(&mut build);
@@ -1358,12 +1207,12 @@ pub fn deck_cell_layouts(step_m: f32) -> DeckLayouts {
             let index = CellIndex::with_plan(deck_z, plan).expect("plan in box range");
             cell_box.insert(index, cell);
         }
-        decks.push(DeckMeta {
-            rooms: build.rooms,
-            deck_seven_cache: build.deck_seven_cache,
-        });
+        decks.push(DeckMeta { rooms: build.rooms });
     }
-    DeckLayouts { cells: cell_box, decks }
+    DeckLayouts {
+        cells: cell_box,
+        decks,
+    }
 }
 
 /// Alias retained for callers migrating from the old name.
@@ -1381,312 +1230,6 @@ fn is_perimeter_cell(cell: PlanKey, occupied: &HashSet<PlanKey>) -> bool {
         }
     }
     false
-}
-
-/// Human-facing passenger **deck seven** (“Main deck” tier). **0-based** layout index [`DECK_SEVEN_INDEX`].
-pub const DECK_SEVEN_INDEX: usize = 6;
-
-const DECK_SEV_CABINX: i32 = 3;
-/// Target cabin module depth along the ship (±Y metres); reused for bow banding.
-const DECK_SEV_CABINY: i32 = 8;
-
-/// Forward dense interior cabin wedge at the bow (plan view), Centreline-heavy.
-#[inline]
-fn deck_seven_bow_interior_geom(p: Vec2) -> bool {
-    p.y > SHIP_LENGTH_M * 0.195 && p.y < SHIP_LENGTH_M * 0.46 && p.x.abs() < SHIP_BEAM_M * 0.29
-}
-
-fn deck_seven_bow_paint_allowed(raw: ZoneBucket, p: Vec2) -> bool {
-    if matches!(raw, ZoneBucket::WindowStrip | ZoneBucket::PublicDeck) {
-        return false;
-    }
-    if !deck_seven_bow_interior_geom(p) {
-        return false;
-    }
-    match raw {
-        ZoneBucket::InnerCabin | ZoneBucket::DeckBase => true,
-        ZoneBucket::HullEdge => p.x.abs() < SHIP_BEAM_M * 0.32,
-        ZoneBucket::OuterCabin => p.x.abs() < SHIP_BEAM_M * 0.34,
-        _ => false,
-    }
-}
-
-fn build_deck_seven_cache_inner(
-    centers: &[Vec2],
-    perimeter: &HashSet<PlanKey>,
-    occupied: &HashSet<PlanKey>,
-) -> Option<DeckSevenCache> {
-    let deck = DECK_SEVEN_INDEX as u8;
-    let mut star = Vec::<PlanKey>::new();
-    let mut port = Vec::<PlanKey>::new();
-    for &p in centers {
-        let Some(cell) = plan_key_from_world(p, deck) else {
-            continue;
-        };
-        if ZoneBucket::classify(p, perimeter.contains(&cell)) != ZoneBucket::OuterCabin {
-            continue;
-        }
-        if p.x > 0.0 {
-            star.push(cell);
-        } else if p.x < 0.0 {
-            port.push(cell);
-        }
-    }
-
-    if star.is_empty() && port.is_empty() {
-        return None;
-    }
-
-    let (star_ix_inner, star_ix_outer, star_x_min, star_x_max) = if star.is_empty() {
-        (1, 0, 0, 0)
-    } else {
-        let yi_in = star.iter().map(|t| t.1).min().unwrap();
-        let yi_out = star.iter().map(|t| t.1).max().unwrap();
-        let x_lo = star.iter().map(|t| t.0).min().unwrap();
-        let x_hi = star.iter().map(|t| t.0).max().unwrap();
-        (yi_in, yi_out, x_lo, x_hi)
-    };
-
-    let (port_ix_inner, port_ix_outer, port_x_min, port_x_max) = if port.is_empty() {
-        (0, 1, 0, 0)
-    } else {
-        let yi_in = port.iter().map(|t| t.1).max().unwrap();
-        let yi_out = port.iter().map(|t| t.1).min().unwrap();
-        let x_lo = port.iter().map(|t| t.0).min().unwrap();
-        let x_hi = port.iter().map(|t| t.0).max().unwrap();
-        (yi_in, yi_out, x_lo, x_hi)
-    };
-
-    let mut corridor = HashSet::<PlanKey>::new();
-
-    if !star.is_empty() && star_ix_inner <= star_ix_outer && star_x_min <= star_x_max {
-        for x in star_x_min..=star_x_max {
-            for delta in [1_u16, 2] {
-                let y = star_ix_inner.saturating_sub(delta);
-                let c = (x, y);
-                if occupied.contains(&c) {
-                    corridor.insert(c);
-                }
-            }
-        }
-    }
-
-    if !port.is_empty() && port_ix_outer <= port_ix_inner && port_x_min <= port_x_max {
-        for x in port_x_min..=port_x_max {
-            for delta in [1_u16, 2] {
-                let y = port_ix_inner.saturating_add(delta);
-                let c = (x, y);
-                if occupied.contains(&c) {
-                    corridor.insert(c);
-                }
-            }
-        }
-    }
-
-    Some(DeckSevenCache {
-        corridor,
-        star_ix_inner,
-        star_ix_outer,
-        port_ix_inner,
-        port_ix_outer,
-    })
-}
-
-fn deck_seven_floor_material(
-    deck_index: usize,
-    p: Vec2,
-    cell: PlanKey,
-    cache: Option<&DeckSevenCache>,
-    is_perimeter: bool,
-) -> Option<Material> {
-    if deck_index != DECK_SEVEN_INDEX {
-        return None;
-    }
-    let raw = ZoneBucket::classify(p, is_perimeter);
-
-    if cache.is_some_and(|c| c.corridor.contains(&cell)) {
-        return Some(Material::CorridorWhite);
-    }
-
-    if deck_seven_bow_paint_allowed(raw, p) {
-        let alt_bow = (cell.0 as i32)
-            .div_euclid(DECK_SEV_CABINY)
-            .rem_euclid(2)
-            == 0;
-        return Some(if alt_bow {
-            Material::BowAccent
-        } else {
-            Material::CabinStripeB
-        });
-    }
-
-    let cache = cache?;
-
-    if matches!(raw, ZoneBucket::HullEdge | ZoneBucket::OuterCabin)
-        && outer_cabin_zone(p)
-        && !window_strip_zone(p)
-    {
-        if p.x > 0.0 && cache.star_ix_inner <= cache.star_ix_outer {
-            if let Some(is_blue_strip) = starboard_strip_is_blue(cell.1, cache) {
-                return Some(exterior_material_from_blue(is_blue_strip));
-            }
-        }
-        if p.x < 0.0 && cache.port_ix_outer <= cache.port_ix_inner {
-            if let Some(is_blue_strip) = portside_strip_is_blue(cell.1, cache) {
-                return Some(exterior_material_from_blue(is_blue_strip));
-            }
-        }
-    }
-
-    None
-}
-
-#[inline]
-fn exterior_material_from_blue(is_blue_strip: bool) -> Material {
-    if is_blue_strip {
-        Material::CabinStripeA
-    } else {
-        Material::CabinStripeB
-    }
-}
-
-/// Starboard façade (`ix > 0`): map hull perimeter columns to the same alternating beam bands as inboard cabins.
-#[inline]
-fn starboard_strip_is_blue(across_y: u16, cache: &DeckSevenCache) -> Option<bool> {
-    if cache.star_ix_inner > cache.star_ix_outer {
-        return None;
-    }
-    if across_y >= cache.star_ix_inner {
-        let cab_col = (across_y - cache.star_ix_inner).div_euclid(DECK_SEV_CABINX as u16);
-        return Some(cab_col.rem_euclid(2) == 0);
-    }
-    None
-}
-
-#[inline]
-fn portside_strip_is_blue(across_y: u16, cache: &DeckSevenCache) -> Option<bool> {
-    if cache.port_ix_outer > cache.port_ix_inner {
-        return None;
-    }
-    if across_y <= cache.port_ix_inner {
-        let cab_col = (cache.port_ix_inner - across_y).div_euclid(DECK_SEV_CABINX as u16);
-        return Some(cab_col.rem_euclid(2) == 0);
-    }
-    None
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ZoneBucket {
-    HullEdge,
-    WindowStrip,
-    InnerCabin,
-    OuterCabin,
-    PublicDeck,
-    DeckBase,
-}
-
-impl ZoneBucket {
-    /// Mirrors the classification order in legacy `setup`. Callers pass a precomputed perimeter
-    /// flag (see [`DeckCells::perimeter`]) so this stays branchy but allocation-free.
-    fn classify(c: Vec2, is_perimeter: bool) -> Self {
-        if is_perimeter {
-            return if window_strip_zone(c) {
-                ZoneBucket::WindowStrip
-            } else {
-                ZoneBucket::HullEdge
-            };
-        }
-        if inner_cabin_zone(c) {
-            return ZoneBucket::InnerCabin;
-        }
-        if outer_cabin_zone(c) {
-            return ZoneBucket::OuterCabin;
-        }
-        if c.y < -SHIP_LENGTH_M * 0.28 {
-            return ZoneBucket::PublicDeck;
-        }
-        ZoneBucket::DeckBase
-    }
-}
-
-/// Closed set of amenity overlays painted on top of base bucket colours.
-#[derive(Clone, Copy)]
-pub enum AmenityKind {
-    Theatre,
-    MainDining,
-    Buffet,
-    Pools,
-    Casino,
-}
-
-impl AmenityKind {
-    pub const COUNT: usize = 5;
-    pub const ALL: [Self; Self::COUNT] = [
-        Self::Theatre,
-        Self::MainDining,
-        Self::Buffet,
-        Self::Pools,
-        Self::Casino,
-    ];
-
-    pub fn idx(self) -> usize {
-        self as usize
-    }
-
-    pub fn color(self) -> Color {
-        match self {
-            Self::Theatre => Color::srgb(0.52, 0.36, 0.68),
-            Self::MainDining => Color::srgb(0.82, 0.48, 0.34),
-            Self::Buffet => Color::srgb(0.42, 0.70, 0.50),
-            Self::Pools => Color::srgb(0.32, 0.74, 0.88),
-            Self::Casino => Color::srgb(0.72, 0.22, 0.42),
-        }
-    }
-}
-
-/// Optional axis-aligned amenity overlay on top of base bucket colours (restaurant, pool, theatre, …).
-pub fn amenity_overlay(deck_index: usize, p: Vec2) -> Option<AmenityKind> {
-    // Forward theatre / aqua show — decks 5–10, centreline-forward
-    if (5..=10).contains(&deck_index)
-        && p.x.abs() < 17.5
-        && p.y > SHIP_LENGTH_M * 0.36
-        && p.y < SHIP_LENGTH_M * 0.49
-    {
-        return Some(AmenityKind::Theatre);
-    }
-    // Main dining room — mid-aft hull
-    if (4..=7).contains(&deck_index)
-        && p.x.abs() < 17.5
-        && p.y > -SHIP_LENGTH_M * 0.36
-        && p.y < -SHIP_LENGTH_M * 0.10
-    {
-        return Some(AmenityKind::MainDining);
-    }
-    // Buffet / speciality restaurant strip — upper lido bays
-    if (8..=12).contains(&deck_index)
-        && p.x.abs() > 9.0
-        && p.x.abs() < 27.5
-        && p.y > SHIP_LENGTH_M * 0.04
-        && p.y < SHIP_LENGTH_M * 0.30
-    {
-        return Some(AmenityKind::Buffet);
-    }
-    // Pool / sports — open forward-upper
-    if (11..=16).contains(&deck_index)
-        && p.y > SHIP_LENGTH_M * 0.16
-        && p.x.abs() < SHIP_BEAM_M * 0.36
-    {
-        return Some(AmenityKind::Pools);
-    }
-    // Casino / nightclub — outboard promenade band
-    if (6..=9).contains(&deck_index)
-        && p.y > -SHIP_LENGTH_M * 0.06
-        && p.y < SHIP_LENGTH_M * 0.14
-        && p.x.abs() > 19.0
-    {
-        return Some(AmenityKind::Casino);
-    }
-    None
 }
 
 // TODO: update for `CellBox` / `PlanKey` (disabled until migrated).
@@ -1753,7 +1296,8 @@ mod layout_tests {
         let Some(nb) = neighbor_plan(coord, wall_idx) else {
             return false;
         };
-        deck.get(nb).is_some_and(|c| room_category(deck, c.room) == RoomCategory::Corridor)
+        deck.get(nb)
+            .is_some_and(|c| room_category(deck, c.room) == RoomCategory::Corridor)
     }
 
     #[test]
@@ -1781,7 +1325,9 @@ mod layout_tests {
     fn corridor_y_runs_at_x(deck: DeckCells<'_>, along_x: u16) -> Vec<Vec<u16>> {
         let mut ys: Vec<u16> = deck
             .iter_cells()
-            .filter(|(p, c)| p.0 == along_x && room_category(deck, c.room) == RoomCategory::Corridor)
+            .filter(|(p, c)| {
+                p.0 == along_x && room_category(deck, c.room) == RoomCategory::Corridor
+            })
             .map(|(p, _)| p.1)
             .collect();
         ys.sort_unstable();
@@ -1835,10 +1381,7 @@ mod layout_tests {
             .expect("midship")
             .x;
         let runs = corridor_y_runs_at_x(deck, mid_x);
-        let spine_runs: Vec<_> = runs
-            .iter()
-            .filter(|run| run.len() >= 2)
-            .collect();
+        let spine_runs: Vec<_> = runs.iter().filter(|run| run.len() >= 2).collect();
         assert!(
             spine_runs.len() >= 3,
             "expected three interior spine runs at midship, got {spine_runs:?}"
@@ -1901,9 +1444,8 @@ mod layout_tests {
     }
 
     fn cabin_room_has_door(deck: DeckCells<'_>, room: RoomId) -> bool {
-        deck.iter_cells().any(|(_, cell)| {
-            cell.room == room && cell_has_door(cell).is_some()
-        })
+        deck.iter_cells()
+            .any(|(_, cell)| cell.room == room && cell_has_door(cell).is_some())
     }
 
     #[test]
@@ -1917,10 +1459,7 @@ mod layout_tests {
             }
         }
         for room in cabin_rooms {
-            let cell_count = deck
-                .iter_cells()
-                .filter(|(_, c)| c.room == room)
-                .count();
+            let cell_count = deck.iter_cells().filter(|(_, c)| c.room == room).count();
             if cell_count < 4 {
                 continue;
             }
@@ -1938,9 +1477,7 @@ mod layout_tests {
             if cell.room != room {
                 return false;
             }
-            (0..4).any(|wi| {
-                neighbor_plan(plan, wi).is_none_or(|nb| !occupied.contains(&nb))
-            })
+            (0..4).any(|wi| neighbor_plan(plan, wi).is_none_or(|nb| !occupied.contains(&nb)))
         })
     }
 
@@ -2024,7 +1561,10 @@ mod layout_tests {
                 }
             }
             assert_eq!(interior_open, 4, "expected four interior cells");
-            assert_eq!(perimeter_with_wall, 14, "expected fourteen perimeter cells with walls");
+            assert_eq!(
+                perimeter_with_wall, 14,
+                "expected fourteen perimeter cells with walls"
+            );
             break;
         }
         assert!(
@@ -2054,10 +1594,7 @@ mod layout_tests {
                 let (window_coord, window_wall) =
                     window.expect("exterior cabin room should have a window");
                 let nb = neighbor_coord(window_coord, window_wall);
-                assert!(
-                    !occupied.contains(&nb),
-                    "window must be on hull perimeter"
-                );
+                assert!(!occupied.contains(&nb), "window must be on hull perimeter");
                 assert!(
                     !is_opposite_cabin_end(door_coord, window_coord),
                     "window must not be on the cabin end opposite the door"
@@ -2070,7 +1607,13 @@ mod layout_tests {
                 );
             }
         }
-        assert!(found_exterior, "expected at least one exterior cabin room on deck 5");
-        assert!(found_interior, "expected at least one interior cabin room on deck 5");
+        assert!(
+            found_exterior,
+            "expected at least one exterior cabin room on deck 5"
+        );
+        assert!(
+            found_interior,
+            "expected at least one interior cabin room on deck 5"
+        );
     }
 }

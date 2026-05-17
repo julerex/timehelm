@@ -30,13 +30,65 @@ pub enum Material {
 impl Material {
     pub const COUNT: usize = 18;
 
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Open,
+        Self::Hull,
+        Self::Window,
+        Self::CabinPartition,
+        Self::Corridor,
+        Self::PublicShell,
+        Self::DeckBase,
+        Self::Theatre,
+        Self::Dining,
+        Self::Buffet,
+        Self::Pool,
+        Self::Casino,
+        Self::CabinStripeA,
+        Self::CabinStripeB,
+        Self::CorridorWhite,
+        Self::BowAccent,
+        Self::MarinePanel,
+        Self::Door,
+    ];
+
     pub fn idx(self) -> usize {
         self as usize
+    }
+
+    pub fn from_idx(idx: usize) -> Self {
+        Self::ALL[idx % Self::COUNT]
+    }
+
+    pub fn next(self) -> Self {
+        Self::from_idx(self.idx() + 1)
     }
 
     /// Edges agents may cross when both sides are passable (`Open`, or `Door` via [`shared_edge_passable`]).
     pub fn is_passable(self) -> bool {
         matches!(self, Self::Open | Self::Door)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Open => "Open",
+            Self::Hull => "Hull",
+            Self::Window => "Window",
+            Self::CabinPartition => "Cabin partition",
+            Self::Corridor => "Corridor",
+            Self::PublicShell => "Public shell",
+            Self::DeckBase => "Deck base",
+            Self::Theatre => "Theatre",
+            Self::Dining => "Dining",
+            Self::Buffet => "Buffet",
+            Self::Pool => "Pool",
+            Self::Casino => "Casino",
+            Self::CabinStripeA => "Cabin stripe A",
+            Self::CabinStripeB => "Cabin stripe B",
+            Self::CorridorWhite => "Corridor white",
+            Self::BowAccent => "Bow accent",
+            Self::MarinePanel => "Marine panel",
+            Self::Door => "Door",
+        }
     }
 
     pub fn color(self) -> Color {
@@ -93,6 +145,18 @@ pub enum RoomCategory {
     Amenity,
 }
 
+impl RoomCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Exterior => "Exterior",
+            Self::Cabin => "Cabin",
+            Self::Corridor => "Corridor",
+            Self::Public => "Public",
+            Self::Amenity => "Amenity",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct RoomId(pub u32);
 
@@ -132,6 +196,28 @@ impl RoomCatalog {
 
     pub fn category(&self, id: RoomId) -> Option<RoomCategory> {
         self.get(id).map(|r| r.category)
+    }
+
+    /// Rebuild a catalog from persisted room rows (ids must match saved data).
+    pub fn from_persisted(
+        rooms: impl IntoIterator<Item = (RoomId, &'static str, u8, RoomCategory)>,
+    ) -> Self {
+        let mut catalog = Self::default();
+        let mut next_id = 0u32;
+        for (id, name, deck, category) in rooms {
+            catalog.rooms.insert(
+                id,
+                Room {
+                    id: id.0,
+                    name,
+                    deck,
+                    category,
+                },
+            );
+            next_id = next_id.max(id.0 + 1);
+        }
+        catalog.next_id = next_id;
+        catalog
     }
 }
 
@@ -299,7 +385,6 @@ mod tests {
     fn walled_east(cell: &mut Cell) {
         cell.wall1 = Material::MarinePanel;
     }
-
 
     #[test]
     fn cardinal_blocked_when_wall_not_open() {
