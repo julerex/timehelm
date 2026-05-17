@@ -137,7 +137,7 @@ pub fn deck_info_text_3d(deck_index: usize) -> String {
 
 pub fn deck_info_text_2d(deck_index: usize) -> String {
     format!(
-        "Version {CLIENT_VERSION}\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nPgUp/PgDn: switch deck · E: edit mode · hover ship for cell info",
+        "Version {CLIENT_VERSION}\nDeck {}/{}: {} | hull {:.0} m × {:.0} m\nWASD: pan · wheel: zoom · PgUp/PgDn: switch deck · E: edit mode · hover ship for cell info",
         deck_index + 1,
         NUM_DECKS,
         DECK_NAMES[deck_index],

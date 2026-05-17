@@ -29,6 +29,8 @@ const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
 const PLAN_ZOOM_MIN: f32 = 0.5;
 const PLAN_ZOOM_MAX: f32 = 4.0;
 const PLAN_ZOOM_SCROLL_FACTOR: f32 = 1.1;
+/// Pan speed (m/s) for WASD (same as 3D view).
+const PLAN_PAN_SPEED_M_S: f32 = 520.0;
 
 const STATUS_TOAST_SECS: f32 = 3.0;
 
@@ -297,6 +299,7 @@ pub fn run_app_2d() {
                 human_wander_2d,
                 (
                     sync_plan_camera_viewport,
+                    plan_keyboard_pan,
                     plan_mouse_wheel_zoom,
                     apply_plan_view_zoom,
                     update_hover_cell_label_2d,
@@ -762,6 +765,28 @@ fn human_wander_2d(
             tf.translation.y = next_pos.y;
         } else if let Some(t) = random_walk_point(grid, &mut rng) {
             wander.target = t;
+        }
+    }
+}
+
+fn plan_keyboard_pan(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut cameras: Query<&mut Transform, With<GamePlanCamera2d>>,
+) {
+    let step = PLAN_PAN_SPEED_M_S * time.delta_secs();
+    for mut tf in &mut cameras {
+        if keyboard.pressed(KeyCode::KeyW) {
+            tf.translation.y += step;
+        }
+        if keyboard.pressed(KeyCode::KeyS) {
+            tf.translation.y -= step;
+        }
+        if keyboard.pressed(KeyCode::KeyA) {
+            tf.translation.x -= step;
+        }
+        if keyboard.pressed(KeyCode::KeyD) {
+            tf.translation.x += step;
         }
     }
 }
