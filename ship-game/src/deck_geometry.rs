@@ -257,10 +257,20 @@ pub enum PlanWallEdge {
     Horizontal { y: f32, x0: f32, x1: f32 },
 }
 
-/// Black (or custom) 5 cm-style wall borders as thin axis-aligned quads slightly above the floor.
+/// Black (or custom) wall borders as thin axis-aligned quads slightly above the floor.
 pub fn merged_plan_wall_borders_mesh(
     edges: &[PlanWallEdge],
     thickness_m: f32,
+    z: f32,
+    color: [f32; 4],
+) -> Mesh {
+    let varied: Vec<_> = edges.iter().map(|e| (*e, thickness_m)).collect();
+    merged_plan_wall_borders_mesh_varied(&varied, z, color)
+}
+
+/// Wall borders with per-edge thickness (e.g. 10 cm cabin partitions vs 5 cm hull strokes).
+pub fn merged_plan_wall_borders_mesh_varied(
+    edges: &[(PlanWallEdge, f32)],
     z: f32,
     color: [f32; 4],
 ) -> Mesh {
@@ -271,7 +281,6 @@ pub fn merged_plan_wall_borders_mesh(
     if edges.is_empty() {
         return mesh;
     }
-    let half_t = thickness_m * 0.5;
     let n = edges.len();
     let mut positions = Vec::with_capacity(n * 4);
     let mut normals = Vec::with_capacity(n * 4);
@@ -279,7 +288,8 @@ pub fn merged_plan_wall_borders_mesh(
     let mut colors = Vec::with_capacity(n * 4);
     let mut indices = Vec::with_capacity(n * 6);
 
-    for (i, edge) in edges.iter().enumerate() {
+    for (i, (edge, thickness_m)) in edges.iter().enumerate() {
+        let half_t = thickness_m * 0.5;
         let base = (i * 4) as u32;
         let corners: [(f32, f32); 4] = match edge {
             PlanWallEdge::Vertical { x, y0, y1 } => [
