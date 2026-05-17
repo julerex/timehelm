@@ -3,12 +3,17 @@ import init, { run } from './ship.js';
 const canvas = document.getElementById('ship-game-canvas');
 
 canvas?.addEventListener('keydown', (event) => {
+    const ctrl = event.ctrlKey || event.metaKey;
     if (
         event.code === 'PageUp' ||
         event.code === 'PageDown' ||
         event.code === 'ArrowUp' ||
         event.code === 'ArrowDown' ||
-        event.code === 'Space'
+        event.code === 'Space' ||
+        (ctrl &&
+            (event.code === 'KeyS' ||
+                event.code === 'KeyC' ||
+                event.code === 'KeyV'))
     ) {
         event.preventDefault();
     }

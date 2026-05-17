@@ -12,15 +12,16 @@
 
 use crate::cell::Material as CellMaterial;
 use crate::deck_layout::{
-    deck_cell_layouts, deck_sim_footprint_polygon, DeckLayouts, CELL_SIZE_M, CELL_VISUAL_SCALE,
-    NUM_DECKS,
+    deck_sim_footprint_polygon, DeckLayouts, CELL_SIZE_M, CELL_VISUAL_SCALE, NUM_DECKS,
 };
+use crate::load_screen::{spawn_load_menu, GamePhase, LoadScreenPlugin};
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{
     asset_plugin, cursor_in_game_viewport, deck_info_text_3d, format_cell_hover_line,
     game_camera_viewport, primary_window,
 };
 use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
+use crate::ship_save::empty_deck_layouts;
 use bevy::camera::primitives::Aabb;
 use bevy::ecs::system::ParamSet;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
@@ -153,6 +154,9 @@ struct NpcHeightLogState {
     logged_roots: HashSet<Entity>,
 }
 
+#[derive(Resource)]
+struct GameWorldSpawned(bool);
+
 /// Orbit camera: eye looks at `target` (m), offset given by yaw/pitch and `distance` (m).
 #[derive(Resource)]
 struct CameraRig {
@@ -193,49 +197,57 @@ impl Material for ShipClipMaterial {
 pub fn run_app_3d() {
     let mut app = App::new();
     app.add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(primary_window()),
-                    ..default()
-                })
-                .set(asset_plugin())
-                .set(ImagePlugin::default_nearest()),
-        )
-        .add_plugins(ShipShaderEmbedPlugin)
-        .add_plugins(MaterialPlugin::<ShipClipMaterial>::default());
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(primary_window()),
+                ..default()
+            })
+            .set(asset_plugin())
+            .set(ImagePlugin::default_nearest()),
+    )
+    .add_plugins(ShipShaderEmbedPlugin)
+    .add_plugins(MaterialPlugin::<ShipClipMaterial>::default());
     #[cfg(not(target_arch = "wasm32"))]
     app.add_plugins(crate::ship_save::ShipSavePlugin);
-    app
+    app.add_plugins(LoadScreenPlugin)
+        .insert_resource(empty_deck_layouts())
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
         .insert_resource(CameraRig::default())
         .insert_resource(SimRng::default())
         .insert_resource(NpcHeightLogState::default())
         .insert_resource(ClearColor::default())
         .insert_resource(DeckLodFinePreferred::default())
+        .insert_resource(GameWorldSpawned(false))
+        .insert_resource(DeckFiveWalkPoints(Vec::new()))
+        .add_systems(Startup, setup)
         .add_systems(
-            Startup,
-            (
-                setup,
-                spawn_sim_npcs.after(setup),
-                init_deck_info_text.after(setup),
-            ),
+            OnEnter(GamePhase::InGame),
+            (enter_game_world, init_deck_info_text).chain(),
         )
         .add_systems(
             Update,
             (
                 deck_switch,
                 camera_controls,
-                update_deck_lod.after(camera_controls),
+                update_deck_lod,
                 sim_npc_wander,
                 sync_clip_material,
                 cull_npcs_above_cut,
                 (sync_game_camera_viewport, update_hover_cell_label).chain(),
                 update_deck_label,
                 log_npc_heights_once,
-            ),
+            )
+                .run_if(in_state(GamePhase::InGame)),
+        )
+        .add_systems(
+            Update,
+            (camera_controls, sync_game_camera_viewport).run_if(in_state(GamePhase::LoadMenu)),
         );
     #[cfg(not(target_arch = "wasm32"))]
-    app.add_systems(Update, reload_deck_meshes_after_load);
+    app.add_systems(
+        Update,
+        reload_deck_meshes_after_load.run_if(in_state(GamePhase::InGame)),
+    );
     app.run();
 }
 
@@ -466,7 +478,6 @@ fn reload_deck_meshes_after_load(
 
 fn setup(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ShipClipMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -513,9 +524,7 @@ fn setup(
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.5, 0.0)),
     ));
 
-    let layouts = deck_cell_layouts(CELL_SIZE_M);
-    spawn_deck_meshes(&mut commands, &mut meshes, &clip_handle, &layouts);
-    commands.insert_resource(layouts);
+    spawn_load_menu(&mut commands, ui_camera);
 
     commands
         .spawn((
@@ -554,6 +563,31 @@ fn setup(
                 HoverCellText,
             ));
         });
+}
+
+fn enter_game_world(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    layouts: Res<DeckLayouts>,
+    clip: Res<SharedClipMaterial>,
+    mut spawned: ResMut<GameWorldSpawned>,
+    mut walk_points: ResMut<DeckFiveWalkPoints>,
+    asset_server: Res<AssetServer>,
+    mut rng: ResMut<SimRng>,
+) {
+    if spawned.0 {
+        return;
+    }
+    spawn_deck_meshes(&mut commands, &mut meshes, &clip.0, &layouts);
+    let deck_five_z = SIM_DECK_INDEX as f32 * DECK_FLOOR_SPACING_M;
+    walk_points.0 = layouts
+        .deck(SIM_DECK_INDEX)
+        .centers()
+        .into_iter()
+        .map(|p| Vec3::new(p.x, p.y, deck_five_z))
+        .collect();
+    spawn_sim_npcs_inner(&mut commands, &asset_server, &mut rng, &walk_points);
+    spawned.0 = true;
 }
 
 fn sync_game_camera_viewport(
@@ -602,17 +636,16 @@ fn update_hover_cell_label(
     }
 }
 
-fn spawn_sim_npcs(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    layouts: Res<DeckLayouts>,
-    mut rng: ResMut<SimRng>,
+fn spawn_sim_npcs_inner(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    rng: &mut SimRng,
+    walk_points: &DeckFiveWalkPoints,
 ) {
     let deck_five_z = SIM_DECK_INDEX as f32 * DECK_FLOOR_SPACING_M + DECK_SLAB_THICKNESS_M;
-    let walk_points: Vec<Vec3> = layouts
-        .deck(SIM_DECK_INDEX)
-        .centers()
-        .into_iter()
+    let walk_points: Vec<Vec3> = walk_points
+        .0
+        .iter()
         .map(|p| Vec3::new(p.x, p.y, deck_five_z))
         .collect();
     if walk_points.is_empty() {
@@ -641,8 +674,6 @@ fn spawn_sim_npcs(
             Name::new(format!("SimNpc{}", idx + 1)),
         ));
     }
-
-    commands.insert_resource(DeckFiveWalkPoints(walk_points));
 }
 
 fn update_deck_lod(

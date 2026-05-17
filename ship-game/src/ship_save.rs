@@ -23,6 +23,82 @@ pub fn latest_save_path() -> PathBuf {
     saved_ships_dir().join("latest.ship.zst")
 }
 
+/// Empty layout used before the player picks a save (no procedural generation).
+#[must_use]
+pub fn empty_deck_layouts() -> DeckLayouts {
+    DeckLayouts {
+        cells: CellBox::new(),
+        decks: (0..NUM_DECKS)
+            .map(|_| DeckMeta {
+                rooms: RoomCatalog::default(),
+            })
+            .collect(),
+    }
+}
+
+/// Filenames of `*.ship.zst` in [`saved_ships_dir`] (native only).
+#[must_use]
+pub fn list_saved_ship_files() -> Vec<String> {
+    let dir = saved_ships_dir();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".ship.zst"))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Load a save by filename from [`saved_ships_dir`].
+pub fn load_save_by_filename(filename: &str) -> Result<DeckLayouts, ShipSaveError> {
+    let path = saved_ships_dir().join(filename);
+    read_save(&path)
+}
+
+/// HTTP path for the WASM save manifest.
+#[must_use]
+pub fn saved_ship_manifest_url() -> &'static str {
+    "/saved_ships/manifest.json"
+}
+
+/// HTTP path for a WASM save file.
+#[must_use]
+pub fn saved_ship_url(filename: &str) -> String {
+    format!("/saved_ships/{filename}")
+}
+
+/// Manifest served to the WASM client (`client/public/saved_ships/manifest.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedShipManifest {
+    pub saves: Vec<String>,
+}
+
+/// Write `manifest.json` listing every `*.ship.zst` in `dir` (build / dev helper).
+pub fn write_save_manifest(dir: &Path) -> Result<(), ShipSaveError> {
+    let mut saves = Vec::new();
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name.ends_with(".ship.zst") {
+                saves.push(name.to_owned());
+            }
+        }
+    }
+    saves.sort();
+    let manifest = SavedShipManifest { saves };
+    let json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| ShipSaveError::Decode(e.to_string()))?;
+    std::fs::write(dir.join("manifest.json"), json)?;
+    Ok(())
+}
+
 /// On-disk envelope (magic + zstd-compressed bincode payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedShipFile {
@@ -153,12 +229,13 @@ impl TryFrom<SavedDeckLayouts> for DeckLayouts {
 
         let mut cells = CellBox::new();
         for entry in saved.occupied {
-            let index = CellIndex::new(entry.x, entry.y, entry.z)
-                .ok_or(ShipSaveError::InvalidCellIndex {
+            let index = CellIndex::new(entry.x, entry.y, entry.z).ok_or(
+                ShipSaveError::InvalidCellIndex {
                     x: entry.x,
                     y: entry.y,
                     z: entry.z,
-                })?;
+                },
+            )?;
             let cell = Cell::try_from(entry.cell)?;
             cells.insert(index, cell);
         }
@@ -272,12 +349,11 @@ pub fn read_save(path: &Path) -> Result<DeckLayouts, ShipSaveError> {
 #[must_use]
 pub fn encode_save(layouts: &DeckLayouts) -> Result<Vec<u8>, ShipSaveError> {
     let file = SavedShipFile::from(layouts);
-    let payload =
-        bincode::serialize(&file).map_err(|e| ShipSaveError::Decode(e.to_string()))?;
+    let payload = bincode::serialize(&file).map_err(|e| ShipSaveError::Decode(e.to_string()))?;
     let mut out = Vec::with_capacity(MAGIC.len() + payload.len());
     out.extend_from_slice(MAGIC);
-    let compressed = zstd::encode_all(&payload[..], 3)
-        .map_err(|e| ShipSaveError::Decode(e.to_string()))?;
+    let compressed =
+        zstd::encode_all(&payload[..], 3).map_err(|e| ShipSaveError::Decode(e.to_string()))?;
     out.extend_from_slice(&compressed);
     Ok(out)
 }
@@ -426,6 +502,10 @@ mod native_ui {
     #[derive(Message)]
     pub struct ShipLayoutsReplaced;
 
+    /// Fired after a successful Ctrl+S save (show HUD toast in 2D).
+    #[derive(Message)]
+    pub struct ShipSaveSucceeded;
+
     #[derive(Clone, Copy, Message)]
     enum ShipSaveRequest {
         Save,
@@ -438,6 +518,7 @@ mod native_ui {
         fn build(&self, app: &mut App) {
             app.add_message::<ShipSaveRequest>()
                 .add_message::<ShipLayoutsReplaced>()
+                .add_message::<ShipSaveSucceeded>()
                 .add_systems(Update, save_load_hotkeys)
                 .add_systems(Update, handle_save_load_requests.after(save_load_hotkeys));
         }
@@ -447,7 +528,8 @@ mod native_ui {
         keyboard: Res<ButtonInput<KeyCode>>,
         mut requests: MessageWriter<ShipSaveRequest>,
     ) {
-        let ctrl = keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+        let ctrl =
+            keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
         if !ctrl {
             return;
         }
@@ -463,21 +545,22 @@ mod native_ui {
         mut requests: MessageReader<ShipSaveRequest>,
         mut layouts: ResMut<DeckLayouts>,
         mut replaced: MessageWriter<ShipLayoutsReplaced>,
+        mut saved: MessageWriter<ShipSaveSucceeded>,
     ) {
         for request in requests.read() {
             match request {
                 ShipSaveRequest::Save => match save_layouts_latest(&layouts) {
-                    Ok(path) => eprintln!("saved ship to {}", path.display()),
+                    Ok(path) => {
+                        eprintln!("saved ship to {}", path.display());
+                        saved.write(ShipSaveSucceeded);
+                    }
                     Err(e) => eprintln!("ship save failed: {e}"),
                 },
                 ShipSaveRequest::Load => match load_layouts_latest() {
                     Ok(loaded) => {
                         *layouts = loaded;
                         replaced.write(ShipLayoutsReplaced);
-                        eprintln!(
-                            "loaded ship from {}",
-                            latest_save_path().display()
-                        );
+                        eprintln!("loaded ship from {}", latest_save_path().display());
                     }
                     Err(e) => eprintln!("ship load failed: {e}"),
                 },
@@ -487,7 +570,7 @@ mod native_ui {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_ui::{ShipLayoutsReplaced, ShipSavePlugin};
+pub use native_ui::{ShipLayoutsReplaced, ShipSavePlugin, ShipSaveSucceeded};
 
 #[cfg(test)]
 mod tests {
@@ -501,7 +584,10 @@ mod tests {
         let layouts = deck_cell_layouts(CELL_SIZE_M);
         let bytes = encode_save(&layouts).expect("encode");
         let restored = decode_save(&bytes).expect("decode");
-        assert_eq!(restored.cells.deck_occupied(4), layouts.cells.deck_occupied(4));
+        assert_eq!(
+            restored.cells.deck_occupied(4),
+            layouts.cells.deck_occupied(4)
+        );
         assert_eq!(
             restored.cells.iter_occupied().count(),
             layouts.cells.iter_occupied().count()
@@ -515,6 +601,30 @@ mod tests {
         let layouts = deck_cell_layouts(CELL_SIZE_M);
         write_save(&path, &layouts).expect("write default save");
         eprintln!("wrote {}", path.display());
+    }
+
+    /// Regenerates `client/public/saved_ships/manifest.json` after saves are written.
+    #[test]
+    fn sync_public_save_manifest() {
+        let public_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/public/saved_ships");
+        std::fs::create_dir_all(&public_dir).expect("create public saved_ships");
+        for entry in std::fs::read_dir(saved_ships_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path();
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".ship.zst"))
+            {
+                let dest = public_dir.join(entry.file_name());
+                std::fs::copy(&path, &dest).expect("copy save to public");
+            }
+        }
+        super::write_save_manifest(&public_dir).expect("write manifest");
+        eprintln!("wrote {}", public_dir.join("manifest.json").display());
     }
 
     /// `make inspect-ship SAVE_SHIP=...` — deserialize and print CellBox analysis.

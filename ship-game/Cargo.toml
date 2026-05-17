@@ -35,14 +35,22 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_color",
     "tonemapping_luts",
     "default_font",
+    "bevy_state",
     "webgl2",
     "png",
     "zstd_rust",
 ] }
+futures-lite = "2"
 wasm-bindgen = "0.2"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1", features = ["js"] }
 earcutr = "0.5"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 bincode = "1"
 zstd = "0.13"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Response"] }
+js-sys = "0.3"

@@ -30,6 +30,27 @@ wasm-bindgen --no-typescript --target web \
     --out-name "ship" \
     "$WASM_PATH"
 
+# Ship saves for the in-game load screen (WASM fetches /saved_ships/manifest.json).
+SAVE_SRC="$PROJECT_ROOT/saved_ships"
+SAVE_OUT="$PROJECT_ROOT/client/public/saved_ships"
+mkdir -p "$SAVE_OUT"
+if [ -d "$SAVE_SRC" ]; then
+    cp -f "$SAVE_SRC"/*.ship.zst "$SAVE_OUT/" 2>/dev/null || true
+fi
+saves=()
+for f in "$SAVE_OUT"/*.ship.zst; do
+    [ -f "$f" ] || continue
+    saves+=("\"$(basename "$f")\"")
+done
+if [ ${#saves[@]} -gt 0 ]; then
+    printf '{"saves":[%s]}\n' "$(IFS=,; echo "${saves[*]}")" >"$SAVE_OUT/manifest.json"
+else
+    echo '{"saves":[]}' >"$SAVE_OUT/manifest.json"
+fi
+
 echo "Ship game built to $OUT_DIR"
 echo "  ship.js"
 echo "  ship_bg.wasm"
+if [ -f "$SAVE_OUT/manifest.json" ]; then
+    echo "  saved_ships/manifest.json"
+fi

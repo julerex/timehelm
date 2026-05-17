@@ -9,11 +9,11 @@ pub mod cell_box;
 mod deck_geometry;
 pub mod deck_layout;
 mod edit_mode_2d;
+mod load_screen;
 mod plan_mesh;
 mod shader_embed;
 mod shared;
 mod ship_hull;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ship_save;
 
 #[cfg(target_arch = "wasm32")]

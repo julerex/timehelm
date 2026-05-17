@@ -440,9 +440,12 @@ fn fallback_deck_cell_centers(deck_index: usize, step_m: f32) -> Vec<Vec2> {
 const CABIN_WIDTH_CELLS: i32 = 3;
 const CABIN_LENGTH_CELLS: i32 = 6;
 const CABIN_COLUMN_WIDTH_M: f32 = 3.0;
-const NUM_CABIN_COLUMNS: usize = 6;
-const NUM_INTERIOR_SPINES: usize = 3;
+/// Port and starboard cabin rows only (metres across the beam).
+const NUM_CABIN_COLUMNS: usize = 2;
+const NUM_INTERIOR_SPINES: usize = 1;
 const CABIN_COLUMNS_TOTAL_WIDTH_M: f32 = CABIN_COLUMN_WIDTH_M * NUM_CABIN_COLUMNS as f32;
+const NUM_CROSS_SECTION_BANDS: usize = NUM_CABIN_COLUMNS + NUM_INTERIOR_SPINES;
+type CrossSectionBands = [(f32, f32); NUM_CROSS_SECTION_BANDS];
 
 fn cabin_room_key(plan: PlanKey) -> (i32, i32) {
     (
@@ -470,21 +473,13 @@ fn spine_width_m(effective_beam_m: f32) -> f32 {
     ((effective_beam_m - CABIN_COLUMNS_TOTAL_WIDTH_M) / NUM_INTERIOR_SPINES as f32).max(1.0)
 }
 
-/// Seven bands port→stbd: cabin, spine, cabin, spine, cabin, spine, cabin (metres, signed `x`).
-fn cross_section_bands(effective_beam_m: f32) -> [(f32, f32); 7] {
+/// Three bands port→stbd: port cabins, centre spine, starboard cabins (metres, signed `x`).
+fn cross_section_bands(effective_beam_m: f32) -> CrossSectionBands {
     let spine_w = spine_width_m(effective_beam_m);
     let total = CABIN_COLUMNS_TOTAL_WIDTH_M + NUM_INTERIOR_SPINES as f32 * spine_w;
     let x0 = -total * 0.5;
-    let widths = [
-        CABIN_COLUMN_WIDTH_M,
-        spine_w,
-        CABIN_COLUMN_WIDTH_M,
-        spine_w,
-        CABIN_COLUMN_WIDTH_M,
-        spine_w,
-        CABIN_COLUMN_WIDTH_M,
-    ];
-    let mut bands = [(0.0, 0.0); 7];
+    let widths = [CABIN_COLUMN_WIDTH_M, spine_w, CABIN_COLUMN_WIDTH_M];
+    let mut bands = [(0.0, 0.0); NUM_CROSS_SECTION_BANDS];
     let mut x = x0;
     for (band, &w) in bands.iter_mut().zip(widths.iter()) {
         *band = (x, x + w);
@@ -493,15 +488,16 @@ fn cross_section_bands(effective_beam_m: f32) -> [(f32, f32); 7] {
     bands
 }
 
-fn band_index_at_x(x: f32, bands: &[(f32, f32); 7]) -> Option<usize> {
+fn band_index_at_x(x: f32, bands: &CrossSectionBands) -> Option<usize> {
+    let last = bands.len() - 1;
     if x < bands[0].0 {
         return Some(0);
     }
-    if x >= bands[6].1 {
-        return Some(6);
+    if x >= bands[last].1 {
+        return Some(last);
     }
     for (i, &(lo, hi)) in bands.iter().enumerate() {
-        if i == bands.len() - 1 {
+        if i == last {
             if x >= lo && x <= hi {
                 return Some(i);
             }
@@ -513,7 +509,7 @@ fn band_index_at_x(x: f32, bands: &[(f32, f32); 7]) -> Option<usize> {
 }
 
 fn is_spine_band(band_index: usize) -> bool {
-    band_index % 2 == 1
+    band_index == 1
 }
 
 fn module_x_span(module_cells: &[PlanKey]) -> (u16, u16) {
@@ -529,11 +525,11 @@ fn is_module_fore_aft_door_wall(wall_idx: usize, _lx: i32, x: u16, min_x: u16, m
     (wall_idx == 3 && x == min_x) || (wall_idx == 1 && x == max_x)
 }
 
-/// Inboard direction (±1 in `ix`) from a cabin column band toward the nearest interior spine.
+/// Inboard direction (±1 in grid `y`) from a side cabin band toward the centre spine.
 fn cabin_band_inboard_x(band_index: usize) -> i32 {
     match band_index {
-        0 | 2 => 1,
-        4 | 6 => -1,
+        0 => 1,
+        2 => -1,
         _ => 0,
     }
 }
@@ -564,7 +560,7 @@ fn cabin_edge_wall(
     }
 }
 
-/// Longitudinal corridor spines from the six-column / three-spine cross-section (all decks).
+/// Longitudinal centre corridor from the port / spine / starboard cross-section (all decks).
 fn build_cabin_spine_layout(centers: &[Vec2], deck_index: usize) -> HashSet<PlanKey> {
     let deck = deck_index as u8;
     let mut corridor = HashSet::new();
@@ -614,8 +610,8 @@ fn link_stub_to_spine(
         if !occupied.contains(&next) {
             break;
         }
-        corridor.insert(next);
         if is_spine_band(bi) {
+            corridor.insert(next);
             break;
         }
         y = next_y;
@@ -624,8 +620,8 @@ fn link_stub_to_spine(
 
 fn inboard_column_lx(band_index: usize) -> i32 {
     match band_index {
-        0 | 2 => CABIN_WIDTH_CELLS - 1,
-        4 | 6 => 0,
+        0 => CABIN_WIDTH_CELLS - 1,
+        2 => 0,
         _ => 1,
     }
 }
@@ -712,94 +708,110 @@ fn extend_corridor_door_connectors(
             continue;
         }
 
-        for &(carve_x, _) in &[(min_x, 3usize), (max_x, 1usize)] {
-            let mut row_ok = true;
-            for ly in 0..CABIN_WIDTH_CELLS {
-                let cell = (carve_x, oy.saturating_add(ly as u16));
-                if !occupied.contains(&cell) {
-                    row_ok = false;
-                    break;
-                }
-            }
-            if !row_ok {
+        let door_across = oy.saturating_add(1);
+        for &(carve_x, door_wall) in &[(min_x, 3usize), (max_x, 1usize)] {
+            let door_cell = (carve_x, door_across);
+            if !occupied.contains(&door_cell) {
                 continue;
             }
-            for ly in 0..CABIN_WIDTH_CELLS {
-                corridor.insert((carve_x, oy.saturating_add(ly as u16)));
+            let Some(stub) = neighbor_plan(door_cell, door_wall) else {
+                continue;
+            };
+            if !occupied.contains(&stub) {
+                continue;
             }
-            let link_stub = (carve_x, oy.saturating_add(inboard_ly as u16));
-            link_stub_to_spine(corridor, occupied, link_stub, inboard_dy, deck_index);
+            corridor.insert(stub);
+            let link_stub = (stub.0, oy.saturating_add(inboard_ly as u16));
+            if occupied.contains(&link_stub) {
+                link_stub_to_spine(corridor, occupied, link_stub, inboard_dy, deck_index);
+            }
             break;
         }
     }
 }
 
-/// Ensure every cabin cell has a corridor neighbor (inboard toward spine, or fore/aft stub).
+/// Ensure inboard cabin edges touch the centre spine (without carving the full 3 m row).
 fn ensure_cabin_corridor_touch(
     corridor: &mut HashSet<PlanKey>,
     occupied: &HashSet<PlanKey>,
     deck_index: usize,
 ) {
-    for _ in 0..4 {
-        let cabin_coords: Vec<_> = occupied
-            .iter()
-            .copied()
-            .filter(|c| !corridor.contains(c))
-            .collect();
-
-        let mut changed = false;
-        for coord in cabin_coords {
-            let has_corridor =
-                (0..4).any(|wi| neighbor_plan(coord, wi).is_some_and(|nb| corridor.contains(&nb)));
-            if has_corridor {
-                continue;
-            }
-
-            let world = DeckBuild::plan_world(coord, deck_index as u8);
-            let Some(beam) = effective_beam_m(deck_index, world.y) else {
-                continue;
-            };
-            let bands = cross_section_bands(beam);
-            let band = band_index_at_x(world.x, &bands);
-            if band.is_some_and(is_spine_band) {
-                continue;
-            }
-
-            let inboard_dy = band.map(cabin_band_inboard_x).unwrap_or(1);
-            if inboard_dy == 0 {
-                continue;
-            }
-            let inboard_y = coord.1 as i32 + inboard_dy;
-            if (0..crate::cell_box::BEAM as i32).contains(&inboard_y) {
-                let inboard = (coord.0, inboard_y as u16);
-                if occupied.contains(&inboard) {
-                    changed |= corridor.insert(inboard);
-                }
-            }
-
-            let fore_aft_has_corridor = [3, 1]
-                .iter()
-                .any(|&wi| neighbor_plan(coord, wi).is_some_and(|nb| corridor.contains(&nb)));
-            if fore_aft_has_corridor {
-                continue;
-            }
-
-            for wi in [3usize, 1] {
-                if let Some(nb) = neighbor_plan(coord, wi) {
-                    if occupied.contains(&nb) {
-                        changed |= corridor.insert(nb);
-                    }
-                }
-            }
+    let deck = deck_index as u8;
+    for &coord in occupied.iter() {
+        if corridor.contains(&coord) {
+            continue;
         }
-        if !changed {
-            break;
+        let world = DeckBuild::plan_world(coord, deck);
+        let Some(beam) = effective_beam_m(deck_index, world.y) else {
+            continue;
+        };
+        let bands = cross_section_bands(beam);
+        let Some(band) = band_index_at_x(world.x, &bands) else {
+            continue;
+        };
+        if is_spine_band(band) {
+            continue;
+        }
+        let (across_local, _) = cabin_local(coord);
+        if across_local != inboard_column_lx(band) {
+            continue;
+        }
+        let inboard_dy = cabin_band_inboard_x(band);
+        let inboard_y = coord.1 as i32 + inboard_dy;
+        if !(0..crate::cell_box::BEAM as i32).contains(&inboard_y) {
+            continue;
+        }
+        let inboard = (coord.0, inboard_y as u16);
+        if !occupied.contains(&inboard) {
+            continue;
+        }
+        let inboard_world = DeckBuild::plan_world(inboard, deck);
+        if band_index_at_x(inboard_world.x, &bands).is_some_and(is_spine_band) {
+            corridor.insert(inboard);
         }
     }
 }
 
 fn corridor_floor_material() -> Material {
     Material::Corridor
+}
+
+/// Fill 1-cell gaps between two occupied cells (corridor stub) so the deck has no lattice holes.
+fn fill_single_cell_holes(
+    build: &mut DeckBuild,
+    deck_index: usize,
+    corridor_room: RoomId,
+    corridor_floor: Material,
+) {
+    let deck = deck_index as u8;
+    for _ in 0..4 {
+        let occupied: HashSet<_> = build.cells.keys().copied().collect();
+        let mut filled = false;
+        for &plan in &occupied {
+            for wall_idx in 0..4 {
+                let Some(mid) = neighbor_plan(plan, wall_idx) else {
+                    continue;
+                };
+                let Some(far) = neighbor_plan(mid, wall_idx) else {
+                    continue;
+                };
+                if !occupied.contains(&far) || occupied.contains(&mid) {
+                    continue;
+                }
+                let world = DeckBuild::plan_world(mid, deck);
+                if !profile_allows_cell(deck_index, world) {
+                    continue;
+                }
+                build
+                    .cells
+                    .insert(mid, Cell::new(corridor_floor, corridor_room));
+                filled = true;
+            }
+        }
+        if !filled {
+            break;
+        }
+    }
 }
 
 fn room_for_cabin(
@@ -1198,6 +1210,7 @@ pub fn deck_cell_layouts(step_m: f32) -> DeckLayouts {
         }
 
         let mut build = DeckBuild { cells, rooms };
+        fill_single_cell_holes(&mut build, deck_i, corridor_room, corridor_floor);
         assign_cabin_module_walls(&mut build);
         assign_non_cabin_walls(&mut build);
         prime_fore_aft_walls_toward_corridor(&mut build);
@@ -1232,8 +1245,7 @@ fn is_perimeter_cell(cell: PlanKey, occupied: &HashSet<PlanKey>) -> bool {
     false
 }
 
-// TODO: update for `CellBox` / `PlanKey` (disabled until migrated).
-#[cfg(any())]
+#[cfg(test)]
 mod layout_tests {
     use super::*;
     use crate::cell::Material;
@@ -1348,32 +1360,43 @@ mod layout_tests {
         runs
     }
 
+    fn midship_cross_section_row(deck: DeckCells<'_>, along_x: u16) -> String {
+        let mut row = String::new();
+        for y in 0..crate::cell_box::BEAM as u16 {
+            let ch = match deck.get((along_x, y)) {
+                None => '.',
+                Some(c) => match room_category(deck, c.room) {
+                    RoomCategory::Cabin => 'C',
+                    RoomCategory::Corridor => '#',
+                    _ => '?',
+                },
+            };
+            row.push(ch);
+        }
+        row
+    }
+
     #[test]
-    fn midship_has_six_cabin_columns() {
+    fn midship_has_port_and_starboard_cabin_bands() {
         let layouts = deck_cell_layouts(CELL_SIZE_M);
         let deck = deck_five(&layouts);
         let mid_y = midship_y_for_deck(4);
         let mid_x = CellIndex::from_world_xy_deck(Vec2::new(0.0, mid_y), 4)
             .expect("midship")
             .x;
-        let mut cabin_ys = HashSet::new();
-        for (plan, cell) in deck.iter_cells() {
-            if plan.0 != mid_x {
-                continue;
-            }
-            if room_category(deck, cell.room) == RoomCategory::Cabin {
-                cabin_ys.insert(plan.1);
-            }
-        }
+        let row = midship_cross_section_row(deck, mid_x);
+        let port_cabin = row.contains("CCC");
+        let starboard_cabin = row
+            .rfind("CCC")
+            .is_some_and(|i| i > row.find("###").unwrap_or(0));
         assert!(
-            cabin_ys.len() >= 6,
-            "expected at least six cabin column cells at midship x={mid_x}, got {}",
-            cabin_ys.len()
+            port_cabin && starboard_cabin,
+            "expected port and starboard 3-wide cabin bands at midship x={mid_x}, got: {row}"
         );
     }
 
     #[test]
-    fn midship_has_three_spine_corridors() {
+    fn midship_has_one_interior_spine() {
         let layouts = deck_cell_layouts(CELL_SIZE_M);
         let deck = deck_five(&layouts);
         let mid_y = midship_y_for_deck(4);
@@ -1382,9 +1405,15 @@ mod layout_tests {
             .x;
         let runs = corridor_y_runs_at_x(deck, mid_x);
         let spine_runs: Vec<_> = runs.iter().filter(|run| run.len() >= 2).collect();
+        assert_eq!(
+            spine_runs.len(),
+            1,
+            "expected one centre spine at midship, got {spine_runs:?}"
+        );
         assert!(
-            spine_runs.len() >= 3,
-            "expected three interior spine runs at midship, got {spine_runs:?}"
+            spine_runs[0].len() >= 10,
+            "centre spine should span most of the beam, got {:?}",
+            spine_runs[0]
         );
     }
 
@@ -1397,7 +1426,7 @@ mod layout_tests {
         let total = CABIN_COLUMNS_TOTAL_WIDTH_M + NUM_INTERIOR_SPINES as f32 * spine_w;
         assert!(
             (total - beam).abs() < 1.0,
-            "expected 6×3m + 3×spine ≈ beam ({total} vs {beam})"
+            "expected 2×3m + spine ≈ beam ({total} vs {beam})"
         );
     }
 
@@ -1430,9 +1459,12 @@ mod layout_tests {
     }
 
     fn module_borders_corridor(deck: DeckCells<'_>, ox: u16, oy: u16) -> bool {
-        for ly in 0..CABIN_WIDTH_CELLS {
-            for lx in 0..CABIN_LENGTH_CELLS {
-                let coord = (ox.saturating_add(lx as u16), oy.saturating_add(ly as u16));
+        for along in 0..CABIN_LENGTH_CELLS {
+            for across in 0..CABIN_WIDTH_CELLS {
+                let coord = (
+                    ox.saturating_add(along as u16),
+                    oy.saturating_add(across as u16),
+                );
                 for wall_idx in 0..4 {
                     if neighbor_is_corridor(deck, coord, wall_idx) {
                         return true;
@@ -1458,9 +1490,10 @@ mod layout_tests {
                 cabin_rooms.insert(cell.room);
             }
         }
+        const FULL_MODULE_CELLS: usize = (CABIN_WIDTH_CELLS * CABIN_LENGTH_CELLS) as usize;
         for room in cabin_rooms {
             let cell_count = deck.iter_cells().filter(|(_, c)| c.room == room).count();
-            if cell_count < 4 {
+            if cell_count < FULL_MODULE_CELLS {
                 continue;
             }
             assert!(
@@ -1503,61 +1536,47 @@ mod layout_tests {
 
     #[test]
     fn full_cabin_module_has_perimeter_walls_and_door_window() {
-        let deck = &deck_cell_layouts(CELL_SIZE_M)[4];
+        let layouts = deck_cell_layouts(CELL_SIZE_M);
+        let deck = deck_five(&layouts);
+        const FULL_MODULE_CELLS: usize = (CABIN_WIDTH_CELLS * CABIN_LENGTH_CELLS) as usize;
+        let mut by_room: HashMap<RoomId, Vec<PlanKey>> = HashMap::new();
+        for (plan, cell) in deck.iter_cells() {
+            if room_category(deck, cell.room) == RoomCategory::Cabin {
+                by_room.entry(cell.room).or_default().push(plan);
+            }
+        }
         let mut found_module = false;
-        for &(ix, iy) in deck.cells.keys() {
-            let ox = ix.div_euclid(CABIN_WIDTH_CELLS) * CABIN_WIDTH_CELLS;
-            let oy = iy.div_euclid(CABIN_LENGTH_CELLS) * CABIN_LENGTH_CELLS;
-            if (ix, iy) != (ox, oy) {
+        for (room, coords) in &by_room {
+            if coords.len() < FULL_MODULE_CELLS {
                 continue;
             }
-            let room = {
-                let mut cabin_cells = 0u32;
-                let mut room_id = None;
-                for lx in 0..CABIN_WIDTH_CELLS {
-                    for ly in 0..CABIN_LENGTH_CELLS {
-                        if let Some(cell) = deck.cells.get(&(ox + lx, oy + ly)) {
-                            if room_category(deck, cell.room) == RoomCategory::Cabin {
-                                cabin_cells += 1;
-                                room_id = Some(cell.room);
-                            }
-                        }
-                    }
-                }
-                if cabin_cells < 15 {
-                    continue;
-                }
-                room_id
-            };
-            let Some(room) = room else {
-                continue;
-            };
-            if room_category(deck, room) != RoomCategory::Cabin {
+            if coords.len() > FULL_MODULE_CELLS {
                 continue;
             }
-            if !module_borders_corridor(deck, ox, oy) {
-                continue;
-            }
-            let (door, _) = room_window_and_door(deck, room);
+            let (door, _) = room_window_and_door(deck, *room);
             if door.is_none() {
+                continue;
+            }
+            let ox = coords.iter().map(|p| p.0).min().unwrap();
+            let oy = coords.iter().map(|p| p.1).min().unwrap();
+            if !module_borders_corridor(deck, ox, oy) {
                 continue;
             }
             found_module = true;
 
             let mut interior_open = 0u32;
             let mut perimeter_with_wall = 0u32;
-            for lx in 0..CABIN_WIDTH_CELLS {
-                for ly in 0..CABIN_LENGTH_CELLS {
-                    let cell = deck.cells.get(&(ox + lx, oy + ly)).expect("cell");
-                    if is_cabin_interior(lx, ly) {
-                        assert!(
-                            all_walls_open(cell),
-                            "interior ({lx},{ly}) should have all Open walls"
-                        );
-                        interior_open += 1;
-                    } else if !all_walls_open(cell) {
-                        perimeter_with_wall += 1;
-                    }
+            for &(x, y) in coords {
+                let cell = deck.get((x, y)).expect("cell");
+                let (across_local, along_local) = cabin_local((x, y));
+                if is_cabin_interior(across_local, along_local) {
+                    assert!(
+                        all_walls_open(cell),
+                        "interior ({across_local},{along_local}) should have all Open walls"
+                    );
+                    interior_open += 1;
+                } else if !all_walls_open(cell) {
+                    perimeter_with_wall += 1;
                 }
             }
             assert_eq!(interior_open, 4, "expected four interior cells");
@@ -1567,20 +1586,25 @@ mod layout_tests {
             );
             break;
         }
+        let max_cabin_room = by_room
+            .values()
+            .map(|coords| coords.len())
+            .max()
+            .unwrap_or(0);
         assert!(
             found_module,
-            "expected at least one full 3×6 cabin module bordering corridor on deck 5"
+            "expected at least one full 3×6 cabin module bordering corridor on deck 5 (largest cabin room: {max_cabin_room} cells)"
         );
 
         let mut found_exterior = false;
         let mut found_interior = false;
         let mut cabin_rooms = HashSet::new();
-        for cell in deck.cells.values() {
+        for (_, cell) in deck.iter_cells() {
             if room_category(deck, cell.room) == RoomCategory::Cabin {
                 cabin_rooms.insert(cell.room);
             }
         }
-        let occupied: HashSet<_> = deck.cells.keys().copied().collect();
+        let occupied: HashSet<_> = deck.plan_keys().collect();
         for room in cabin_rooms {
             let exterior = room_has_hull_edge(deck, room);
             let (door, window) = room_window_and_door(deck, room);
@@ -1593,8 +1617,11 @@ mod layout_tests {
                 found_exterior = true;
                 let (window_coord, window_wall) =
                     window.expect("exterior cabin room should have a window");
-                let nb = neighbor_coord(window_coord, window_wall);
-                assert!(!occupied.contains(&nb), "window must be on hull perimeter");
+                let nb = neighbor_plan(window_coord, window_wall);
+                assert!(
+                    nb.is_none_or(|nb| !occupied.contains(&nb)),
+                    "window must be on hull perimeter"
+                );
                 assert!(
                     !is_opposite_cabin_end(door_coord, window_coord),
                     "window must not be on the cabin end opposite the door"

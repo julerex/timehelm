@@ -860,6 +860,7 @@ dependencies = [
  "bevy_shader",
  "bevy_sprite",
  "bevy_sprite_render",
+ "bevy_state",
  "bevy_tasks",
  "bevy_text",
  "bevy_time",
@@ -3842,10 +3843,15 @@ dependencies = [
  "bevy",
  "bincode",
  "earcutr",
+ "futures-lite",
  "getrandom 0.3.4",
+ "js-sys",
  "serde",
+ "serde_json",
  "uuid",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "zstd",
 ]
 

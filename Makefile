@@ -111,5 +111,7 @@ inspect-ship:
 
 # Write procedural default layout to saved_ships/default.ship.zst (for testing inspect-ship).
 write-ship-default:
-	@mkdir -p saved_ships
+	@mkdir -p saved_ships client/public/saved_ships
 	cd ship-game && $(CARGO) test --lib ship_save::tests::write_default_ship_save -- --exact --nocapture
+	@cp -f saved_ships/*.ship.zst client/public/saved_ships/ 2>/dev/null || true
+	@cd ship-game && $(CARGO) test --lib ship_save::tests::sync_public_save_manifest -- --exact --nocapture

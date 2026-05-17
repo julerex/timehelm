@@ -6,23 +6,31 @@
 
 use crate::cell::{AgentId, CELL_NEIGHBOUR_OFFSETS};
 use crate::cell_box::{deck_walk_grid, step_allowed, CellIndex, PlanKey};
-use crate::deck_layout::{
-    deck_cell_layouts, DeckCells, DeckLayouts, CELL_SIZE_M, NUM_DECKS,
-};
+use crate::deck_layout::{DeckCells, DeckLayouts, CELL_SIZE_M, NUM_DECKS};
 use crate::edit_mode_2d::{spawn_edit_mode_panel, PlanEditPlugin};
+use crate::load_screen::{spawn_load_menu, GamePhase, LoadScreenPlugin};
 use crate::plan_mesh::{build_deck_mesh, build_deck_wall_mesh, DeckPlanMeshes};
 use crate::shared::{
     asset_plugin, cursor_in_game_viewport, deck_info_text_2d, format_cell_hover_line,
     game_camera_viewport, primary_window,
 };
 use crate::ship_hull::SHIP_LENGTH_M;
+use crate::ship_save::empty_deck_layouts;
+use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{OrthographicProjection, Projection, ScalingMode};
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 
 const SIM_DECK_INDEX: usize = 4;
 const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
+
+const PLAN_ZOOM_MIN: f32 = 0.5;
+const PLAN_ZOOM_MAX: f32 = 4.0;
+const PLAN_ZOOM_SCROLL_FACTOR: f32 = 1.1;
+
+const STATUS_TOAST_SECS: f32 = 3.0;
 
 /// Simulated walkers: slight Z offset above the deck cell mesh.
 const Z_HUMAN: f32 = 0.012;
@@ -32,6 +40,11 @@ const NUM_SIM_HUMANS: usize = 10_000;
 const HUMAN_CELL_COLOR: Color = Color::srgba(0.96, 0.62, 0.62, 0.95);
 /// Grid steps per second (cardinal and diagonal).
 const SIM_HUMAN_STEPS_PER_S: f32 = 2.8;
+
+/// Layer for deck plan `Mesh2d` geometry; the UI `Camera2d` stays on the default layer.
+pub(crate) fn plan_world_render_layers() -> RenderLayers {
+    RenderLayers::layer(1)
+}
 
 #[derive(Component)]
 pub(crate) struct ShipPlan2dRotateRoot;
@@ -47,6 +60,24 @@ struct DeckInfoText2d;
 
 #[derive(Component)]
 struct HoverCellText2d;
+
+#[derive(Component)]
+struct StatusToastText;
+
+/// Plan camera zoom factor (1.0 = default; larger = zoomed in).
+#[derive(Resource)]
+struct PlanViewZoom(f32);
+
+impl Default for PlanViewZoom {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+#[derive(Resource, Default)]
+struct StatusToast {
+    remaining: f32,
+}
 
 #[derive(Resource)]
 pub(crate) struct CurrentDeck(pub(crate) usize);
@@ -229,45 +260,70 @@ fn pick_strictly_closer_neighbour(
 }
 
 #[derive(Resource)]
-struct Plan2dVisualAssets {
-    rotate_root: Entity,
+pub(crate) struct Plan2dVisualAssets {
+    pub(crate) rotate_root: Entity,
     shared_material: Handle<ColorMaterial>,
     human_mesh: Handle<Mesh>,
     human_material: Handle<ColorMaterial>,
 }
 
+#[derive(Resource)]
+struct Plan2dWorldSpawned(bool);
+
 pub fn run_app_2d() {
     let mut app = App::new();
     app.add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(primary_window()),
-                    ..default()
-                })
-                .set(asset_plugin())
-                .set(ImagePlugin::default_nearest()),
-        );
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(primary_window()),
+                ..default()
+            })
+            .set(asset_plugin())
+            .set(ImagePlugin::default_nearest()),
+    );
     #[cfg(not(target_arch = "wasm32"))]
     app.add_plugins(crate::ship_save::ShipSavePlugin);
-    app.add_plugins(PlanEditPlugin)
+    app.add_plugins((LoadScreenPlugin, PlanEditPlugin))
+        .insert_resource(empty_deck_layouts())
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
-        .insert_resource(deck_cell_layouts(crate::deck_layout::CELL_SIZE_M))
         .insert_resource(SimRng::default())
         .insert_resource(NextAgentId(1))
+        .insert_resource(Plan2dWorldSpawned(false))
+        .insert_resource(PlanViewZoom::default())
+        .insert_resource(StatusToast::default())
         .insert_resource(ClearColor(Color::srgb(0.04, 0.09, 0.16)))
-        .add_systems(Startup, (setup_2d, init_deck_info_text_2d.after(setup_2d)))
+        .add_systems(Startup, setup_2d)
+        .add_systems(
+            OnEnter(GamePhase::InGame),
+            (enter_plan_world_2d, init_deck_info_text_2d).chain(),
+        )
         .add_systems(
             Update,
             (
                 deck_switch_2d,
                 sync_plan_deck_visibility,
                 human_wander_2d,
-                (sync_plan_camera_viewport, update_hover_cell_label_2d).chain(),
+                (
+                    sync_plan_camera_viewport,
+                    plan_mouse_wheel_zoom,
+                    apply_plan_view_zoom,
+                    update_hover_cell_label_2d,
+                )
+                    .chain(),
                 update_deck_info_text_2d,
-            ),
+                update_status_toast,
+            )
+                .run_if(in_state(GamePhase::InGame)),
+        )
+        .add_systems(
+            Update,
+            sync_plan_camera_viewport.run_if(in_state(GamePhase::LoadMenu)),
         );
     #[cfg(not(target_arch = "wasm32"))]
-    app.add_systems(Update, reload_plan_decks_after_load);
+    app.add_systems(
+        Update,
+        (reload_plan_decks_after_load, on_ship_save_succeeded).run_if(in_state(GamePhase::InGame)),
+    );
     app.run();
 }
 
@@ -285,8 +341,7 @@ fn spawn_plan_deck_entities(
     let step_period = SIM_HUMAN_STEPS_PER_S.recip();
 
     let mut deck_entities = [Entity::PLACEHOLDER; NUM_DECKS];
-    let mut floor_meshes: [Handle<Mesh>; NUM_DECKS] =
-        std::array::from_fn(|_| Handle::default());
+    let mut floor_meshes: [Handle<Mesh>; NUM_DECKS] = std::array::from_fn(|_| Handle::default());
     let mut wall_meshes: [Handle<Mesh>; NUM_DECKS] = std::array::from_fn(|_| Handle::default());
     for (deck_i, slot) in deck_entities.iter_mut().enumerate() {
         let mesh_handle = meshes.add(build_deck_mesh(deck_i, layouts.deck(deck_i)));
@@ -304,6 +359,7 @@ fn spawn_plan_deck_entities(
                 MeshMaterial2d(assets.shared_material.clone()),
                 Transform::IDENTITY,
                 visibility,
+                plan_world_render_layers(),
                 ChildOf(assets.rotate_root),
             ))
             .with_children(|plan| {
@@ -311,6 +367,7 @@ fn spawn_plan_deck_entities(
                     Mesh2d(wall_mesh_handle),
                     MeshMaterial2d(assets.shared_material.clone()),
                     Transform::IDENTITY,
+                    plan_world_render_layers(),
                 ));
                 let deck_placements = &per_deck[deck_i];
                 for &(pos_xy, tgt_xy) in deck_placements {
@@ -325,6 +382,7 @@ fn spawn_plan_deck_entities(
                         Mesh2d(assets.human_mesh.clone()),
                         MeshMaterial2d(assets.human_material.clone()),
                         Transform::from_xyz(pos_xy.x, pos_xy.y, Z_HUMAN),
+                        plan_world_render_layers(),
                         SimHuman {
                             agent_id,
                             deck_idx: deck_i,
@@ -385,9 +443,6 @@ fn reload_plan_decks_after_load(
 
 fn setup_2d(
     mut commands: Commands,
-    mut layouts: ResMut<DeckLayouts>,
-    mut rng: ResMut<SimRng>,
-    mut next_agent: ResMut<NextAgentId>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -402,12 +457,14 @@ fn setup_2d(
             ..default()
         },
         Projection::from(world_ortho),
+        plan_world_render_layers(),
         GamePlanCamera2d,
     ));
 
     let ui_camera = commands
         .spawn((
             Camera2d,
+            IsDefaultUiCamera,
             Camera {
                 order: 1,
                 clear_color: ClearColorConfig::None,
@@ -461,8 +518,19 @@ fn setup_2d(
                     TextColor(Color::srgb(0.75, 0.82, 0.9)),
                     HoverCellText2d,
                 ));
+                left.spawn((
+                    Text::new(""),
+                    TextFont {
+                        font_size: 17.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.45, 0.92, 0.55)),
+                    Visibility::Hidden,
+                    StatusToastText,
+                ));
             });
         });
+    spawn_load_menu(&mut commands, ui_camera);
     spawn_edit_mode_panel(&mut commands, ui_camera);
 
     let rotate_root = commands
@@ -479,27 +547,38 @@ fn setup_2d(
     let human_material = materials.add(ColorMaterial::from(HUMAN_CELL_COLOR));
     commands.insert_resource(Plan2dVisualAssets {
         rotate_root,
-        shared_material: shared_material.clone(),
-        human_mesh: human_mesh.clone(),
-        human_material: human_material.clone(),
+        shared_material,
+        human_mesh,
+        human_material,
     });
+}
+
+fn enter_plan_world_2d(
+    mut commands: Commands,
+    mut layouts: ResMut<DeckLayouts>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    assets: Res<Plan2dVisualAssets>,
+    mut rng: ResMut<SimRng>,
+    mut next_agent: ResMut<NextAgentId>,
+    current_deck: Res<CurrentDeck>,
+    mut spawned: ResMut<Plan2dWorldSpawned>,
+) {
+    if spawned.0 {
+        return;
+    }
     let (deck_entities, deck_meshes) = spawn_plan_deck_entities(
         &mut commands,
         &mut meshes,
         &mut layouts,
-        &Plan2dVisualAssets {
-            rotate_root,
-            shared_material,
-            human_mesh,
-            human_material,
-        },
-        SIM_DECK_INDEX,
+        &assets,
+        current_deck.0,
         &mut rng,
         &mut next_agent,
     );
     commands.insert_resource(deck_walk_grids(&layouts));
     commands.insert_resource(DeckContentEntities(deck_entities));
     commands.insert_resource(deck_meshes);
+    spawned.0 = true;
 }
 
 fn sync_plan_camera_viewport(
@@ -714,6 +793,75 @@ fn human_wander_2d(
             tf.translation.y = next_pos.y;
         } else if let Some(t) = random_walk_point(grid, &mut rng) {
             wander.target = t;
+        }
+    }
+}
+
+fn plan_mouse_wheel_zoom(
+    window: Single<&Window>,
+    cameras: Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
+    mut zoom: ResMut<PlanViewZoom>,
+    mut scroll: MessageReader<MouseWheel>,
+) {
+    let Ok((camera, _)) = cameras.single() else {
+        return;
+    };
+    if cursor_in_game_viewport(&window, camera).is_none() {
+        return;
+    }
+    for ev in scroll.read() {
+        let dy = match ev.unit {
+            MouseScrollUnit::Line => ev.y,
+            MouseScrollUnit::Pixel => ev.y * 0.015,
+        };
+        if dy > 0.0 {
+            zoom.0 = (zoom.0 * PLAN_ZOOM_SCROLL_FACTOR).clamp(PLAN_ZOOM_MIN, PLAN_ZOOM_MAX);
+        } else if dy < 0.0 {
+            zoom.0 = (zoom.0 / PLAN_ZOOM_SCROLL_FACTOR).clamp(PLAN_ZOOM_MIN, PLAN_ZOOM_MAX);
+        }
+    }
+}
+
+fn apply_plan_view_zoom(
+    zoom: Res<PlanViewZoom>,
+    mut projections: Query<&mut Projection, With<GamePlanCamera2d>>,
+) {
+    for mut projection in &mut projections {
+        let Projection::Orthographic(ref mut ortho) = *projection else {
+            continue;
+        };
+        ortho.scaling_mode = ScalingMode::FixedHorizontal {
+            viewport_width: VIEW_WIDTH_M / zoom.0,
+        };
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn on_ship_save_succeeded(
+    mut events: MessageReader<crate::ship_save::ShipSaveSucceeded>,
+    mut toast: ResMut<StatusToast>,
+) {
+    if events.read().next().is_some() {
+        toast.remaining = STATUS_TOAST_SECS;
+    }
+}
+
+fn update_status_toast(
+    time: Res<Time>,
+    mut toast: ResMut<StatusToast>,
+    mut text_query: Query<(&mut Text, &mut Visibility), With<StatusToastText>>,
+) {
+    let mut show = false;
+    if toast.remaining > 0.0 {
+        toast.remaining -= time.delta_secs();
+        show = true;
+    }
+    for (mut text, mut vis) in &mut text_query {
+        if show {
+            *vis = Visibility::Inherited;
+            text.0 = "Saved successfully".to_string();
+        } else {
+            *vis = Visibility::Hidden;
         }
     }
 }
