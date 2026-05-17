@@ -1,14 +1,18 @@
 //! Compressed on-disk ship layout (`DeckLayouts` / [`CellBox`]) for save/load and agent inspection.
 
-use crate::cell::{AgentId, Bag, Cell, Material, RoomCatalog, RoomCategory, RoomId};
+use crate::cell::{
+    Cell, Entity, EntityId, EntityKind, Fixture, Material, RoomCatalog, RoomCategory, RoomId,
+};
 use crate::cell_box::{CellBox, CellIndex, BEAM, DECKS, LENGTH};
 use crate::deck_layout::{DeckLayouts, DeckMeta, NUM_DECKS};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const SAVE_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 2;
+pub const SAVE_VERSION_V1: u32 = 1;
 const MAGIC: &[u8; 6] = b"THSHP1";
 
 /// Repository-relative directory for ship saves (`timehelm/saved_ships`).
@@ -33,6 +37,7 @@ pub fn empty_deck_layouts() -> DeckLayouts {
                 rooms: RoomCatalog::default(),
             })
             .collect(),
+        entities: HashMap::new(),
     }
 }
 
@@ -110,6 +115,8 @@ pub struct SavedShipFile {
 pub struct SavedDeckLayouts {
     pub occupied: Vec<SavedOccupiedCell>,
     pub decks: Vec<SavedDeckMeta>,
+    #[serde(default)]
+    pub entities: Vec<SavedEntity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,7 +135,20 @@ pub struct SavedCell {
     pub wall4: u8,
     pub floor: u8,
     pub room: u32,
+    #[serde(default)]
+    pub fixtures: Vec<u8>,
+    /// v1 only; migrated into [`SavedDeckLayouts::entities`] on load. Always empty in v2 saves.
+    #[serde(default)]
     pub agents: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedEntity {
+    pub id: u64,
+    pub kind: u8,
+    pub x: u16,
+    pub y: u16,
+    pub z: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,7 +190,28 @@ impl From<&DeckLayouts> for SavedDeckLayouts {
             .iter()
             .map(|meta| SavedDeckMeta::from(&meta.rooms))
             .collect();
-        Self { occupied, decks }
+        let entities = layouts
+            .entities
+            .iter()
+            .map(|(id, entity)| SavedEntity::from((*id, entity)))
+            .collect();
+        Self {
+            occupied,
+            decks,
+            entities,
+        }
+    }
+}
+
+impl From<(EntityId, &Entity)> for SavedEntity {
+    fn from((id, entity): (EntityId, &Entity)) -> Self {
+        Self {
+            id: id.0,
+            kind: entity.kind.to_tag(),
+            x: entity.location.0,
+            y: entity.location.1,
+            z: entity.location.2,
+        }
     }
 }
 
@@ -183,7 +224,8 @@ impl From<&Cell> for SavedCell {
             wall4: cell.wall4 as u8,
             floor: cell.floor as u8,
             room: cell.room.0,
-            agents: cell.contents.agents().iter().map(|a| a.0).collect(),
+            fixtures: cell.fixtures.iter().map(|f| f.to_tag()).collect(),
+            agents: Vec::new(),
         }
     }
 }
@@ -209,11 +251,62 @@ impl TryFrom<SavedShipFile> for DeckLayouts {
     type Error = ShipSaveError;
 
     fn try_from(file: SavedShipFile) -> Result<Self, Self::Error> {
-        if file.version != SAVE_VERSION {
-            return Err(ShipSaveError::UnsupportedVersion(file.version));
+        match file.version {
+            SAVE_VERSION => SavedDeckLayouts::try_into(file.layouts),
+            SAVE_VERSION_V1 => layouts_from_v1(file.layouts),
+            v => Err(ShipSaveError::UnsupportedVersion(v)),
         }
-        SavedDeckLayouts::try_into(file.layouts)
     }
+}
+
+fn layouts_from_v1(saved: SavedDeckLayouts) -> Result<DeckLayouts, ShipSaveError> {
+    if saved.decks.len() != NUM_DECKS {
+        return Err(ShipSaveError::DeckCount {
+            expected: NUM_DECKS,
+            got: saved.decks.len(),
+        });
+    }
+
+    let mut cells = CellBox::new();
+    let mut entities = HashMap::new();
+    for entry in saved.occupied {
+        let index = CellIndex::new(entry.x, entry.y, entry.z).ok_or(
+            ShipSaveError::InvalidCellIndex {
+                x: entry.x,
+                y: entry.y,
+                z: entry.z,
+            },
+        )?;
+        let location = index.to_location();
+        let agent_ids = entry.cell.agents.clone();
+        let cell = Cell::try_from(entry.cell)?;
+        cells.insert(index, cell);
+        for id in agent_ids {
+            entities.insert(
+                EntityId(id),
+                Entity {
+                    kind: EntityKind::SimHuman,
+                    location,
+                },
+            );
+        }
+    }
+
+    let decks = saved
+        .decks
+        .into_iter()
+        .map(|meta| -> Result<DeckMeta, ShipSaveError> {
+            Ok(DeckMeta {
+                rooms: RoomCatalog::try_from(meta)?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(DeckLayouts {
+        cells,
+        decks,
+        entities,
+    })
 }
 
 impl TryFrom<SavedDeckLayouts> for DeckLayouts {
@@ -250,7 +343,17 @@ impl TryFrom<SavedDeckLayouts> for DeckLayouts {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(DeckLayouts { cells, decks })
+        let mut entities = HashMap::new();
+        for saved_entity in saved.entities {
+            let (id, entity) = <(EntityId, Entity)>::try_from(saved_entity)?;
+            entities.insert(id, entity);
+        }
+
+        Ok(DeckLayouts {
+            cells,
+            decks,
+            entities,
+        })
     }
 }
 
@@ -258,6 +361,12 @@ impl TryFrom<SavedCell> for Cell {
     type Error = ShipSaveError;
 
     fn try_from(saved: SavedCell) -> Result<Self, Self::Error> {
+        let mut fixtures = Vec::with_capacity(saved.fixtures.len());
+        for tag in saved.fixtures {
+            fixtures.push(
+                Fixture::from_tag(tag).ok_or(ShipSaveError::InvalidFixtureTag(tag))?,
+            );
+        }
         Ok(Self {
             wall1: material_from_u8(saved.wall1)?,
             wall2: material_from_u8(saved.wall2)?,
@@ -265,14 +374,28 @@ impl TryFrom<SavedCell> for Cell {
             wall4: material_from_u8(saved.wall4)?,
             floor: material_from_u8(saved.floor)?,
             room: RoomId(saved.room),
-            contents: {
-                let mut bag = Bag::default();
-                for id in saved.agents {
-                    bag.insert(AgentId(id));
-                }
-                bag
-            },
+            fixtures,
         })
+    }
+}
+
+impl TryFrom<SavedEntity> for (EntityId, Entity) {
+    type Error = ShipSaveError;
+
+    fn try_from(saved: SavedEntity) -> Result<Self, Self::Error> {
+        let kind = EntityKind::from_tag(saved.kind).ok_or(ShipSaveError::InvalidEntityKind(
+            saved.kind,
+        ))?;
+        let location = (saved.x, saved.y, saved.z);
+        CellIndex::from_location(location).ok_or(ShipSaveError::InvalidCellIndex {
+            x: saved.x,
+            y: saved.y,
+            z: saved.z,
+        })?;
+        Ok((
+            EntityId(saved.id),
+            Entity { kind, location },
+        ))
     }
 }
 
@@ -302,6 +425,8 @@ pub enum ShipSaveError {
     InvalidCellIndex { x: u16, y: u16, z: u8 },
     InvalidMaterial(u8),
     InvalidRoomCategory(u8),
+    InvalidFixtureTag(u8),
+    InvalidEntityKind(u8),
 }
 
 impl std::fmt::Display for ShipSaveError {
@@ -318,6 +443,8 @@ impl std::fmt::Display for ShipSaveError {
             }
             Self::InvalidMaterial(m) => write!(f, "invalid material code {m}"),
             Self::InvalidRoomCategory(c) => write!(f, "invalid room category code {c}"),
+            Self::InvalidFixtureTag(t) => write!(f, "invalid fixture tag {t}"),
+            Self::InvalidEntityKind(k) => write!(f, "invalid entity kind {k}"),
         }
     }
 }
@@ -378,6 +505,19 @@ pub fn analyze_save(path: &Path, layouts: &DeckLayouts) -> String {
     let _ = writeln!(out, "path: {}", path.display());
     let _ = writeln!(out, "format_version: {}", file.version);
     analyze_cell_box(&layouts.cells, &mut out);
+    let _ = writeln!(out, "entities: {}", layouts.entities.len());
+    let sample_entities: Vec<_> = layouts.entities.iter().take(4).collect();
+    if !sample_entities.is_empty() {
+        let _ = writeln!(out, "sample_entities (up to 4):");
+        for (id, entity) in sample_entities {
+            let (x, y, z) = entity.location;
+            let _ = writeln!(
+                out,
+                "  id={} kind={:?} at ({x},{y},{z})",
+                id.0, entity.kind
+            );
+        }
+    }
     let _ = writeln!(out, "decks: {}", layouts.decks.len());
     for (i, deck) in layouts.decks.iter().enumerate() {
         let _ = writeln!(out, "deck[{i}] rooms: {}", deck.rooms.rooms.len());
@@ -409,13 +549,13 @@ pub fn analyze_cell_box(box_: &CellBox, out: &mut String) {
     for (idx, cell) in sample {
         let _ = writeln!(
             out,
-            "  ({},{},{}) floor={} room={} agents={} walls=[{},{},{},{}]",
+            "  ({},{},{}) floor={} room={} fixtures={} walls=[{},{},{},{}]",
             idx.x,
             idx.y,
             idx.z,
             cell.floor.label(),
             cell.room.0,
-            cell.contents.agents().len(),
+            cell.fixtures.len(),
             cell.wall1.label(),
             cell.wall2.label(),
             cell.wall3.label(),
@@ -591,6 +731,96 @@ mod tests {
             restored.cells.iter_occupied().count(),
             layouts.cells.iter_occupied().count()
         );
+        assert_eq!(restored.entities.len(), layouts.entities.len());
+    }
+
+    #[test]
+    fn roundtrip_fixtures_and_entities() {
+        use crate::cell::{Bed, Entity, EntityId, EntityKind, Fixture, Shower, Toilet};
+
+        let mut layouts = deck_cell_layouts(CELL_SIZE_M);
+        let Some((index, cell)) = layouts.cells.iter_occupied_mut().next() else {
+            panic!("procedural layout has no cells");
+        };
+        cell.fixtures = vec![
+            Fixture::Bed(Bed),
+            Fixture::Shower(Shower),
+            Fixture::Toilet(Toilet),
+        ];
+        let location = index.to_location();
+        layouts.entities.insert(
+            EntityId(42),
+            Entity {
+                kind: EntityKind::SimHuman,
+                location,
+            },
+        );
+
+        let bytes = encode_save(&layouts).expect("encode");
+        let file: SavedShipFile =
+            bincode::deserialize(&zstd::decode_all(&bytes[MAGIC.len()..]).unwrap()).unwrap();
+        assert_eq!(file.version, SAVE_VERSION);
+
+        let restored = decode_save(&bytes).expect("decode");
+        let restored_cell = layouts
+            .cells
+            .get(index)
+            .expect("cell still occupied");
+        assert_eq!(restored.cells.get(index).unwrap().fixtures, restored_cell.fixtures);
+        assert_eq!(restored.entities.len(), 1);
+        assert_eq!(
+            restored.entities.get(&EntityId(42)).map(|e| e.location),
+            Some(location)
+        );
+    }
+
+    #[test]
+    fn migrate_v1_agents_to_entities() {
+        use crate::cell::EntityId;
+
+        let layouts = deck_cell_layouts(CELL_SIZE_M);
+        let Some((index, _)) = layouts.cells.iter_occupied().next() else {
+            panic!("procedural layout has no cells");
+        };
+        let location = index.to_location();
+
+        let v1 = SavedShipFile {
+            version: SAVE_VERSION_V1,
+            layouts: SavedDeckLayouts {
+                occupied: vec![SavedOccupiedCell {
+                    x: index.x,
+                    y: index.y,
+                    z: index.z,
+                    cell: SavedCell {
+                        wall1: Material::DeckBase as u8,
+                        wall2: Material::Open as u8,
+                        wall3: Material::Open as u8,
+                        wall4: Material::Open as u8,
+                        floor: Material::DeckBase as u8,
+                        room: 0,
+                        fixtures: Vec::new(),
+                        agents: vec![7, 9],
+                    },
+                }],
+                decks: (0..NUM_DECKS)
+                    .map(|_| SavedDeckMeta { rooms: Vec::new() })
+                    .collect(),
+                entities: Vec::new(),
+            },
+        };
+
+        let restored: DeckLayouts = v1.try_into().expect("migrate v1");
+        assert_eq!(restored.entities.len(), 2);
+        assert_eq!(
+            restored.entities.get(&EntityId(7)).map(|e| e.location),
+            Some(location)
+        );
+        assert_eq!(
+            restored.entities.get(&EntityId(9)).map(|e| e.location),
+            Some(location)
+        );
+        let cell = restored.cells.get(index).expect("cell");
+        assert!(cell.fixtures.is_empty());
     }
 
     /// `make write-ship-default` — writes procedural layout for agent fixtures.

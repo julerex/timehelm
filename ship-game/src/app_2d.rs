@@ -6,7 +6,7 @@
 
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use crate::cell::{AgentId, CELL_NEIGHBOUR_OFFSETS};
+use crate::cell::{EntityId, EntityKind, CELL_NEIGHBOUR_OFFSETS};
 use crate::cell_box::{deck_walk_grid, step_allowed, CellIndex, PlanKey};
 use crate::deck_layout::{DeckCells, DeckLayouts, CELL_SIZE_M, NUM_DECKS};
 use crate::edit_mode_2d::{spawn_edit_mode_panel, PlanEditPlugin};
@@ -123,11 +123,11 @@ impl SimRng {
 }
 
 #[derive(Resource)]
-struct NextAgentId(u64);
+struct NextEntityId(u64);
 
 #[derive(Component)]
 struct SimHuman {
-    agent_id: AgentId,
+    entity_id: EntityId,
     deck_idx: usize,
     last_cell: Option<PlanKey>,
     steps_per_second: f32,
@@ -195,28 +195,20 @@ fn deck_walk_grids(layouts: &DeckLayouts) -> DeckWalkGrids {
     )
 }
 
-fn register_agent_on_cell(
-    layouts: &mut DeckLayouts,
-    deck_idx: usize,
-    plan: PlanKey,
-    agent: AgentId,
-) {
-    let index = CellIndex::with_plan(deck_idx as u8, plan).expect("plan in box");
-    if let Some(cell) = layouts.cell_mut(index) {
-        cell.contents.insert(agent);
-    }
+fn plan_location(deck_idx: usize, plan: PlanKey) -> crate::cell::Location {
+    CellIndex::with_plan(deck_idx as u8, plan)
+        .expect("plan in box")
+        .to_location()
 }
 
-fn unregister_agent_from_cell(
+fn set_entity_at_plan(
     layouts: &mut DeckLayouts,
     deck_idx: usize,
     plan: PlanKey,
-    agent: AgentId,
+    entity_id: EntityId,
 ) {
-    let index = CellIndex::with_plan(deck_idx as u8, plan).expect("plan in box");
-    if let Some(cell) = layouts.cell_mut(index) {
-        cell.contents.remove(agent);
-    }
+    let location = plan_location(deck_idx, plan);
+    let _ = layouts.set_entity_location(entity_id, location);
 }
 
 /// Chooses among neighbours (8-way with corner cutting) that strictly reduce distance-to-target.
@@ -289,7 +281,7 @@ pub fn run_app_2d() {
         .insert_resource(empty_deck_layouts())
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
         .insert_resource(SimRng::default())
-        .insert_resource(NextAgentId(1))
+        .insert_resource(NextEntityId(1))
         .insert_resource(Plan2dWorldSpawned(false))
         .insert_resource(PlanViewZoom::default())
         .insert_resource(StatusToast::default())
@@ -336,7 +328,7 @@ fn spawn_plan_deck_entities(
     assets: &Plan2dVisualAssets,
     current_deck: usize,
     rng: &mut SimRng,
-    next_agent: &mut NextAgentId,
+    next_entity: &mut NextEntityId,
 ) -> ([Entity; NUM_DECKS], DeckPlanMeshes) {
     let walk_grids = deck_walk_grids(layouts);
     let per_deck = humans_per_deck(&walk_grids, layouts, rng);
@@ -373,11 +365,16 @@ fn spawn_plan_deck_entities(
                 ));
                 let deck_placements = &per_deck[deck_i];
                 for &(pos_xy, tgt_xy) in deck_placements {
-                    let agent_id = AgentId(next_agent.0);
-                    next_agent.0 += 1;
+                    let entity_id = EntityId(next_entity.0);
+                    next_entity.0 += 1;
                     let cell =
                         DeckCells::cell_coords_deck(pos_xy, deck_i as u8).expect("walk cell");
-                    register_agent_on_cell(layouts, deck_i, cell, agent_id);
+                    let location = plan_location(deck_i, cell);
+                    let _ = layouts.insert_entity(
+                        entity_id,
+                        EntityKind::SimHuman,
+                        location,
+                    );
                     let stagger =
                         (rng.next_u32() as f32 / u32::MAX as f32).clamp(0.0, 1.0) * step_period;
                     plan.spawn((
@@ -386,7 +383,7 @@ fn spawn_plan_deck_entities(
                         Transform::from_xyz(pos_xy.x, pos_xy.y, Z_HUMAN),
                         plan_world_render_layers(),
                         SimHuman {
-                            agent_id,
+                            entity_id,
                             deck_idx: deck_i,
                             last_cell: Some(cell),
                             steps_per_second: SIM_HUMAN_STEPS_PER_S,
@@ -418,16 +415,14 @@ fn reload_plan_decks_after_load(
     mut deck_entities: ResMut<DeckContentEntities>,
     mut walk_grids: ResMut<DeckWalkGrids>,
     mut rng: ResMut<SimRng>,
-    mut next_agent: ResMut<NextAgentId>,
+    mut next_entity: ResMut<NextEntityId>,
 ) {
     for _ in events.read() {
         for &entity in &deck_entities.0 {
             commands.entity(entity).despawn();
         }
-        for (_, cell) in layouts.cells.iter_occupied_mut() {
-            cell.contents = crate::cell::Bag::default();
-        }
-        next_agent.0 = 1;
+        layouts.entities.clear();
+        next_entity.0 = 1;
         let (new_entities, new_meshes) = spawn_plan_deck_entities(
             &mut commands,
             &mut meshes,
@@ -435,7 +430,7 @@ fn reload_plan_decks_after_load(
             &assets,
             current_deck.0,
             &mut rng,
-            &mut next_agent,
+            &mut next_entity,
         );
         *walk_grids = deck_walk_grids(&layouts);
         *deck_entities = DeckContentEntities(new_entities);
@@ -561,7 +556,7 @@ fn enter_plan_world_2d(
     mut meshes: ResMut<Assets<Mesh>>,
     assets: Res<Plan2dVisualAssets>,
     mut rng: ResMut<SimRng>,
-    mut next_agent: ResMut<NextAgentId>,
+    mut next_entity: ResMut<NextEntityId>,
     current_deck: Res<CurrentDeck>,
     mut spawned: ResMut<Plan2dWorldSpawned>,
 ) {
@@ -575,7 +570,7 @@ fn enter_plan_world_2d(
         &assets,
         current_deck.0,
         &mut rng,
-        &mut next_agent,
+        &mut next_entity,
     );
     commands.insert_resource(deck_walk_grids(&layouts));
     commands.insert_resource(DeckContentEntities(deck_entities));
@@ -724,13 +719,10 @@ fn human_wander_2d(
             let Some(p) = random_walk_point(grid, &mut rng) else {
                 continue;
             };
-            if let Some(prev) = human.last_cell {
-                unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
-            }
             let cell = CellIndex::from_world_xy_deck(p, deck_idx as u8)
                 .expect("walk cell")
                 .plan();
-            register_agent_on_cell(&mut layouts, deck_idx, cell, human.agent_id);
+            set_entity_at_plan(&mut layouts, deck_idx, cell, human.entity_id);
             human.last_cell = Some(cell);
             tf.translation.x = p.x;
             tf.translation.y = p.y;
@@ -743,13 +735,10 @@ fn human_wander_2d(
             let Some(p) = random_walk_point(grid, &mut rng) else {
                 continue;
             };
-            if let Some(prev) = human.last_cell {
-                unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
-            }
             let cell = CellIndex::from_world_xy_deck(p, deck_idx as u8)
                 .expect("walk cell")
                 .plan();
-            register_agent_on_cell(&mut layouts, deck_idx, cell, human.agent_id);
+            set_entity_at_plan(&mut layouts, deck_idx, cell, human.entity_id);
             human.last_cell = Some(cell);
             tf.translation.x = p.x;
             tf.translation.y = p.y;
@@ -762,10 +751,7 @@ fn human_wander_2d(
         tf.translation.y = pos_snapped.y;
 
         if human.last_cell != Some(plan) {
-            if let Some(prev) = human.last_cell {
-                unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
-            }
-            register_agent_on_cell(&mut layouts, deck_idx, plan, human.agent_id);
+            set_entity_at_plan(&mut layouts, deck_idx, plan, human.entity_id);
             human.last_cell = Some(plan);
         }
 
@@ -785,10 +771,7 @@ fn human_wander_2d(
                 .expect("walk cell")
                 .plan();
             if human.last_cell != Some(next_cell) {
-                if let Some(prev) = human.last_cell {
-                    unregister_agent_from_cell(&mut layouts, deck_idx, prev, human.agent_id);
-                }
-                register_agent_on_cell(&mut layouts, deck_idx, next_cell, human.agent_id);
+                set_entity_at_plan(&mut layouts, deck_idx, next_cell, human.entity_id);
                 human.last_cell = Some(next_cell);
             }
             tf.translation.x = next_pos.x;

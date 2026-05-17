@@ -7,7 +7,7 @@
 //!
 //! [`CellIndex::PORT_STERN`] is `(0, 0, 0)` on the lowest deck.
 
-use crate::cell::{cardinal_step_allowed, Cell};
+use crate::cell::{cardinal_step_allowed, Cell, Location};
 use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
 
 /// Legacy layout used 1 m cells in centred world coordinates before [`CellBox`].
@@ -124,6 +124,16 @@ impl CellIndex {
     pub fn neighbor(self, wall_idx: usize) -> Option<Self> {
         let (dx, dy) = WALL_DELTAS[wall_idx];
         self.offset(dx, dy, 0)
+    }
+
+    #[must_use]
+    pub fn to_location(self) -> Location {
+        (self.x, self.y, self.z)
+    }
+
+    #[must_use]
+    pub fn from_location(loc: Location) -> Option<Self> {
+        Self::new(loc.0, loc.1, loc.2)
     }
 }
 

@@ -1,4 +1,4 @@
-//! Sea-cell grid types: materials, rooms, bags, and per-cell geometry.
+//! Sea-cell grid types: materials, rooms, fixtures, entities, and per-cell geometry.
 
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -221,35 +221,95 @@ impl RoomCatalog {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub struct AgentId(pub u64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bed;
 
-#[derive(Clone, Default, Debug)]
-pub struct Bag {
-    agents: Vec<AgentId>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shower;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Toilet;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fixture {
+    Bed(Bed),
+    Shower(Shower),
+    Toilet(Toilet),
 }
 
-impl Bag {
-    pub fn insert(&mut self, agent: AgentId) {
-        if !self.agents.contains(&agent) {
-            self.agents.push(agent);
+impl Fixture {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bed(_) => "Bed",
+            Self::Shower(_) => "Shower",
+            Self::Toilet(_) => "Toilet",
         }
     }
 
-    pub fn remove(&mut self, agent: AgentId) {
-        self.agents.retain(|&a| a != agent);
+    pub const TAG_BED: u8 = 0;
+    pub const TAG_SHOWER: u8 = 1;
+    pub const TAG_TOILET: u8 = 2;
+
+    pub fn to_tag(self) -> u8 {
+        match self {
+            Self::Bed(_) => Self::TAG_BED,
+            Self::Shower(_) => Self::TAG_SHOWER,
+            Self::Toilet(_) => Self::TAG_TOILET,
+        }
     }
 
-    pub fn contains(&self, agent: AgentId) -> bool {
-        self.agents.contains(&agent)
-    }
-
-    pub fn agents(&self) -> &[AgentId] {
-        &self.agents
+    pub fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            Self::TAG_BED => Some(Self::Bed(Bed)),
+            Self::TAG_SHOWER => Some(Self::Shower(Shower)),
+            Self::TAG_TOILET => Some(Self::Toilet(Toilet)),
+            _ => None,
+        }
     }
 }
 
-/// One 1 m sea cell: four edge walls, floor, room membership, and agents on the cell.
+/// CellBox grid indices `(x, y, z)`.
+pub type Location = (u16, u16, u8);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct EntityId(pub u64);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EntityKind {
+    SimHuman,
+}
+
+impl EntityKind {
+    pub const TAG_SIM_HUMAN: u8 = 0;
+
+    pub fn to_tag(self) -> u8 {
+        match self {
+            Self::SimHuman => Self::TAG_SIM_HUMAN,
+        }
+    }
+
+    pub fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            Self::TAG_SIM_HUMAN => Some(Self::SimHuman),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Entity {
+    pub kind: EntityKind,
+    pub location: Location,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntityError {
+    DuplicateId,
+    UnknownId,
+    InvalidLocation,
+}
+
+/// One 1 m sea cell: four edge walls, floor, room membership, and built-in fixtures.
 #[derive(Clone, Debug)]
 pub struct Cell {
     pub wall1: Material,
@@ -258,7 +318,7 @@ pub struct Cell {
     pub wall4: Material,
     pub floor: Material,
     pub room: RoomId,
-    pub contents: Bag,
+    pub fixtures: Vec<Fixture>,
 }
 
 impl Cell {
@@ -270,7 +330,7 @@ impl Cell {
             wall4: Material::Open,
             floor,
             room,
-            contents: Bag::default(),
+            fixtures: Vec::new(),
         }
     }
 }
@@ -463,12 +523,24 @@ mod tests {
     }
 
     #[test]
-    fn bag_tracks_agents() {
-        let mut bag = Bag::default();
-        let a = AgentId(7);
-        bag.insert(a);
-        assert!(bag.contains(a));
-        bag.remove(a);
-        assert!(!bag.contains(a));
+    fn cell_stores_fixtures() {
+        let mut cell = open_cell();
+        cell.fixtures.push(Fixture::Bed(Bed));
+        cell.fixtures.push(Fixture::Toilet(Toilet));
+        assert_eq!(cell.fixtures.len(), 2);
+        assert_eq!(cell.fixtures[0].label(), "Bed");
+    }
+
+    #[test]
+    fn fixture_tag_round_trip() {
+        for fixture in [
+            Fixture::Bed(Bed),
+            Fixture::Shower(Shower),
+            Fixture::Toilet(Toilet),
+        ] {
+            let tag = fixture.to_tag();
+            assert_eq!(Fixture::from_tag(tag), Some(fixture));
+        }
+        assert_eq!(Fixture::from_tag(99), None);
     }
 }

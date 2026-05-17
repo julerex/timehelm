@@ -6,7 +6,7 @@ use crate::app_2d::{
     plan_world_render_layers, CurrentDeck, DeckContentEntities, DeckWalkGrids, GamePlanCamera2d,
     ShipPlan2dRotateRoot,
 };
-use crate::cell::{Material, RoomId};
+use crate::cell::{Fixture, Material, RoomId};
 use crate::cell_box;
 use crate::cell_box::{CellIndex, PlanKey};
 use crate::deck_layout::DeckLayouts;
@@ -86,7 +86,7 @@ impl CellMaterialField {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct CellSnapshot {
     wall1: Material,
     wall2: Material,
@@ -94,6 +94,7 @@ struct CellSnapshot {
     wall4: Material,
     floor: Material,
     room: RoomId,
+    fixtures: Vec<Fixture>,
 }
 
 impl CellSnapshot {
@@ -105,17 +106,44 @@ impl CellSnapshot {
             wall4: cell.wall4,
             floor: cell.floor,
             room: cell.room,
+            fixtures: cell.fixtures.clone(),
         }
     }
 
-    fn apply(self, cell: &mut crate::cell::Cell) {
+    fn apply(&self, cell: &mut crate::cell::Cell) {
         cell.wall1 = self.wall1;
         cell.wall2 = self.wall2;
         cell.wall3 = self.wall3;
         cell.wall4 = self.wall4;
         cell.floor = self.floor;
         cell.room = self.room;
+        cell.fixtures = self.fixtures.clone();
     }
+}
+
+fn format_fixtures_summary(fixtures: &[Fixture]) -> String {
+    if fixtures.is_empty() {
+        return "none".to_string();
+    }
+    let mut counts = [0u32; 3];
+    for fixture in fixtures {
+        match fixture {
+            Fixture::Bed(_) => counts[0] += 1,
+            Fixture::Shower(_) => counts[1] += 1,
+            Fixture::Toilet(_) => counts[2] += 1,
+        }
+    }
+    let mut parts = Vec::new();
+    if counts[0] > 0 {
+        parts.push(format!("Bed×{}", counts[0]));
+    }
+    if counts[1] > 0 {
+        parts.push(format!("Shower×{}", counts[1]));
+    }
+    if counts[2] > 0 {
+        parts.push(format!("Toilet×{}", counts[2]));
+    }
+    parts.join(", ")
 }
 
 #[derive(Resource, Default)]
@@ -682,7 +710,7 @@ fn clipboard_hotkeys(
         };
         let anchor = anchor_idx.plan();
         let mut changed = false;
-        for &(dx, dy, snapshot) in &clipboard.entries {
+        for &(dx, dy, ref snapshot) in &clipboard.entries {
             let tx = i32::from(anchor.0) + dx;
             let ty = i32::from(anchor.1) + dy;
             if tx < 0 || ty < 0 {
@@ -829,14 +857,17 @@ fn cell_summary_text(
         .get(cell.room)
         .map(|room| format!("{} ({})", room.name, room.category.label()))
         .unwrap_or_else(|| format!("id {}", cell.room.0));
+    let fixtures_line = format_fixtures_summary(&cell.fixtures);
+    let entity_count = layouts
+        .entities_at((plan.0, plan.1, deck_index as u8))
+        .count();
     format!(
-        "Selected: cell ({}, {}) · deck {}\nCentre ({:.1}, {:.1}) m\nRoom: {room_line}\nAgents on cell: {}",
+        "Selected: cell ({}, {}) · deck {}\nCentre ({:.1}, {:.1}) m\nRoom: {room_line}\nFixtures: {fixtures_line}\nEntities here: {entity_count}",
         plan.0,
         plan.1,
         deck_index + 1,
         centre.x,
         centre.y,
-        cell.contents.agents().len()
     )
 }
 

@@ -1,6 +1,9 @@
 //! Procedural deck grid and cell zoning shared by 3D and 2D ship views (+Y bow).
 
-use crate::cell::{Cell, Material, RoomCatalog, RoomCategory, RoomId};
+use crate::cell::{
+    Cell, Entity, EntityError, EntityId, EntityKind, Location, Material, RoomCatalog, RoomCategory,
+    RoomId,
+};
 use crate::cell_box::{self, BEAM, LENGTH};
 use crate::cell_box::{CellBox, CellIndex, PlanKey};
 use crate::ship_hull::{
@@ -23,6 +26,7 @@ pub const CELL_VISUAL_SCALE: f32 = 1.0;
 pub struct DeckLayouts {
     pub cells: CellBox,
     pub decks: Vec<DeckMeta>,
+    pub entities: HashMap<EntityId, Entity>,
 }
 
 #[derive(Clone)]
@@ -50,6 +54,48 @@ impl DeckLayouts {
 
     pub fn cell_mut(&mut self, index: CellIndex) -> Option<&mut Cell> {
         self.cells.get_mut(index)
+    }
+
+    pub fn insert_entity(
+        &mut self,
+        id: EntityId,
+        kind: EntityKind,
+        location: Location,
+    ) -> Result<(), EntityError> {
+        if self.entities.contains_key(&id) {
+            return Err(EntityError::DuplicateId);
+        }
+        let index =
+            CellIndex::from_location(location).ok_or(EntityError::InvalidLocation)?;
+        if !self.cells.contains(index) {
+            return Err(EntityError::InvalidLocation);
+        }
+        self.entities.insert(id, Entity { kind, location });
+        Ok(())
+    }
+
+    pub fn remove_entity(&mut self, id: EntityId) -> Option<Entity> {
+        self.entities.remove(&id)
+    }
+
+    pub fn set_entity_location(
+        &mut self,
+        id: EntityId,
+        location: Location,
+    ) -> Result<(), EntityError> {
+        let index = CellIndex::from_location(location).ok_or(EntityError::InvalidLocation)?;
+        if !self.cells.contains(index) {
+            return Err(EntityError::InvalidLocation);
+        }
+        let entity = self.entities.get_mut(&id).ok_or(EntityError::UnknownId)?;
+        entity.location = location;
+        Ok(())
+    }
+
+    pub fn entities_at(&self, location: Location) -> impl Iterator<Item = &Entity> {
+        self.entities
+            .values()
+            .filter(move |e| e.location == location)
     }
 }
 
@@ -1228,6 +1274,7 @@ pub fn deck_cell_layouts(_step_m: f32) -> DeckLayouts {
     DeckLayouts {
         cells: cell_box,
         decks,
+        entities: HashMap::new(),
     }
 }
 
