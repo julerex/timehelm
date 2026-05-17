@@ -1,11 +1,11 @@
 //! Fixed 360×60×20 cell volume for the ship.
 //!
 //! Grid axes (indices are inclusive from 0):
-//! - **X** (0..360): stern → bow; port-stern corner has the lowest X.
-//! - **Y** (0..60): port → starboard; port-stern corner has the lowest Y.
+//! - **X** (0..360): aft → fore; world X matches.
+//! - **Y** (0..60): starboard → port; world Y matches.
 //! - **Z** (0..20): deck number increases upward.
 //!
-//! [`CellIndex::PORT_STERN`] is `(0, 0, 0)` on the lowest deck.
+//! [`CellIndex::AFT_STARBOARD`] is `(0, 0, 0)` on the lowest deck (aft-starboard corner cell).
 
 use crate::cell::{cardinal_step_allowed, Cell, Location};
 use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
@@ -17,13 +17,13 @@ use std::collections::HashMap;
 /// Plan-view cell key `(x along ship, y across beam)` without deck.
 pub type PlanKey = (u16, u16);
 
-/// Cardinal neighbor offset for each wall (`wall1`..`wall4`) in grid space:
-/// +X stern→bow, +Y port→starboard.
+/// Cardinal neighbor offset for each side (`side1`..`side4`) in grid space:
+/// +X aft→fore, +Y starboard→port.
 pub const WALL_DELTAS: [(i32, i32); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
 
-/// Cells along the ship length (stern → bow).
+/// Cells along the ship length (aft → fore).
 pub const LENGTH: usize = 360;
-/// Cells across the beam (port → starboard).
+/// Cells across the beam (starboard → port).
 pub const BEAM: usize = 60;
 /// Simulated deck count (bottom → top).
 pub const DECKS: usize = 20;
@@ -33,17 +33,17 @@ const VOLUME: usize = LENGTH * BEAM * DECKS;
 /// Grid cell address in [`CellBox`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct CellIndex {
-    /// Stern (0) → bow (`LENGTH - 1`).
+    /// Aft (0) → fore (`LENGTH - 1`).
     pub x: u16,
-    /// Port (0) → starboard (`BEAM - 1`).
+    /// Starboard (0) → port (`BEAM - 1`).
     pub y: u16,
     /// Lowest deck (0) → top (`DECKS - 1`).
     pub z: u8,
 }
 
 impl CellIndex {
-    /// Port-stern corner on the lowest deck.
-    pub const PORT_STERN: Self = Self { x: 0, y: 0, z: 0 };
+    /// Aft-starboard corner on the lowest deck.
+    pub const AFT_STARBOARD: Self = Self { x: 0, y: 0, z: 0 };
 
     /// Returns `None` when any component is out of range.
     #[must_use]
@@ -75,18 +75,18 @@ impl CellIndex {
         Some(Self { x, y, z })
     }
 
-    /// World metres: **X** = port→starboard, **Y** = stern→bow (Bevy plan / hull space).
+    /// World metres: **X** = aft→fore, **Y** = starboard→port (corner origin at aft-starboard).
     #[must_use]
     pub fn from_world_xy_deck(world: bevy::prelude::Vec2, deck: u8) -> Option<Self> {
-        let x = world_to_grid_x(world.y);
-        let y = world_to_grid_y(world.x);
+        let x = world_to_grid_x(world.x);
+        let y = world_to_grid_y(world.y);
         Self::new(x, y, deck)
     }
 
-    /// Centre of this cell in world plan metres (hull space).
+    /// Centre of this cell in world plan metres.
     #[must_use]
     pub fn to_world_xy(self) -> bevy::prelude::Vec2 {
-        bevy::prelude::Vec2::new(grid_y_to_world_x(self.y), grid_x_to_world_y(self.x))
+        bevy::prelude::Vec2::new(grid_x_to_world(self.x), grid_y_to_world(self.y))
     }
 
     #[must_use]
@@ -266,49 +266,47 @@ pub fn deck_walk_grid(box_: &CellBox, deck: u8) -> HashMap<PlanKey, bevy::prelud
         .collect()
 }
 
-/// Metres per cell along the hull length axis (grid X).
+/// Metres per cell along the hull length axis (grid X / world X).
 #[must_use]
 pub fn length_cell_m() -> f32 {
     SHIP_LENGTH_M / LENGTH as f32
 }
 
-/// Metres per cell across the beam (grid Y).
+/// Metres per cell across the beam (grid Y / world Y).
 #[must_use]
 pub fn beam_cell_m() -> f32 {
     SHIP_BEAM_M / BEAM as f32
 }
 
 #[must_use]
-fn grid_x_to_world_y(x: u16) -> f32 {
-    -SHIP_LENGTH_M * 0.5 + (x as f32 + 0.5) * length_cell_m()
+fn grid_x_to_world(x: u16) -> f32 {
+    (x as f32 + 0.5) * length_cell_m()
 }
 
 #[must_use]
-fn grid_y_to_world_x(y: u16) -> f32 {
-    -SHIP_BEAM_M * 0.5 + (y as f32 + 0.5) * beam_cell_m()
+fn grid_y_to_world(y: u16) -> f32 {
+    (y as f32 + 0.5) * beam_cell_m()
 }
 
 #[must_use]
-fn world_to_grid_x(world_y: f32) -> u16 {
-    let t = (world_y + SHIP_LENGTH_M * 0.5) / length_cell_m();
+fn world_to_grid_x(world_x: f32) -> u16 {
+    let t = world_x / length_cell_m();
     (t.floor() as i32).clamp(0, LENGTH as i32 - 1) as u16
 }
 
 #[must_use]
-fn world_to_grid_y(world_x: f32) -> u16 {
-    let t = (world_x + SHIP_BEAM_M * 0.5) / beam_cell_m();
+fn world_to_grid_y(world_y: f32) -> u16 {
+    let t = world_y / beam_cell_m();
     (t.floor() as i32).clamp(0, BEAM as i32 - 1) as u16
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::{Material, RoomId};
-    use bevy::prelude::Vec2;
-
+    use crate::cell::FloorMaterial;
     #[test]
-    fn port_stern_is_origin() {
-        assert_eq!(CellIndex::PORT_STERN, CellIndex { x: 0, y: 0, z: 0 });
+    fn aft_starboard_is_grid_origin() {
+        assert_eq!(CellIndex::AFT_STARBOARD, CellIndex { x: 0, y: 0, z: 0 });
     }
 
     #[test]
@@ -318,10 +316,11 @@ mod tests {
     }
 
     #[test]
-    fn world_maps_port_stern_to_grid_origin() {
-        let world = Vec2::new(-SHIP_BEAM_M * 0.5, -SHIP_LENGTH_M * 0.5);
+    fn aft_starboard_cell_centre_is_positive() {
+        let world = CellIndex::AFT_STARBOARD.to_world_xy();
+        assert!(world.x > 0.0 && world.y > 0.0);
         let idx = CellIndex::from_world_xy_deck(world, 0).unwrap();
-        assert_eq!(idx, CellIndex::PORT_STERN);
+        assert_eq!(idx, CellIndex::AFT_STARBOARD);
     }
 
     #[test]
@@ -329,16 +328,16 @@ mod tests {
         let a = CellIndex::new(10, 30, 0).unwrap();
         let b = CellIndex::new(11, 30, 0).unwrap();
         let half = length_cell_m() * 0.5;
-        let gap = (b.to_world_xy().y - half) - (a.to_world_xy().y + half);
-        assert!(gap.abs() < 1e-5, "gap along stern→bow: {gap}");
+        let gap = (b.to_world_xy().x - half) - (a.to_world_xy().x + half);
+        assert!(gap.abs() < 1e-5, "gap along aft→fore: {gap}");
     }
 
     #[test]
     fn legacy_one_metre_lattice_skips_length_indices() {
         let mut prev: Option<u16> = None;
         let mut skips = 0u32;
-        for iy in -170..170 {
-            let Some(idx) = CellIndex::from_legacy_xy_deck(0, iy, 0) else {
+        for ix in -170..170 {
+            let Some(idx) = CellIndex::from_legacy_xy_deck(ix, 0, 0) else {
                 continue;
             };
             if let Some(p) = prev {
@@ -355,9 +354,9 @@ mod tests {
     fn insert_and_get() {
         let mut box_ = CellBox::new();
         let idx = CellIndex::new(10, 20, 3).unwrap();
-        let cell = Cell::new(Material::DeckBase, RoomId(0));
+        let cell = Cell::new(FloorMaterial::Carpet);
         box_.insert(idx, cell);
         assert!(box_.contains(idx));
-        assert_eq!(box_.get(idx).unwrap().floor, Material::DeckBase);
+        assert_eq!(box_.get(idx).unwrap().floor, FloorMaterial::Carpet);
     }
 }

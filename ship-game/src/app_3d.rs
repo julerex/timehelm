@@ -2,8 +2,8 @@
 //!
 //! **World space uses SI metres:** one unit of `Vec3`, mesh positions, and camera distance is **1 m**.
 //!
-//! Deck footprint uses [`crate::ship_hull::SHIP_BEAM_M`] × [`crate::ship_hull::SHIP_LENGTH_M`] at full scale.
-//! Tiles are axis-aligned on **XY** (**+Y** bow, **±X** port/starboard); [`crate::deck_layout::deck_sim_footprint_polygon`]
+//! Deck footprint uses [`crate::ship_hull::SHIP_LENGTH_M`] × [`crate::ship_hull::SHIP_BEAM_M`] at full scale.
+//! Tiles are axis-aligned on **XY** (**+X** aft→fore, **+Y** starboard→port; origin aft-starboard); [`crate::deck_layout::deck_sim_footprint_polygon`]
 //! matches coarse LOD to the simulated silhouette per deck. Decks stack on **+Z**; the clip shader removes fragments above the cut height.
 //!
 //! **Deck rendering:** distance-based **LOD** swaps coarse extruded hull + procedural deck texture vs
@@ -12,7 +12,7 @@
 
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use crate::cell::Material as CellMaterial;
+use crate::cell::FloorMaterial;
 use crate::cell_box;
 use crate::deck_layout::{deck_sim_footprint_polygon, DeckLayouts, CELL_VISUAL_SCALE, NUM_DECKS};
 use crate::load_screen::{spawn_load_menu, GamePhase, LoadScreenPlugin};
@@ -254,7 +254,11 @@ pub fn run_app_3d() {
 
 impl Default for CameraRig {
     fn default() -> Self {
-        let target = Vec3::new(0.0, 0.0, focused_deck_target_z(SIM_DECK_INDEX));
+        let target = Vec3::new(
+            SHIP_LENGTH_M * 0.5,
+            SHIP_BEAM_M * 0.5,
+            focused_deck_target_z(SIM_DECK_INDEX),
+        );
         let dir0 = Vec3::new(0.82, -1.02, 0.68).normalize();
         let yaw = dir0.y.atan2(dir0.x);
         let pitch = dir0.z.clamp(-1.0, 1.0).asin();
@@ -332,34 +336,14 @@ fn camera_rig_transform(rig: &CameraRig) -> Transform {
 }
 
 /// Axis-aligned deck slab (XY footprint, +Z up), vertex colours for the clip shader.
-fn material_from_idx(i: usize) -> CellMaterial {
-    match i {
-        0 => CellMaterial::Open,
-        1 => CellMaterial::Hull,
-        2 => CellMaterial::Window,
-        3 => CellMaterial::CabinPartition,
-        4 => CellMaterial::Corridor,
-        5 => CellMaterial::PublicShell,
-        6 => CellMaterial::DeckBase,
-        7 => CellMaterial::Theatre,
-        8 => CellMaterial::Dining,
-        9 => CellMaterial::Buffet,
-        10 => CellMaterial::Pool,
-        11 => CellMaterial::Casino,
-        12 => CellMaterial::CabinStripeA,
-        13 => CellMaterial::CabinStripeB,
-        14 => CellMaterial::CorridorWhite,
-        15 => CellMaterial::BowAccent,
-        16 => CellMaterial::MarinePanel,
-        17 => CellMaterial::Door,
-        _ => CellMaterial::DeckBase,
-    }
+fn floor_from_idx(i: usize) -> FloorMaterial {
+    FloorMaterial::ALL[i % FloorMaterial::COUNT]
 }
 
 fn deck_cell_cuboid_mesh(thickness_m: f32, color: Color) -> Mesh {
     let half_beam = cell_box::beam_cell_m() * CELL_VISUAL_SCALE * 0.5;
     let half_length = cell_box::length_cell_m() * CELL_VISUAL_SCALE * 0.5;
-    let mut mesh = Mesh::from(Cuboid::new(half_beam * 2.0, half_length * 2.0, thickness_m));
+    let mut mesh = Mesh::from(Cuboid::new(half_length * 2.0, half_beam * 2.0, thickness_m));
     let n = mesh.count_vertices();
     let c: LinearRgba = color.into();
     let ca = c.to_f32_array();
@@ -373,10 +357,10 @@ fn spawn_deck_meshes(
     clip_handle: &Handle<ShipClipMaterial>,
     layouts: &DeckLayouts,
 ) {
-    let material_protos: [Mesh; CellMaterial::COUNT] = std::array::from_fn(|i| {
-        deck_cell_cuboid_mesh(DECK_SLAB_THICKNESS_M, material_from_idx(i).color())
+    let material_protos: [Mesh; FloorMaterial::COUNT] = std::array::from_fn(|i| {
+        deck_cell_cuboid_mesh(DECK_SLAB_THICKNESS_M, floor_from_idx(i).color())
     });
-    let material_mesh_handles: [Handle<Mesh>; CellMaterial::COUNT] =
+    let material_mesh_handles: [Handle<Mesh>; FloorMaterial::COUNT] =
         std::array::from_fn(|i| meshes.add(material_protos[i].clone()));
 
     let slab_local_z = DECK_SLAB_THICKNESS_M * 0.5;
@@ -389,8 +373,8 @@ fn spawn_deck_meshes(
         let coarse_mesh = crate::deck_geometry::extruded_polygon_deck_mesh(
             &hull_outline,
             DECK_SLAB_THICKNESS_M,
-            SHIP_BEAM_M,
             SHIP_LENGTH_M,
+            SHIP_BEAM_M,
         );
         let coarse_handle = meshes.add(coarse_mesh);
         commands.spawn((
@@ -402,12 +386,9 @@ fn spawn_deck_meshes(
             DeckLodCoarseTier(deck_i),
         ));
 
-        let mut buckets: [Vec<Vec3>; CellMaterial::COUNT] = std::array::from_fn(|_| Vec::new());
+        let mut buckets: [Vec<Vec3>; FloorMaterial::COUNT] = std::array::from_fn(|_| Vec::new());
 
         for (plan, cell) in layout.iter_cells() {
-            if cell.floor == CellMaterial::Open {
-                continue;
-            }
             let w = layout.index(plan).to_world_xy();
             let p = Vec3::new(w.x, w.y, slab_local_z);
             buckets[cell.floor.idx()].push(p);

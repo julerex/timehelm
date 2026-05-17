@@ -94,7 +94,7 @@ pub fn cursor_in_game_viewport(window: &Window, camera: &Camera) -> Option<Vec2>
     logical.contains(cursor).then_some(cursor)
 }
 
-/// Hover HUD line from a point in hull plan metres (port→starboard X, stern→bow Y).
+/// Hover HUD line from a point in hull plan metres (aft→fore X, starboard→port Y).
 pub fn format_cell_hover_line(hull_xy: Vec2, current_deck: usize, layouts: &DeckLayouts) -> String {
     let deck = current_deck as u8;
     let Some(idx) = CellIndex::from_world_xy_deck(hull_xy, deck) else {
@@ -112,13 +112,8 @@ pub fn format_cell_hover_line(hull_xy: Vec2, current_deck: usize, layouts: &Deck
             plan.0, plan.1, centre.x, centre.y, hull_xy.x, hull_xy.y
         );
     };
-    let room_line = deck_cells
-        .rooms
-        .get(cell.room)
-        .map(|room| format!(" · room \"{}\" ({})", room.name, room.category.label()))
-        .unwrap_or_default();
     format!(
-        "Hover: cell ({}, {}) · centre ({:.1}, {:.1}) m · cursor ({:.1}, {:.1}) m · floor {}{}",
+        "Hover: cell ({}, {}) · centre ({:.1}, {:.1}) m · cursor ({:.1}, {:.1}) m · floor {}",
         plan.0,
         plan.1,
         centre.x,
@@ -126,7 +121,6 @@ pub fn format_cell_hover_line(hull_xy: Vec2, current_deck: usize, layouts: &Deck
         hull_xy.x,
         hull_xy.y,
         cell.floor.label(),
-        room_line
     )
 }
 

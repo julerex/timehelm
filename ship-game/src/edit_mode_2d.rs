@@ -4,9 +4,8 @@
 
 use crate::app_2d::{
     plan_world_render_layers, CurrentDeck, DeckContentEntities, DeckWalkGrids, GamePlanCamera2d,
-    ShipPlan2dRotateRoot,
 };
-use crate::cell::{Fixture, Material, RoomId};
+use crate::cell::{Fixture, FloorMaterial, SideMaterial};
 use crate::cell_box;
 use crate::cell_box::{CellIndex, PlanKey};
 use crate::deck_layout::DeckLayouts;
@@ -40,83 +39,130 @@ pub struct PlanDeckMeshDirty(pub Option<usize>);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CellMaterialField {
     Floor,
-    Wall1,
-    Wall2,
-    Wall3,
-    Wall4,
+    Side1,
+    Side2,
+    Side3,
+    Side4,
 }
 
 impl CellMaterialField {
     const ALL: [Self; 5] = [
         Self::Floor,
-        Self::Wall1,
-        Self::Wall2,
-        Self::Wall3,
-        Self::Wall4,
+        Self::Side1,
+        Self::Side2,
+        Self::Side3,
+        Self::Side4,
     ];
+
+    fn is_floor(self) -> bool {
+        matches!(self, Self::Floor)
+    }
 
     fn label(self) -> &'static str {
         match self {
             Self::Floor => "Floor",
-            Self::Wall1 => "Wall 1 (+X / east)",
-            Self::Wall2 => "Wall 2 (+Y / north)",
-            Self::Wall3 => "Wall 3 (−X / west)",
-            Self::Wall4 => "Wall 4 (−Y / south)",
+            Self::Side1 => "Side 1 (+X / east)",
+            Self::Side2 => "Side 2 (+Y / north)",
+            Self::Side3 => "Side 3 (−X / west)",
+            Self::Side4 => "Side 4 (−Y / south)",
         }
     }
 
-    fn read(self, cell: &crate::cell::Cell) -> Material {
-        match self {
-            Self::Floor => cell.floor,
-            Self::Wall1 => cell.wall1,
-            Self::Wall2 => cell.wall2,
-            Self::Wall3 => cell.wall3,
-            Self::Wall4 => cell.wall4,
+    fn read_label(self, cell: &crate::cell::Cell) -> String {
+        if self.is_floor() {
+            cell.floor.label().to_string()
+        } else {
+            self.read_side(cell).label().to_string()
         }
     }
 
-    fn write(self, cell: &mut crate::cell::Cell, material: Material) {
+    fn read_side(self, cell: &crate::cell::Cell) -> SideMaterial {
         match self {
-            Self::Floor => cell.floor = material,
-            Self::Wall1 => cell.wall1 = material,
-            Self::Wall2 => cell.wall2 = material,
-            Self::Wall3 => cell.wall3 = material,
-            Self::Wall4 => cell.wall4 = material,
+            Self::Side1 => cell.side1,
+            Self::Side2 => cell.side2,
+            Self::Side3 => cell.side3,
+            Self::Side4 => cell.side4,
+            Self::Floor => SideMaterial::Open,
+        }
+    }
+
+    fn write_floor(self, cell: &mut crate::cell::Cell, floor: FloorMaterial) {
+        if self.is_floor() {
+            cell.floor = floor;
+        }
+    }
+
+    fn write_side(self, cell: &mut crate::cell::Cell, side: SideMaterial) {
+        match self {
+            Self::Side1 => cell.side1 = side,
+            Self::Side2 => cell.side2 = side,
+            Self::Side3 => cell.side3 = side,
+            Self::Side4 => cell.side4 = side,
+            Self::Floor => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PickerChoice {
+    Floor(FloorMaterial),
+    Side(SideMaterial),
+}
+
+impl PickerChoice {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Floor(m) => m.label(),
+            Self::Side(m) => m.label(),
+        }
+    }
+
+    fn bg_color(self) -> Color {
+        match self {
+            Self::Floor(m) => picker_bg_from_color(m.color()),
+            Self::Side(m) => picker_bg_from_color(match m {
+                SideMaterial::Open => Color::srgb(0.12, 0.14, 0.18),
+                SideMaterial::MarinePanel => Color::srgb(0.62, 0.52, 0.44),
+            }),
+        }
+    }
+
+    fn apply(self, field: CellMaterialField, cell: &mut crate::cell::Cell) {
+        match self {
+            Self::Floor(floor) => field.write_floor(cell, floor),
+            Self::Side(side) => field.write_side(cell, side),
         }
     }
 }
 
 #[derive(Clone)]
 struct CellSnapshot {
-    wall1: Material,
-    wall2: Material,
-    wall3: Material,
-    wall4: Material,
-    floor: Material,
-    room: RoomId,
+    side1: SideMaterial,
+    side2: SideMaterial,
+    side3: SideMaterial,
+    side4: SideMaterial,
+    floor: FloorMaterial,
     fixtures: Vec<Fixture>,
 }
 
 impl CellSnapshot {
     fn from_cell(cell: &crate::cell::Cell) -> Self {
         Self {
-            wall1: cell.wall1,
-            wall2: cell.wall2,
-            wall3: cell.wall3,
-            wall4: cell.wall4,
+            side1: cell.side1,
+            side2: cell.side2,
+            side3: cell.side3,
+            side4: cell.side4,
             floor: cell.floor,
-            room: cell.room,
             fixtures: cell.fixtures.clone(),
         }
     }
 
     fn apply(&self, cell: &mut crate::cell::Cell) {
-        cell.wall1 = self.wall1;
-        cell.wall2 = self.wall2;
-        cell.wall3 = self.wall3;
-        cell.wall4 = self.wall4;
+        cell.side1 = self.side1;
+        cell.side2 = self.side2;
+        cell.side3 = self.side3;
+        cell.side4 = self.side4;
         cell.floor = self.floor;
-        cell.room = self.room;
         cell.fixtures = self.fixtures.clone();
     }
 }
@@ -188,7 +234,7 @@ struct MaterialPickerPanel {
 #[derive(Component)]
 struct MaterialPickerOption {
     field: CellMaterialField,
-    material: Material,
+    choice: PickerChoice,
 }
 
 #[derive(Component)]
@@ -361,7 +407,18 @@ fn spawn_material_field_row(parent: &mut ChildSpawnerCommands, field: CellMateri
                 MaterialPickerPanel { field },
             ))
             .with_children(|picker| {
-                for material in Material::ALL {
+                let choices: Vec<PickerChoice> = if field.is_floor() {
+                    FloorMaterial::ALL
+                        .into_iter()
+                        .map(PickerChoice::Floor)
+                        .collect()
+                } else {
+                    SideMaterial::ALL
+                        .into_iter()
+                        .map(PickerChoice::Side)
+                        .collect()
+                };
+                for choice in choices {
                     picker
                         .spawn((
                             Button,
@@ -372,12 +429,12 @@ fn spawn_material_field_row(parent: &mut ChildSpawnerCommands, field: CellMateri
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(material_picker_bg(material)),
-                            MaterialPickerOption { field, material },
+                            BackgroundColor(choice.bg_color()),
+                            MaterialPickerOption { field, choice },
                         ))
                         .with_children(|opt| {
                             opt.spawn((
-                                Text::new(material.label()),
+                                Text::new(choice.label()),
                                 TextFont {
                                     font_size: 13.0,
                                     ..default()
@@ -390,8 +447,8 @@ fn spawn_material_field_row(parent: &mut ChildSpawnerCommands, field: CellMateri
         });
 }
 
-fn material_picker_bg(material: Material) -> Color {
-    let c: LinearRgba = material.color().into();
+fn picker_bg_from_color(color: Color) -> Color {
+    let c: LinearRgba = color.into();
     Color::linear_rgba(
         c.red * 0.35 + 0.08,
         c.green * 0.35 + 0.08,
@@ -417,21 +474,12 @@ fn pointer_over_edit_panel(window: &Window, edit_mode: &PlanEditMode) -> bool {
 fn hull_xy_under_cursor(
     window: &Window,
     cameras: &Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
-    rotate_roots: &Query<&GlobalTransform, With<ShipPlan2dRotateRoot>>,
 ) -> Option<Vec2> {
     let Ok((camera, cam_tf)) = cameras.single() else {
         return None;
     };
     let cursor = cursor_in_game_viewport(window, camera)?;
-    let world_xy = camera.viewport_to_world_2d(cam_tf, cursor).ok()?;
-    let plan_root_tf = rotate_roots.single().ok()?;
-    Some(
-        plan_root_tf
-            .affine()
-            .inverse()
-            .transform_point3(world_xy.extend(0.0))
-            .truncate(),
-    )
+    camera.viewport_to_world_2d(cam_tf, cursor).ok()
 }
 
 fn plan_rect_from_hull_corners(hull_a: Vec2, hull_b: Vec2, deck: u8) -> Option<(PlanKey, PlanKey)> {
@@ -502,7 +550,6 @@ fn handle_box_select_input(
     mut selected: ResMut<SelectedPlanCells>,
     mut picker: ResMut<OpenMaterialPicker>,
     cameras: Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
-    rotate_roots: Query<&GlobalTransform, With<ShipPlan2dRotateRoot>>,
     mut drag: ResMut<BoxSelectDrag>,
 ) {
     if !edit_mode.active {
@@ -525,7 +572,7 @@ fn handle_box_select_input(
     if mouse.just_pressed(MouseButton::Left) {
         let cursor = window.cursor_position().unwrap_or(Vec2::ZERO);
         drag.screen_start = Some(cursor);
-        drag.hull_start = hull_xy_under_cursor(&window, &cameras, &rotate_roots);
+        drag.hull_start = hull_xy_under_cursor(&window, &cameras);
         return;
     }
 
@@ -541,7 +588,7 @@ fn handle_box_select_input(
     let cursor = window.cursor_position().unwrap_or(screen_start);
     let moved = cursor.distance(screen_start);
 
-    let Some(hull_end) = hull_xy_under_cursor(&window, &cameras, &rotate_roots) else {
+    let Some(hull_end) = hull_xy_under_cursor(&window, &cameras) else {
         selected.0.clear();
         picker.0 = None;
         return;
@@ -580,7 +627,6 @@ fn update_box_select_rect_visual(
     window: Single<&Window>,
     assets: Option<Res<crate::app_2d::Plan2dVisualAssets>>,
     cameras: Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
-    rotate_roots: Query<&GlobalTransform, With<ShipPlan2dRotateRoot>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     drag: Res<BoxSelectDrag>,
@@ -617,7 +663,7 @@ fn update_box_select_rect_visual(
         return;
     }
 
-    let Some(hull_end) = hull_xy_under_cursor(&window, &cameras, &rotate_roots) else {
+    let Some(hull_end) = hull_xy_under_cursor(&window, &cameras) else {
         hide();
         return;
     };
@@ -647,7 +693,7 @@ fn update_box_select_rect_visual(
                 BoxSelectRect,
             ))
             .id();
-        commands.entity(assets.rotate_root).add_child(entity);
+        commands.entity(assets.plan_root).add_child(entity);
         *rect_entity = Some(entity);
     }
 
@@ -673,7 +719,6 @@ fn clipboard_hotkeys(
     mut dirty: ResMut<PlanDeckMeshDirty>,
     window: Single<&Window>,
     cameras: Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
-    rotate_roots: Query<&GlobalTransform, With<ShipPlan2dRotateRoot>>,
 ) {
     if !edit_mode.active || !ctrl_pressed(&keyboard) {
         return;
@@ -701,7 +746,7 @@ fn clipboard_hotkeys(
     }
 
     if keyboard.just_pressed(KeyCode::KeyV) && !clipboard.entries.is_empty() {
-        let Some(hull_xy) = hull_xy_under_cursor(&window, &cameras, &rotate_roots) else {
+        let Some(hull_xy) = hull_xy_under_cursor(&window, &cameras) else {
             return;
         };
         let deck_i = current_deck.0;
@@ -812,7 +857,7 @@ fn sync_edit_mode_panel(
     };
 
     for (label, mut text) in &mut dropdown_labels {
-        text.0 = label.field.read(cell).label().to_string();
+        text.0 = label.field.read_label(cell);
     }
 
     for (panel, mut node) in &mut picker_panels {
@@ -852,22 +897,18 @@ fn cell_summary_text(
         );
     };
     let centre = deck_cells.index(plan).to_world_xy();
-    let room_line = deck_cells
-        .rooms
-        .get(cell.room)
-        .map(|room| format!("{} ({})", room.name, room.category.label()))
-        .unwrap_or_else(|| format!("id {}", cell.room.0));
     let fixtures_line = format_fixtures_summary(&cell.fixtures);
     let entity_count = layouts
         .entities_at((plan.0, plan.1, deck_index as u8))
         .count();
     format!(
-        "Selected: cell ({}, {}) · deck {}\nCentre ({:.1}, {:.1}) m\nRoom: {room_line}\nFixtures: {fixtures_line}\nEntities here: {entity_count}",
+        "Selected: cell ({}, {}) · deck {}\nCentre ({:.1}, {:.1}) m\nFloor: {}\nFixtures: {fixtures_line}\nEntities here: {entity_count}",
         plan.0,
         plan.1,
         deck_index + 1,
         centre.x,
         centre.y,
+        cell.floor.label(),
     )
 }
 
@@ -927,7 +968,7 @@ fn handle_material_picker_options(
             let Some(cell) = layouts.cell_mut(index) else {
                 continue;
             };
-            option.field.write(cell, option.material);
+            option.choice.apply(option.field, cell);
             changed = true;
         }
         if changed {

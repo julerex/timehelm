@@ -6,15 +6,16 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 /// Caps + skirt walls for a simple XY polygon extruded along **local Z** (thickness centred on z = 0).
+/// `length_m` / `beam_m` scale UVs for polygon vertices (`x` along ship, `y` across beam).
 pub fn extruded_polygon_deck_mesh(
     poly: &[Vec2],
     thickness_m: f32,
-    beam_m: f32,
     length_m: f32,
+    beam_m: f32,
 ) -> Mesh {
     let n = poly.len();
     let half_z = thickness_m * 0.5;
-    let uv_xy = |x: f32, y: f32| [x / beam_m + 0.5, y / length_m + 0.5];
+    let uv_xy = |x: f32, y: f32| [x / length_m, y / beam_m];
 
     if n < 3 {
         return Mesh::new(

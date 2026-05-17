@@ -1,5 +1,4 @@
-//! Top-down 2D plan view of the ship (metres in XY; ship-space **+Y** = bow). The view rotates the hull
-//! so bow runs **left–right** on screen.
+//! Top-down 2D plan view (metres in XY; **+X** aft→fore, **+Y** starboard→port; origin aft-starboard).
 //!
 //! All 20 decks are baked to one vertex-coloured `Mesh2d` each at startup and share a single
 //! white `ColorMaterial`; deck switching just toggles `Visibility` on the relevant entity.
@@ -23,7 +22,6 @@ use bevy::camera::{OrthographicProjection, Projection, ScalingMode};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use std::collections::HashMap;
-use std::f32::consts::FRAC_PI_2;
 
 const SIM_DECK_INDEX: usize = 4;
 const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
@@ -49,7 +47,7 @@ pub(crate) fn plan_world_render_layers() -> RenderLayers {
 }
 
 #[derive(Component)]
-pub(crate) struct ShipPlan2dRotateRoot;
+pub(crate) struct ShipPlan2dRoot;
 
 #[derive(Component)]
 pub(crate) struct GamePlanCamera2d;
@@ -255,7 +253,7 @@ fn pick_strictly_closer_neighbour(
 
 #[derive(Resource)]
 pub(crate) struct Plan2dVisualAssets {
-    pub(crate) rotate_root: Entity,
+    pub(crate) plan_root: Entity,
     shared_material: Handle<ColorMaterial>,
     human_mesh: Handle<Mesh>,
     human_material: Handle<ColorMaterial>,
@@ -354,7 +352,7 @@ fn spawn_plan_deck_entities(
                 Transform::IDENTITY,
                 visibility,
                 plan_world_render_layers(),
-                ChildOf(assets.rotate_root),
+                ChildOf(assets.plan_root),
             ))
             .with_children(|plan| {
                 plan.spawn((
@@ -370,11 +368,7 @@ fn spawn_plan_deck_entities(
                     let cell =
                         DeckCells::cell_coords_deck(pos_xy, deck_i as u8).expect("walk cell");
                     let location = plan_location(deck_i, cell);
-                    let _ = layouts.insert_entity(
-                        entity_id,
-                        EntityKind::SimHuman,
-                        location,
-                    );
+                    let _ = layouts.insert_entity(entity_id, EntityKind::SimHuman, location);
                     let stagger =
                         (rng.next_u32() as f32 / u32::MAX as f32).clamp(0.0, 1.0) * step_period;
                     plan.spawn((
@@ -530,10 +524,10 @@ fn setup_2d(
     spawn_load_menu(&mut commands, ui_camera);
     spawn_edit_mode_panel(&mut commands, ui_camera);
 
-    let rotate_root = commands
+    let plan_root = commands
         .spawn((
-            ShipPlan2dRotateRoot,
-            Transform::from_rotation(Quat::from_rotation_z(-FRAC_PI_2)),
+            ShipPlan2dRoot,
+            Transform::IDENTITY,
             Visibility::Inherited,
             GlobalTransform::default(),
         ))
@@ -543,7 +537,7 @@ fn setup_2d(
     let human_mesh = meshes.add(Mesh::from(Rectangle::new(CELL_SIZE_M, CELL_SIZE_M)));
     let human_material = materials.add(ColorMaterial::from(HUMAN_CELL_COLOR));
     commands.insert_resource(Plan2dVisualAssets {
-        rotate_root,
+        plan_root,
         shared_material,
         human_mesh,
         human_material,
@@ -593,7 +587,6 @@ fn hover_cell_line_2d(
     current_deck: usize,
     layouts: &DeckLayouts,
     cameras: &Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
-    rotate_roots: &Query<&GlobalTransform, With<ShipPlan2dRotateRoot>>,
 ) -> String {
     let Ok((camera, cam_tf)) = cameras.single() else {
         return "Hover: —".to_string();
@@ -601,17 +594,9 @@ fn hover_cell_line_2d(
     let Some(cursor) = cursor_in_game_viewport(window, camera) else {
         return "Hover: —".to_string();
     };
-    let Ok(world_xy) = camera.viewport_to_world_2d(cam_tf, cursor) else {
+    let Ok(hull_xy) = camera.viewport_to_world_2d(cam_tf, cursor) else {
         return "Hover: —".to_string();
     };
-    let Ok(plan_root_tf) = rotate_roots.single() else {
-        return "Hover: —".to_string();
-    };
-    let hull_xy = plan_root_tf
-        .affine()
-        .inverse()
-        .transform_point3(world_xy.extend(0.0))
-        .truncate();
     format_cell_hover_line(hull_xy, current_deck, layouts)
 }
 
@@ -620,10 +605,9 @@ fn update_hover_cell_label_2d(
     current_deck: Res<CurrentDeck>,
     layouts: Res<DeckLayouts>,
     cameras: Query<(&Camera, &GlobalTransform), With<GamePlanCamera2d>>,
-    rotate_roots: Query<&GlobalTransform, With<ShipPlan2dRotateRoot>>,
     mut texts: Query<&mut Text, With<HoverCellText2d>>,
 ) {
-    let hover_line = hover_cell_line_2d(&window, current_deck.0, &layouts, &cameras, &rotate_roots);
+    let hover_line = hover_cell_line_2d(&window, current_deck.0, &layouts, &cameras);
     for mut text in &mut texts {
         text.0 = hover_line.clone();
     }

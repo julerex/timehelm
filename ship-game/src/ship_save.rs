@@ -1,8 +1,6 @@
 //! Compressed on-disk ship layout (`DeckLayouts` / [`CellBox`]) for save/load and agent inspection.
 
-use crate::cell::{
-    Cell, Entity, EntityId, EntityKind, Fixture, Material, RoomCatalog, RoomCategory, RoomId,
-};
+use crate::cell::{Cell, Entity, EntityId, EntityKind, Fixture, FloorMaterial, SideMaterial};
 use crate::cell_box::{CellBox, CellIndex, BEAM, DECKS, LENGTH};
 use crate::deck_layout::{DeckLayouts, DeckMeta, NUM_DECKS};
 use serde::{Deserialize, Serialize};
@@ -11,8 +9,13 @@ use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const SAVE_VERSION: u32 = 2;
-pub const SAVE_VERSION_V1: u32 = 1;
+pub const SAVE_VERSION: u32 = 4;
+const SAVE_VERSION_V3: u32 = 3;
+
+/// v3 grid **y** was port→starboard; v4 is starboard→port.
+fn migrate_grid_y_v3_to_v4(y: u16) -> u16 {
+    (BEAM - 1) as u16 - y
+}
 const MAGIC: &[u8; 6] = b"THSHP1";
 
 /// Repository-relative directory for ship saves (`timehelm/saved_ships`).
@@ -32,11 +35,7 @@ pub fn latest_save_path() -> PathBuf {
 pub fn empty_deck_layouts() -> DeckLayouts {
     DeckLayouts {
         cells: CellBox::new(),
-        decks: (0..NUM_DECKS)
-            .map(|_| DeckMeta {
-                rooms: RoomCatalog::default(),
-            })
-            .collect(),
+        decks: (0..NUM_DECKS).map(|_| DeckMeta {}).collect(),
         entities: HashMap::new(),
     }
 }
@@ -129,17 +128,13 @@ pub struct SavedOccupiedCell {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedCell {
-    pub wall1: u8,
-    pub wall2: u8,
-    pub wall3: u8,
-    pub wall4: u8,
+    pub side1: u8,
+    pub side2: u8,
+    pub side3: u8,
+    pub side4: u8,
     pub floor: u8,
-    pub room: u32,
     #[serde(default)]
     pub fixtures: Vec<u8>,
-    /// v1 only; migrated into [`SavedDeckLayouts::entities`] on load. Always empty in v2 saves.
-    #[serde(default)]
-    pub agents: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,18 +146,8 @@ pub struct SavedEntity {
     pub z: u8,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SavedDeckMeta {
-    pub rooms: Vec<SavedRoom>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SavedRoom {
-    pub id: u32,
-    pub name: String,
-    pub deck: u8,
-    pub category: u8,
-}
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SavedDeckMeta {}
 
 impl From<&DeckLayouts> for SavedShipFile {
     fn from(layouts: &DeckLayouts) -> Self {
@@ -188,7 +173,7 @@ impl From<&DeckLayouts> for SavedDeckLayouts {
         let decks = layouts
             .decks
             .iter()
-            .map(|meta| SavedDeckMeta::from(&meta.rooms))
+            .map(|_| SavedDeckMeta::default())
             .collect();
         let entities = layouts
             .entities
@@ -218,32 +203,13 @@ impl From<(EntityId, &Entity)> for SavedEntity {
 impl From<&Cell> for SavedCell {
     fn from(cell: &Cell) -> Self {
         Self {
-            wall1: cell.wall1 as u8,
-            wall2: cell.wall2 as u8,
-            wall3: cell.wall3 as u8,
-            wall4: cell.wall4 as u8,
+            side1: cell.side1 as u8,
+            side2: cell.side2 as u8,
+            side3: cell.side3 as u8,
+            side4: cell.side4 as u8,
             floor: cell.floor as u8,
-            room: cell.room.0,
             fixtures: cell.fixtures.iter().map(|f| f.to_tag()).collect(),
-            agents: Vec::new(),
         }
-    }
-}
-
-impl From<&RoomCatalog> for SavedDeckMeta {
-    fn from(catalog: &RoomCatalog) -> Self {
-        let mut rooms: Vec<SavedRoom> = catalog
-            .rooms
-            .values()
-            .map(|room| SavedRoom {
-                id: room.id,
-                name: room.name.to_string(),
-                deck: room.deck,
-                category: room_category_to_u8(room.category),
-            })
-            .collect();
-        rooms.sort_by_key(|r| r.id);
-        Self { rooms }
     }
 }
 
@@ -252,61 +218,20 @@ impl TryFrom<SavedShipFile> for DeckLayouts {
 
     fn try_from(file: SavedShipFile) -> Result<Self, Self::Error> {
         match file.version {
-            SAVE_VERSION => SavedDeckLayouts::try_into(file.layouts),
-            SAVE_VERSION_V1 => layouts_from_v1(file.layouts),
+            SAVE_VERSION => file.layouts.try_into(),
+            SAVE_VERSION_V3 => {
+                let mut layouts = file.layouts;
+                for entry in &mut layouts.occupied {
+                    entry.y = migrate_grid_y_v3_to_v4(entry.y);
+                }
+                for entity in &mut layouts.entities {
+                    entity.y = migrate_grid_y_v3_to_v4(entity.y);
+                }
+                layouts.try_into()
+            }
             v => Err(ShipSaveError::UnsupportedVersion(v)),
         }
     }
-}
-
-fn layouts_from_v1(saved: SavedDeckLayouts) -> Result<DeckLayouts, ShipSaveError> {
-    if saved.decks.len() != NUM_DECKS {
-        return Err(ShipSaveError::DeckCount {
-            expected: NUM_DECKS,
-            got: saved.decks.len(),
-        });
-    }
-
-    let mut cells = CellBox::new();
-    let mut entities = HashMap::new();
-    for entry in saved.occupied {
-        let index = CellIndex::new(entry.x, entry.y, entry.z).ok_or(
-            ShipSaveError::InvalidCellIndex {
-                x: entry.x,
-                y: entry.y,
-                z: entry.z,
-            },
-        )?;
-        let location = index.to_location();
-        let agent_ids = entry.cell.agents.clone();
-        let cell = Cell::try_from(entry.cell)?;
-        cells.insert(index, cell);
-        for id in agent_ids {
-            entities.insert(
-                EntityId(id),
-                Entity {
-                    kind: EntityKind::SimHuman,
-                    location,
-                },
-            );
-        }
-    }
-
-    let decks = saved
-        .decks
-        .into_iter()
-        .map(|meta| -> Result<DeckMeta, ShipSaveError> {
-            Ok(DeckMeta {
-                rooms: RoomCatalog::try_from(meta)?,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(DeckLayouts {
-        cells,
-        decks,
-        entities,
-    })
 }
 
 impl TryFrom<SavedDeckLayouts> for DeckLayouts {
@@ -333,15 +258,7 @@ impl TryFrom<SavedDeckLayouts> for DeckLayouts {
             cells.insert(index, cell);
         }
 
-        let decks = saved
-            .decks
-            .into_iter()
-            .map(|meta| -> Result<DeckMeta, ShipSaveError> {
-                Ok(DeckMeta {
-                    rooms: RoomCatalog::try_from(meta)?,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let decks = saved.decks.into_iter().map(|_| DeckMeta {}).collect();
 
         let mut entities = HashMap::new();
         for saved_entity in saved.entities {
@@ -363,17 +280,14 @@ impl TryFrom<SavedCell> for Cell {
     fn try_from(saved: SavedCell) -> Result<Self, Self::Error> {
         let mut fixtures = Vec::with_capacity(saved.fixtures.len());
         for tag in saved.fixtures {
-            fixtures.push(
-                Fixture::from_tag(tag).ok_or(ShipSaveError::InvalidFixtureTag(tag))?,
-            );
+            fixtures.push(Fixture::from_tag(tag).ok_or(ShipSaveError::InvalidFixtureTag(tag))?);
         }
         Ok(Self {
-            wall1: material_from_u8(saved.wall1)?,
-            wall2: material_from_u8(saved.wall2)?,
-            wall3: material_from_u8(saved.wall3)?,
-            wall4: material_from_u8(saved.wall4)?,
-            floor: material_from_u8(saved.floor)?,
-            room: RoomId(saved.room),
+            side1: side_from_u8(saved.side1)?,
+            side2: side_from_u8(saved.side2)?,
+            side3: side_from_u8(saved.side3)?,
+            side4: side_from_u8(saved.side4)?,
+            floor: floor_from_u8(saved.floor)?,
             fixtures,
         })
     }
@@ -383,36 +297,15 @@ impl TryFrom<SavedEntity> for (EntityId, Entity) {
     type Error = ShipSaveError;
 
     fn try_from(saved: SavedEntity) -> Result<Self, Self::Error> {
-        let kind = EntityKind::from_tag(saved.kind).ok_or(ShipSaveError::InvalidEntityKind(
-            saved.kind,
-        ))?;
+        let kind =
+            EntityKind::from_tag(saved.kind).ok_or(ShipSaveError::InvalidEntityKind(saved.kind))?;
         let location = (saved.x, saved.y, saved.z);
         CellIndex::from_location(location).ok_or(ShipSaveError::InvalidCellIndex {
             x: saved.x,
             y: saved.y,
             z: saved.z,
         })?;
-        Ok((
-            EntityId(saved.id),
-            Entity { kind, location },
-        ))
-    }
-}
-
-impl TryFrom<SavedDeckMeta> for RoomCatalog {
-    type Error = ShipSaveError;
-
-    fn try_from(saved: SavedDeckMeta) -> Result<Self, Self::Error> {
-        let entries = saved
-            .rooms
-            .into_iter()
-            .map(|room| {
-                let category = room_category_from_u8(room.category)?;
-                let name: &'static str = Box::leak(room.name.into_boxed_str());
-                Ok((RoomId(room.id), name, room.deck, category))
-            })
-            .collect::<Result<Vec<_>, ShipSaveError>>()?;
-        Ok(RoomCatalog::from_persisted(entries))
+        Ok((EntityId(saved.id), Entity { kind, location }))
     }
 }
 
@@ -423,8 +316,8 @@ pub enum ShipSaveError {
     UnsupportedVersion(u32),
     DeckCount { expected: usize, got: usize },
     InvalidCellIndex { x: u16, y: u16, z: u8 },
-    InvalidMaterial(u8),
-    InvalidRoomCategory(u8),
+    InvalidFloorMaterial(u8),
+    InvalidSideMaterial(u8),
     InvalidFixtureTag(u8),
     InvalidEntityKind(u8),
 }
@@ -441,8 +334,8 @@ impl std::fmt::Display for ShipSaveError {
             Self::InvalidCellIndex { x, y, z } => {
                 write!(f, "cell index ({x}, {y}, {z}) out of range")
             }
-            Self::InvalidMaterial(m) => write!(f, "invalid material code {m}"),
-            Self::InvalidRoomCategory(c) => write!(f, "invalid room category code {c}"),
+            Self::InvalidFloorMaterial(m) => write!(f, "invalid floor material code {m}"),
+            Self::InvalidSideMaterial(m) => write!(f, "invalid side material code {m}"),
             Self::InvalidFixtureTag(t) => write!(f, "invalid fixture tag {t}"),
             Self::InvalidEntityKind(k) => write!(f, "invalid entity kind {k}"),
         }
@@ -511,17 +404,10 @@ pub fn analyze_save(path: &Path, layouts: &DeckLayouts) -> String {
         let _ = writeln!(out, "sample_entities (up to 4):");
         for (id, entity) in sample_entities {
             let (x, y, z) = entity.location;
-            let _ = writeln!(
-                out,
-                "  id={} kind={:?} at ({x},{y},{z})",
-                id.0, entity.kind
-            );
+            let _ = writeln!(out, "  id={} kind={:?} at ({x},{y},{z})", id.0, entity.kind);
         }
     }
     let _ = writeln!(out, "decks: {}", layouts.decks.len());
-    for (i, deck) in layouts.decks.iter().enumerate() {
-        let _ = writeln!(out, "deck[{i}] rooms: {}", deck.rooms.rooms.len());
-    }
     out
 }
 
@@ -549,66 +435,33 @@ pub fn analyze_cell_box(box_: &CellBox, out: &mut String) {
     for (idx, cell) in sample {
         let _ = writeln!(
             out,
-            "  ({},{},{}) floor={} room={} fixtures={} walls=[{},{},{},{}]",
+            "  ({},{},{}) floor={} fixtures={} sides=[{},{},{},{}]",
             idx.x,
             idx.y,
             idx.z,
             cell.floor.label(),
-            cell.room.0,
             cell.fixtures.len(),
-            cell.wall1.label(),
-            cell.wall2.label(),
-            cell.wall3.label(),
-            cell.wall4.label(),
+            cell.side1.label(),
+            cell.side2.label(),
+            cell.side3.label(),
+            cell.side4.label(),
         );
     }
 }
 
-fn material_from_u8(v: u8) -> Result<Material, ShipSaveError> {
-    const TABLE: [Material; Material::COUNT] = [
-        Material::Open,
-        Material::Hull,
-        Material::Window,
-        Material::CabinPartition,
-        Material::Corridor,
-        Material::PublicShell,
-        Material::DeckBase,
-        Material::Theatre,
-        Material::Dining,
-        Material::Buffet,
-        Material::Pool,
-        Material::Casino,
-        Material::CabinStripeA,
-        Material::CabinStripeB,
-        Material::CorridorWhite,
-        Material::BowAccent,
-        Material::MarinePanel,
-        Material::Door,
-    ];
-    TABLE
-        .get(v as usize)
-        .copied()
-        .ok_or(ShipSaveError::InvalidMaterial(v))
-}
-
-fn room_category_to_u8(c: RoomCategory) -> u8 {
-    match c {
-        RoomCategory::Exterior => 0,
-        RoomCategory::Cabin => 1,
-        RoomCategory::Corridor => 2,
-        RoomCategory::Public => 3,
-        RoomCategory::Amenity => 4,
+fn floor_from_u8(v: u8) -> Result<FloorMaterial, ShipSaveError> {
+    match v {
+        0 => Ok(FloorMaterial::Carpet),
+        1 => Ok(FloorMaterial::Wood),
+        _ => Err(ShipSaveError::InvalidFloorMaterial(v)),
     }
 }
 
-fn room_category_from_u8(v: u8) -> Result<RoomCategory, ShipSaveError> {
+fn side_from_u8(v: u8) -> Result<SideMaterial, ShipSaveError> {
     match v {
-        0 => Ok(RoomCategory::Exterior),
-        1 => Ok(RoomCategory::Cabin),
-        2 => Ok(RoomCategory::Corridor),
-        3 => Ok(RoomCategory::Public),
-        4 => Ok(RoomCategory::Amenity),
-        _ => Err(ShipSaveError::InvalidRoomCategory(v)),
+        0 => Ok(SideMaterial::Open),
+        1 => Ok(SideMaterial::MarinePanel),
+        _ => Err(ShipSaveError::InvalidSideMaterial(v)),
     }
 }
 
@@ -762,11 +615,11 @@ mod tests {
         assert_eq!(file.version, SAVE_VERSION);
 
         let restored = decode_save(&bytes).expect("decode");
-        let restored_cell = layouts
-            .cells
-            .get(index)
-            .expect("cell still occupied");
-        assert_eq!(restored.cells.get(index).unwrap().fixtures, restored_cell.fixtures);
+        let restored_cell = layouts.cells.get(index).expect("cell still occupied");
+        assert_eq!(
+            restored.cells.get(index).unwrap().fixtures,
+            restored_cell.fixtures
+        );
         assert_eq!(restored.entities.len(), 1);
         assert_eq!(
             restored.entities.get(&EntityId(42)).map(|e| e.location),
@@ -775,52 +628,45 @@ mod tests {
     }
 
     #[test]
-    fn migrate_v1_agents_to_entities() {
-        use crate::cell::EntityId;
-
+    fn rejects_unsupported_save_version() {
         let layouts = deck_cell_layouts(CELL_SIZE_M);
-        let Some((index, _)) = layouts.cells.iter_occupied().next() else {
-            panic!("procedural layout has no cells");
+        let mut bytes = encode_save(&layouts).expect("encode");
+        let payload_start = MAGIC.len();
+        let mut file: SavedShipFile =
+            bincode::deserialize(&zstd::decode_all(&bytes[payload_start..]).unwrap()).unwrap();
+        file.version = 2;
+        let payload = bincode::serialize(&file).unwrap();
+        bytes.truncate(MAGIC.len());
+        bytes.extend(zstd::encode_all(&payload[..], 3).unwrap());
+        let err = match decode_save(&bytes) {
+            Err(e) => e,
+            Ok(_) => panic!("expected unsupported version error"),
         };
-        let location = index.to_location();
+        assert!(matches!(err, ShipSaveError::UnsupportedVersion(2)));
+    }
 
-        let v1 = SavedShipFile {
-            version: SAVE_VERSION_V1,
-            layouts: SavedDeckLayouts {
-                occupied: vec![SavedOccupiedCell {
-                    x: index.x,
-                    y: index.y,
-                    z: index.z,
-                    cell: SavedCell {
-                        wall1: Material::DeckBase as u8,
-                        wall2: Material::Open as u8,
-                        wall3: Material::Open as u8,
-                        wall4: Material::Open as u8,
-                        floor: Material::DeckBase as u8,
-                        room: 0,
-                        fixtures: Vec::new(),
-                        agents: vec![7, 9],
-                    },
-                }],
-                decks: (0..NUM_DECKS)
-                    .map(|_| SavedDeckMeta { rooms: Vec::new() })
-                    .collect(),
-                entities: Vec::new(),
-            },
-        };
-
-        let restored: DeckLayouts = v1.try_into().expect("migrate v1");
-        assert_eq!(restored.entities.len(), 2);
+    #[test]
+    fn loads_v3_save_with_y_axis_migration() {
+        let layouts = deck_cell_layouts(CELL_SIZE_M);
+        let mut bytes = encode_save(&layouts).expect("encode v4");
+        let payload_start = MAGIC.len();
+        let mut file: SavedShipFile =
+            bincode::deserialize(&zstd::decode_all(&bytes[payload_start..]).unwrap()).unwrap();
+        file.version = SAVE_VERSION_V3;
+        for entry in &mut file.layouts.occupied {
+            entry.y = migrate_grid_y_v3_to_v4(entry.y);
+        }
+        for entity in &mut file.layouts.entities {
+            entity.y = migrate_grid_y_v3_to_v4(entity.y);
+        }
+        let payload = bincode::serialize(&file).unwrap();
+        bytes.truncate(MAGIC.len());
+        bytes.extend(zstd::encode_all(&payload[..], 3).unwrap());
+        let restored = decode_save(&bytes).expect("v3 load");
         assert_eq!(
-            restored.entities.get(&EntityId(7)).map(|e| e.location),
-            Some(location)
+            restored.cells.deck_occupied(4),
+            layouts.cells.deck_occupied(4)
         );
-        assert_eq!(
-            restored.entities.get(&EntityId(9)).map(|e| e.location),
-            Some(location)
-        );
-        let cell = restored.cells.get(index).expect("cell");
-        assert!(cell.fixtures.is_empty());
     }
 
     /// `make write-ship-default` — writes procedural layout for agent fixtures.
