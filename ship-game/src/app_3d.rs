@@ -427,6 +427,23 @@ fn spawn_deck_meshes(
                 ));
             }
         }
+
+        let wall_height_m = DECK_SLAB_THICKNESS_M * 0.92;
+        let side_walls =
+            crate::plan_mesh::collect_deck_side_walls_3d(layout, deck_z, wall_height_m);
+        if !side_walls.is_empty() {
+            let wall_mesh = meshes.add(crate::deck_geometry::merged_cell_side_walls_mesh_3d(
+                &side_walls,
+            ));
+            commands.spawn((
+                Mesh3d(wall_mesh),
+                MeshMaterial3d(clip_handle.clone()),
+                Transform::IDENTITY,
+                Visibility::Hidden,
+                DeckLayer(deck_i),
+                DeckLodFineTier(deck_i),
+            ));
+        }
     }
 }
 

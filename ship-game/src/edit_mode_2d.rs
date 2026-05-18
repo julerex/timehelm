@@ -120,10 +120,7 @@ impl PickerChoice {
     fn bg_color(self) -> Color {
         match self {
             Self::Floor(m) => picker_bg_from_color(m.color()),
-            Self::Side(m) => picker_bg_from_color(match m {
-                SideMaterial::Open => Color::srgb(0.12, 0.14, 0.18),
-                SideMaterial::MarinePanel => Color::srgb(0.62, 0.52, 0.44),
-            }),
+            Self::Side(m) => picker_bg_from_color(m.picker_color()),
         }
     }
 

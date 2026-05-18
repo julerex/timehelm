@@ -258,11 +258,10 @@ pub enum PlanWallEdge {
     Horizontal { y: f32, x0: f32, x1: f32 },
 }
 
-/// Wall borders with per-edge thickness (e.g. 10 cm cabin partitions vs 5 cm hull strokes).
-pub fn merged_plan_wall_borders_mesh_varied(
-    edges: &[(PlanWallEdge, f32)],
+/// Wall borders with per-edge thickness and colour (e.g. 10 cm door/window strokes).
+pub fn merged_plan_wall_borders_mesh_varied_colored(
+    edges: &[(PlanWallEdge, f32, [f32; 4])],
     z: f32,
-    color: [f32; 4],
 ) -> Mesh {
     let mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -278,7 +277,7 @@ pub fn merged_plan_wall_borders_mesh_varied(
     let mut colors = Vec::with_capacity(n * 4);
     let mut indices = Vec::with_capacity(n * 6);
 
-    for (i, (edge, thickness_m)) in edges.iter().enumerate() {
+    for (i, (edge, thickness_m, color)) in edges.iter().enumerate() {
         let half_t = thickness_m * 0.5;
         let base = (i * 4) as u32;
         let corners: [(f32, f32); 4] = match edge {
@@ -299,7 +298,7 @@ pub fn merged_plan_wall_borders_mesh_varied(
             positions.push([px, py, z]);
             normals.push([0.0, 0.0, 1.0]);
             uvs.push([0.0, 0.0]);
-            colors.push(color);
+            colors.push(*color);
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
@@ -309,4 +308,84 @@ pub fn merged_plan_wall_borders_mesh_varied(
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
         .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Axis-aligned box walls for 3D fine LOD (centre, half-extents in metres, linear RGBA).
+pub fn merged_cell_side_walls_mesh_3d(walls: &[(Vec3, Vec3, [f32; 4])]) -> Mesh {
+    let mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
+    if walls.is_empty() {
+        return mesh;
+    }
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut colors = Vec::new();
+    let mut indices = Vec::new();
+
+    for (center, half, color) in walls {
+        let base = positions.len() as u32;
+        let hx = half.x;
+        let hy = half.y;
+        let hz = half.z;
+        let cx = center.x;
+        let cy = center.y;
+        let cz = center.z;
+        let corners = [
+            [cx - hx, cy - hy, cz - hz],
+            [cx + hx, cy - hy, cz - hz],
+            [cx + hx, cy + hy, cz - hz],
+            [cx - hx, cy + hy, cz - hz],
+            [cx - hx, cy - hy, cz + hz],
+            [cx + hx, cy - hy, cz + hz],
+            [cx + hx, cy + hy, cz + hz],
+            [cx - hx, cy + hy, cz + hz],
+        ];
+        for p in corners {
+            positions.push(p);
+            normals.push([0.0, 0.0, 1.0]);
+            uvs.push([0.0, 0.0]);
+            colors.push(*color);
+        }
+        let faces: [[u32; 4]; 6] = [
+            [0, 1, 2, 3],
+            [4, 5, 6, 7],
+            [0, 1, 5, 4],
+            [2, 3, 7, 6],
+            [1, 2, 6, 5],
+            [0, 3, 7, 4],
+        ];
+        for f in faces {
+            indices.extend_from_slice(&[
+                base + f[0],
+                base + f[1],
+                base + f[2],
+                base + f[0],
+                base + f[2],
+                base + f[3],
+            ]);
+        }
+    }
+
+    mesh.with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Wall borders with per-edge thickness and a single colour (uniform stroke).
+#[allow(dead_code)]
+pub fn merged_plan_wall_borders_mesh_varied(
+    edges: &[(PlanWallEdge, f32)],
+    z: f32,
+    color: [f32; 4],
+) -> Mesh {
+    let colored: Vec<_> = edges
+        .iter()
+        .map(|(edge, thickness)| (*edge, *thickness, color))
+        .collect();
+    merged_plan_wall_borders_mesh_varied_colored(&colored, z)
 }

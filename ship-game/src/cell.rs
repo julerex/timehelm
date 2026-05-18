@@ -49,12 +49,19 @@ pub enum SideMaterial {
     #[default]
     Open = 0,
     MarinePanel = 1,
+    Door = 2,
+    Window = 3,
 }
 
 impl SideMaterial {
-    pub const COUNT: usize = 2;
+    pub const COUNT: usize = 4;
 
-    pub const ALL: [Self; Self::COUNT] = [Self::Open, Self::MarinePanel];
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Open,
+        Self::MarinePanel,
+        Self::Door,
+        Self::Window,
+    ];
 
     pub fn idx(self) -> usize {
         self as usize
@@ -64,12 +71,38 @@ impl SideMaterial {
         match self {
             Self::Open => "Open",
             Self::MarinePanel => "Marine panel",
+            Self::Door => "Door",
+            Self::Window => "Window",
         }
     }
 
     /// Edges agents may cross when both sides are passable.
     pub fn is_passable(self) -> bool {
         matches!(self, Self::Open)
+    }
+
+    /// 2D plan / 3D fine-LOD stroke colour for non-open sides.
+    pub fn plan_stroke_color(self) -> Color {
+        match self {
+            Self::Open => Color::srgb(0.12, 0.14, 0.18),
+            Self::MarinePanel => Color::srgb(0.0, 0.0, 0.0),
+            Self::Door => Color::srgb(0.55, 0.95, 0.55),
+            Self::Window => Color::srgb(0.55, 0.85, 1.0),
+        }
+    }
+
+    /// Editor picker swatch (marine panel matches historical brown).
+    pub fn picker_color(self) -> Color {
+        match self {
+            Self::Open => Color::srgb(0.12, 0.14, 0.18),
+            Self::MarinePanel => Color::srgb(0.62, 0.52, 0.44),
+            Self::Door => Color::srgb(0.55, 0.95, 0.55),
+            Self::Window => Color::srgb(0.55, 0.85, 1.0),
+        }
+    }
+
+    pub fn draws_plan_stroke(self) -> bool {
+        !matches!(self, Self::Open)
     }
 }
 
@@ -266,9 +299,11 @@ mod tests {
     }
 
     #[test]
-    fn side_material_has_two_variants() {
-        assert_eq!(SideMaterial::COUNT, 2);
+    fn side_material_has_four_variants() {
+        assert_eq!(SideMaterial::COUNT, 4);
         assert_eq!(SideMaterial::MarinePanel.idx(), 1);
+        assert_eq!(SideMaterial::Door.idx(), 2);
+        assert_eq!(SideMaterial::Window.idx(), 3);
     }
 
     #[test]

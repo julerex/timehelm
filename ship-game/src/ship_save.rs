@@ -9,7 +9,8 @@ use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const SAVE_VERSION: u32 = 4;
+pub const SAVE_VERSION: u32 = 5;
+const SAVE_VERSION_V4: u32 = 4;
 const SAVE_VERSION_V3: u32 = 3;
 
 /// v3 grid **y** was port→starboard; v4 is starboard→port.
@@ -218,7 +219,7 @@ impl TryFrom<SavedShipFile> for DeckLayouts {
 
     fn try_from(file: SavedShipFile) -> Result<Self, Self::Error> {
         match file.version {
-            SAVE_VERSION => file.layouts.try_into(),
+            SAVE_VERSION | SAVE_VERSION_V4 => file.layouts.try_into(),
             SAVE_VERSION_V3 => {
                 let mut layouts = file.layouts;
                 for entry in &mut layouts.occupied {
@@ -461,6 +462,8 @@ fn side_from_u8(v: u8) -> Result<SideMaterial, ShipSaveError> {
     match v {
         0 => Ok(SideMaterial::Open),
         1 => Ok(SideMaterial::MarinePanel),
+        2 => Ok(SideMaterial::Door),
+        3 => Ok(SideMaterial::Window),
         _ => Err(ShipSaveError::InvalidSideMaterial(v)),
     }
 }
@@ -700,6 +703,72 @@ mod tests {
         }
         super::write_save_manifest(&public_dir).expect("write manifest");
         eprintln!("wrote {}", public_dir.join("manifest.json").display());
+    }
+
+    /// `make refresh-ship-sides SAVE_SHIP=...` — reassign cabin doors/windows and rewrite save.
+    #[test]
+    #[ignore = "agent tool: make refresh-ship-sides"]
+    fn refresh_ship_sides_save() {
+        use crate::deck_layout::refresh_all_cabin_sides;
+
+        let path = std::env::var("SAVE_SHIP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| latest_save_path());
+        let mut layouts = read_save(&path).expect("read save");
+        refresh_all_cabin_sides(&mut layouts);
+        write_save(&path, &layouts).expect("write save");
+        let public_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/public/saved_ships");
+        std::fs::create_dir_all(&public_dir).expect("create public dir");
+        if let Some(name) = path.file_name() {
+            let dest = public_dir.join(name);
+            std::fs::copy(&path, &dest).expect("copy to public");
+        }
+        super::write_save_manifest(&public_dir).expect("manifest");
+        eprintln!("refreshed cabin sides: {}", path.display());
+    }
+
+    #[test]
+    fn roundtrip_door_and_window_sides() {
+        use crate::cell::SideMaterial;
+
+        let layouts = deck_cell_layouts(CELL_SIZE_M);
+        let deck = layouts.deck(4);
+        let mut set_door = false;
+        let mut set_window = false;
+        for (_, cell) in deck.iter_cells() {
+            if cell.side1 == SideMaterial::Door
+                || cell.side2 == SideMaterial::Door
+                || cell.side3 == SideMaterial::Door
+                || cell.side4 == SideMaterial::Door
+            {
+                set_door = true;
+            }
+            if cell.side1 == SideMaterial::Window
+                || cell.side2 == SideMaterial::Window
+                || cell.side3 == SideMaterial::Window
+                || cell.side4 == SideMaterial::Window
+            {
+                set_window = true;
+            }
+        }
+        assert!(set_door, "procedural layout should include doors");
+        assert!(set_window, "procedural layout should include windows");
+
+        let bytes = encode_save(&layouts).expect("encode");
+        let file: SavedShipFile =
+            bincode::deserialize(&zstd::decode_all(&bytes[MAGIC.len()..]).unwrap()).unwrap();
+        assert_eq!(file.version, SAVE_VERSION);
+        let restored = decode_save(&bytes).expect("decode");
+        let restored_deck = restored.deck(4);
+        assert!(
+            restored_deck.iter_cells().any(|(_, c)| {
+                c.side1 == SideMaterial::Door
+                    || c.side2 == SideMaterial::Door
+                    || c.side3 == SideMaterial::Door
+                    || c.side4 == SideMaterial::Door
+            })
+        );
     }
 
     /// `make inspect-ship SAVE_SHIP=...` — deserialize and print CellBox analysis.

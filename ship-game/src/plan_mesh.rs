@@ -1,9 +1,9 @@
 //! Baked 2D plan meshes (floor quads + wall strokes) per deck.
 
-use crate::cell::SideMaterial;
 use crate::cell_box;
 use crate::deck_geometry::{
-    merged_plan_rectangles_mesh_colored, merged_plan_wall_borders_mesh_varied, PlanWallEdge,
+    merged_plan_rectangles_mesh_colored, merged_plan_wall_borders_mesh_varied_colored,
+    PlanWallEdge,
 };
 use crate::deck_layout::{DeckCells, DeckLayouts, CELL_VISUAL_SCALE, NUM_DECKS};
 use bevy::prelude::*;
@@ -11,8 +11,7 @@ use bevy::prelude::*;
 const Z_CELL_PLANE: f32 = 0.0;
 const Z_WALL_PLANE: f32 = 0.001;
 /// Plan-view wall stroke width (10 cm); each cell draws its own edges.
-const PLAN_WALL_THICKNESS_M: f32 = 0.10;
-const WALL_BORDER_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+pub const PLAN_WALL_THICKNESS_M: f32 = 0.10;
 
 #[derive(Resource)]
 pub struct DeckPlanMeshes {
@@ -48,7 +47,7 @@ pub fn build_deck_mesh(deck_index: usize, deck: DeckCells<'_>) -> Mesh {
     merged_plan_rectangles_mesh_colored(&centers, &colors, half_x, half_y, Z_CELL_PLANE)
 }
 
-fn collect_wall_edges(deck: DeckCells<'_>) -> Vec<(PlanWallEdge, f32)> {
+fn collect_wall_edges(deck: DeckCells<'_>) -> Vec<(PlanWallEdge, f32, [f32; 4])> {
     let (half_x, half_y) = plan_cell_half_extents();
     let mut edges = Vec::new();
     for (plan, cell) in deck.iter_cells() {
@@ -58,29 +57,20 @@ fn collect_wall_edges(deck: DeckCells<'_>) -> Vec<(PlanWallEdge, f32)> {
         let x0 = c.x - half_x;
         let x1 = c.x + half_x;
 
-        if cell.side1 != SideMaterial::Open {
-            edges.push((
-                PlanWallEdge::Vertical { x: x1, y0, y1 },
-                PLAN_WALL_THICKNESS_M,
-            ));
-        }
-        if cell.side2 != SideMaterial::Open {
-            edges.push((
-                PlanWallEdge::Horizontal { y: y1, x0, x1 },
-                PLAN_WALL_THICKNESS_M,
-            ));
-        }
-        if cell.side3 != SideMaterial::Open {
-            edges.push((
-                PlanWallEdge::Vertical { x: x0, y0, y1 },
-                PLAN_WALL_THICKNESS_M,
-            ));
-        }
-        if cell.side4 != SideMaterial::Open {
-            edges.push((
-                PlanWallEdge::Horizontal { y: y0, x0, x1 },
-                PLAN_WALL_THICKNESS_M,
-            ));
+        let sides = [
+            (cell.side1, PlanWallEdge::Vertical { x: x1, y0, y1 }),
+            (cell.side2, PlanWallEdge::Horizontal { y: y1, x0, x1 }),
+            (cell.side3, PlanWallEdge::Vertical { x: x0, y0, y1 }),
+            (cell.side4, PlanWallEdge::Horizontal { y: y0, x0, x1 }),
+        ];
+        for (material, edge) in sides {
+            if material.draws_plan_stroke() {
+                edges.push((
+                    edge,
+                    PLAN_WALL_THICKNESS_M,
+                    color_to_linear_array(material.plan_stroke_color()),
+                ));
+            }
         }
     }
     edges
@@ -88,7 +78,50 @@ fn collect_wall_edges(deck: DeckCells<'_>) -> Vec<(PlanWallEdge, f32)> {
 
 pub fn build_deck_wall_mesh(deck: DeckCells<'_>) -> Mesh {
     let edges = collect_wall_edges(deck);
-    merged_plan_wall_borders_mesh_varied(&edges, Z_WALL_PLANE, WALL_BORDER_COLOR)
+    merged_plan_wall_borders_mesh_varied_colored(&edges, Z_WALL_PLANE)
+}
+
+/// Fine-LOD 3D wall boxes (centre, half-extents, linear RGBA) for non-open sides.
+pub fn collect_deck_side_walls_3d(
+    deck: DeckCells<'_>,
+    deck_z: f32,
+    wall_height_m: f32,
+) -> Vec<(Vec3, Vec3, [f32; 4])> {
+    let (half_x, half_y) = plan_cell_half_extents();
+    let half_t = PLAN_WALL_THICKNESS_M * 0.5;
+    let half_h = wall_height_m * 0.5;
+    let z_center = deck_z + half_h;
+    let mut walls = Vec::new();
+
+    for (plan, cell) in deck.iter_cells() {
+        let c = deck.index(plan).to_world_xy();
+        let y0 = c.y - half_y;
+        let y1 = c.y + half_y;
+        let x0 = c.x - half_x;
+        let x1 = c.x + half_x;
+
+        let sides = [
+            (cell.side1, Vec3::new(x1, c.y, z_center), Vec3::new(half_t, half_y, half_h)),
+            (
+                cell.side2,
+                Vec3::new(c.x, y1, z_center),
+                Vec3::new(half_x, half_t, half_h),
+            ),
+            (cell.side3, Vec3::new(x0, c.y, z_center), Vec3::new(half_t, half_y, half_h)),
+            (
+                cell.side4,
+                Vec3::new(c.x, y0, z_center),
+                Vec3::new(half_x, half_t, half_h),
+            ),
+        ];
+        for (material, center, half) in sides {
+            if material.draws_plan_stroke() {
+                let lr: LinearRgba = material.plan_stroke_color().into();
+                walls.push((center, half, lr.to_f32_array()));
+            }
+        }
+    }
+    walls
 }
 
 pub fn rebuild_plan_deck_meshes(
@@ -110,6 +143,11 @@ pub fn rebuild_plan_deck_meshes(
 mod tests {
     use super::*;
     use crate::cell_box::CellIndex;
+
+    #[test]
+    fn plan_wall_strokes_are_ten_cm() {
+        assert!((PLAN_WALL_THICKNESS_M - 0.10).abs() < 1e-6);
+    }
 
     #[test]
     fn plan_cell_half_extents_tile_without_gaps() {

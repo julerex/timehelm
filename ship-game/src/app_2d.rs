@@ -29,8 +29,8 @@ const VIEW_WIDTH_M: f32 = SHIP_LENGTH_M * 1.12;
 const PLAN_ZOOM_MIN: f32 = 0.5;
 const PLAN_ZOOM_MAX: f32 = 4.0;
 const PLAN_ZOOM_SCROLL_FACTOR: f32 = 1.1;
-/// Pan speed (m/s) for WASD (same as 3D view).
-const PLAN_PAN_SPEED_M_S: f32 = 520.0;
+/// Pan speed (m/s) for WASD — tuned for ~350 m viewport width, not 3D orbit camera scale.
+const PLAN_PAN_SPEED_M_S: f32 = 80.0;
 
 const STATUS_TOAST_SECS: f32 = 3.0;
 
