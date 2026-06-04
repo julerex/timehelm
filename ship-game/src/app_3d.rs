@@ -15,7 +15,9 @@
 use crate::cell::FloorMaterial;
 use crate::cell_box;
 use crate::deck_layout::{deck_sim_footprint_polygon, DeckLayouts, CELL_VISUAL_SCALE, NUM_DECKS};
+use crate::grid_state::{ServerEntityVisual, ServerGridState};
 use crate::load_screen::{spawn_load_menu, GamePhase, LoadScreenPlugin};
+use crate::server_world::ServerWorldLoad;
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{
     asset_plugin, cursor_in_game_viewport, deck_info_text_3d, format_cell_hover_line,
@@ -23,6 +25,7 @@ use crate::shared::{
 };
 use crate::ship_hull::{SHIP_BEAM_M, SHIP_LENGTH_M};
 use crate::ship_save::empty_deck_layouts;
+use crate::ws_client::{send_move_with_inbox, WsInbox};
 use bevy::camera::primitives::Aabb;
 use bevy::ecs::system::ParamSet;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
@@ -32,7 +35,7 @@ use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 use std::collections::HashSet;
 
-const SIM_DECK_INDEX: usize = 4; // Deck 5 (human-facing numbering)
+use crate::deck_layout::SIM_DECK_INDEX;
 
 const SIM_NPC_SCALE: f32 = 0.6;
 const SIM_NPC_SPEED_M_S: f32 = 2.8;
@@ -210,6 +213,11 @@ pub fn run_app_3d() {
     .add_plugins(MaterialPlugin::<ShipClipMaterial>::default());
     #[cfg(not(target_arch = "wasm32"))]
     app.add_plugins(crate::ship_save::ShipSavePlugin);
+    #[cfg(target_arch = "wasm32")]
+    app.add_plugins((
+        crate::server_world::ServerWorldPlugin,
+        crate::ws_client::WsClientPlugin,
+    ));
     app.add_plugins(LoadScreenPlugin)
         .insert_resource(empty_deck_layouts())
         .insert_resource(CurrentDeck(SIM_DECK_INDEX))
@@ -231,7 +239,9 @@ pub fn run_app_3d() {
                 deck_switch,
                 camera_controls,
                 update_deck_lod,
-                sim_npc_wander,
+                sim_npc_wander.run_if(local_npc_wander_enabled),
+                sync_server_entity_visuals,
+                server_grid_player_move,
                 sync_clip_material,
                 cull_npcs_above_cut,
                 (sync_game_camera_viewport, update_hover_cell_label).chain(),
@@ -582,8 +592,119 @@ fn enter_game_world(
         .into_iter()
         .map(|p| Vec3::new(p.x, p.y, deck_five_z))
         .collect();
+    #[cfg(not(target_arch = "wasm32"))]
     spawn_sim_npcs_inner(&mut commands, &asset_server, &mut rng, &walk_points);
     spawned.0 = true;
+}
+
+fn local_npc_wander_enabled(load: Option<Res<ServerWorldLoad>>) -> bool {
+    load.map(|l| !l.done).unwrap_or(true)
+}
+
+fn cell_center_world(x: i32, y: i32, z: i32) -> Vec3 {
+    Vec3::new(
+        x as f32 + 0.5,
+        y as f32 + 0.5,
+        z as f32 * DECK_FLOOR_SPACING_M,
+    )
+}
+
+fn sync_server_entity_visuals(
+    mut commands: Commands,
+    grid: Res<ServerGridState>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    existing: Query<(Entity, &ServerEntityVisual)>,
+) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (&mut commands, &grid, &mut meshes, &mut materials, &existing);
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let live: std::collections::HashSet<i64> = grid.entities.iter().map(|e| e.id).collect();
+        for (entity, vis) in &existing {
+            if !live.contains(&vis.entity_id) {
+                commands.entity(entity).despawn();
+            }
+        }
+        let have: std::collections::HashSet<i64> =
+            existing.iter().map(|(_, v)| v.entity_id).collect();
+        let mesh = meshes.add(Cuboid::new(0.5, 0.5, 1.8));
+        let mat_human = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.9, 0.75, 0.55),
+            ..default()
+        });
+        let mat_npc = materials.add(StandardMaterial {
+            base_color: Color::srgb(0.55, 0.85, 0.95),
+            ..default()
+        });
+        for ent in &grid.entities {
+            if have.contains(&ent.id) {
+                continue;
+            }
+            let pos = cell_center_world(ent.x, ent.y, ent.z);
+            let mat = if ent.entity_type == "sim_human" {
+                mat_npc.clone()
+            } else {
+                mat_human.clone()
+            };
+            commands.spawn((
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(mat),
+                Transform::from_translation(pos),
+                ServerEntityVisual { entity_id: ent.id },
+            ));
+        }
+        for (entity, vis) in &existing {
+            if let Some(ent) = grid.entities.iter().find(|e| e.id == vis.entity_id) {
+                commands
+                    .entity(entity)
+                    .insert(Transform::from_translation(cell_center_world(
+                        ent.x, ent.y, ent.z,
+                    )));
+            }
+        }
+    }
+}
+
+fn server_grid_player_move(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    grid: Res<ServerGridState>,
+    inbox: Res<WsInbox>,
+) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (&keyboard, &grid, &inbox);
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(eid) = grid.local_entity_id else {
+            return;
+        };
+        let Some(ent) = grid.entities.iter().find(|e| e.id == eid) else {
+            return;
+        };
+        let (dx, dy) = if keyboard.just_pressed(KeyCode::KeyW)
+            || keyboard.just_pressed(KeyCode::ArrowUp)
+        {
+            (0, 1)
+        } else if keyboard.just_pressed(KeyCode::KeyS) || keyboard.just_pressed(KeyCode::ArrowDown)
+        {
+            (0, -1)
+        } else if keyboard.just_pressed(KeyCode::KeyD) || keyboard.just_pressed(KeyCode::ArrowRight)
+        {
+            (1, 0)
+        } else if keyboard.just_pressed(KeyCode::KeyA) || keyboard.just_pressed(KeyCode::ArrowLeft)
+        {
+            (-1, 0)
+        } else {
+            return;
+        };
+        send_move_with_inbox(eid, ent.x + dx, ent.y + dy, ent.z, &inbox);
+    }
 }
 
 fn sync_game_camera_viewport(

@@ -717,8 +717,7 @@ mod tests {
         let mut layouts = read_save(&path).expect("read save");
         refresh_all_cabin_sides(&mut layouts);
         write_save(&path, &layouts).expect("write save");
-        let public_dir =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/public/saved_ships");
+        let public_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/public/saved_ships");
         std::fs::create_dir_all(&public_dir).expect("create public dir");
         if let Some(name) = path.file_name() {
             let dest = public_dir.join(name);
@@ -761,14 +760,12 @@ mod tests {
         assert_eq!(file.version, SAVE_VERSION);
         let restored = decode_save(&bytes).expect("decode");
         let restored_deck = restored.deck(4);
-        assert!(
-            restored_deck.iter_cells().any(|(_, c)| {
-                c.side1 == SideMaterial::Door
-                    || c.side2 == SideMaterial::Door
-                    || c.side3 == SideMaterial::Door
-                    || c.side4 == SideMaterial::Door
-            })
-        );
+        assert!(restored_deck.iter_cells().any(|(_, c)| {
+            c.side1 == SideMaterial::Door
+                || c.side2 == SideMaterial::Door
+                || c.side3 == SideMaterial::Door
+                || c.side4 == SideMaterial::Door
+        }));
     }
 
     /// `make inspect-ship SAVE_SHIP=...` — deserialize and print CellBox analysis.

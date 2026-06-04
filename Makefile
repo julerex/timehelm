@@ -54,6 +54,13 @@ WGPU_BACKEND ?= vulkan
 build-ship:
 	./scripts/build-ship.sh
 
+# Regenerate cell seed SQL from procedural deck layout (requires Postgres migration 001+002 first).
+seed-cells:
+	cd ship-game && $(CARGO) run --bin export_deck_layout_sql > ../server/migrations/003_seed_cells.sql
+	@echo '-- Spawn sim_human NPCs on sim deck' >> server/migrations/003_seed_cells.sql
+	@echo "INSERT INTO entity (x, y, z, entity_type) SELECT c.x, c.y, c.z, 'sim_human' FROM cell c JOIN floor_material fl ON c.floor = fl.id WHERE c.z = 4 AND fl.name = 'carpet' LIMIT 12 ON CONFLICT DO NOTHING;" >> server/migrations/003_seed_cells.sql
+	@echo "SELECT setval('entity_id_seq', COALESCE((SELECT MAX(id) FROM entity), 1));" >> server/migrations/003_seed_cells.sql
+
 # Run the ship game locally. Builds WASM, then starts Rust server. Open in browser:
 #   http://localhost:8080/
 run-ship: build-ship

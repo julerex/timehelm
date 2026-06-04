@@ -4,17 +4,22 @@
 
 mod app_2d;
 mod app_3d;
-mod cell;
+pub mod cell;
 pub mod cell_box;
 mod deck_geometry;
 pub mod deck_layout;
 mod edit_mode_2d;
+mod grid_state;
 mod load_screen;
 mod plan_mesh;
+mod protocol;
+mod server_world;
 mod shader_embed;
 mod shared;
 mod ship_hull;
 pub mod ship_save;
+mod world_client;
+mod ws_client;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
