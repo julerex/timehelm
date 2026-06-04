@@ -75,7 +75,7 @@ timehelm/
 │   │   ├── game.rs        # Game state, player management
 │   │   ├── websocket.rs   # WebSocket message handling
 │   │   └── db.rs          # Database operations
-│   └── migrations/        # SQL migrations (auto-run on start)
+│   └── migrations/        # SQLx migrations: cell grid, PL/pgSQL sim, seed cells
 ├── scripts/
 │   └── build-ship.sh      # Build Bevy ship game to WASM
 ├── Makefile               # Common development commands (includes make build-ship)
@@ -155,7 +155,8 @@ cd server && cargo test
 
 ## Linting
 
-- **Server:** `cargo fmt --check` + `cargo clippy`
+- **Server:** `make lint-server` (or `cargo fmt` / `cargo clippy` in `server/`)
+- **Cell seed SQL:** `make seed-cells` → `server/migrations/003_seed_cells.sql`
 ```bash
 make lint              # Server only
 ```

@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "ship_game"
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "export_deck_layout_sql"
+path = "src/bin/export_deck_layout_sql.rs"
 
 [dependencies]
 bevy = { version = "0.18", default-features = false, features = [

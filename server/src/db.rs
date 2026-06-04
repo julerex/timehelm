@@ -1,162 +1,194 @@
-//! Database operations module.
-//!
-//! Handles PostgreSQL connection pooling and entity persistence.
+//! PostgreSQL connection and cell-grid simulation API.
 
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::time::Duration;
-use uuid::Uuid;
 
 /// Create a PostgreSQL connection pool.
-///
-/// # Arguments
-/// * `database_url` - PostgreSQL connection string (e.g., `postgresql://user:pass@host/db`)
-///
-/// # Returns
-/// Connection pool with max 10 connections and 5-second acquire timeout
 pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
     let pool = PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(5))
         .connect(database_url)
         .await?;
-
     Ok(pool)
 }
 
-/// Update the game time in minutes in the database.
-///
-/// Persists the current game time to the `game_state` table.
-/// Game time is derived from Unix timestamp (1 real second = 1 game minute).
-///
-/// # Arguments
-/// * `pool` - Database connection pool
-/// * `game_time_minutes` - Current game time in minutes
-pub async fn set_game_time_minutes(pool: &PgPool, game_time_minutes: i64) -> anyhow::Result<()> {
-    sqlx::query("UPDATE game_state SET game_time_minutes = $1 WHERE id = 1")
-        .bind(game_time_minutes as i32)
-        .execute(pool)
-        .await?;
-
+/// Run SQLx migrations from `server/migrations/`.
+pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::migrate!().run(pool).await?;
     Ok(())
 }
 
-/// Get entity type ID by name from the database.
-///
-/// # Arguments
-/// * `pool` - Database connection pool
-/// * `name` - Entity type name (e.g., "human", "ball")
-///
-/// # Returns
-/// Entity type ID from the `entity_types` table
-pub async fn get_entity_type_id(pool: &PgPool, name: &str) -> anyhow::Result<i32> {
-    let id: (i32,) = sqlx::query_as("SELECT id FROM entity_types WHERE name = $1")
-        .bind(name)
+/// Advance simulation by one game second (PL/pgSQL).
+pub async fn sim_tick(pool: &PgPool) -> anyhow::Result<i64> {
+    let row: (i64,) = sqlx::query_as("SELECT sim_tick()").fetch_one(pool).await?;
+    Ok(row.0)
+}
+
+/// Current game time in seconds (starts at 0 on deploy).
+pub async fn get_game_time_seconds(pool: &PgPool) -> anyhow::Result<i64> {
+    let row: (i64,) = sqlx::query_as("SELECT get_game_time_seconds()")
         .fetch_one(pool)
         .await?;
-    Ok(id.0)
+    Ok(row.0)
 }
 
-/// Entity data structure for database operations.
-///
-/// Contains entity information in a format suitable for database storage.
-/// Positions and rotations are stored as integers.
-///
-/// Note: The simulation uses meters, but positions are stored in the DB as
-/// centimeters (integers) for compactness/precision.
-pub struct EntityData {
-    /// Entity identifier (can be UUID string or any string)
-    pub id: String,
-    /// Entity type name (e.g., "human", "ball")
-    pub entity_type_name: String,
-    /// X position in centimeters
-    pub position_x: i32,
-    /// Y position in centimeters
-    pub position_y: i32,
-    /// Z position in centimeters
-    pub position_z: i32,
-    /// X rotation in radians (stored as integer)
-    pub rotation_x: i32,
-    /// Y rotation in radians (stored as integer)
-    pub rotation_y: i32,
-    /// Z rotation in radians (stored as integer)
-    pub rotation_z: i32,
+/// Move an entity to a neighboring cell; returns false if blocked.
+pub async fn move_entity(
+    pool: &PgPool,
+    entity_id: i64,
+    to_x: i32,
+    to_y: i32,
+    to_z: i32,
+) -> anyhow::Result<bool> {
+    let row: (bool,) = sqlx::query_as("SELECT move_entity($1, $2, $3, $4)")
+        .bind(entity_id)
+        .bind(to_x)
+        .bind(to_y)
+        .bind(to_z)
+        .fetch_one(pool)
+        .await?;
+    Ok(row.0)
 }
 
-/// Upsert (insert or update) an entity in the database.
-///
-/// If the entity ID already exists, the entity is updated.
-/// If it doesn't exist, a new entity is inserted.
-///
-/// Entity IDs can be UUID strings or any string identifier.
-/// Non-UUID strings are converted to deterministic UUID v5 for storage.
-///
-/// # Arguments
-/// * `pool` - Database connection pool
-/// * `data` - Entity data to save
-pub async fn upsert_entity(pool: &PgPool, data: &EntityData) -> anyhow::Result<()> {
-    let type_id = get_entity_type_id(pool, &data.entity_type_name).await?;
-    // Try to parse as UUID, if it fails, generate a deterministic UUID v5 from the string
-    let uuid_id = Uuid::parse_str(&data.id).unwrap_or_else(|_| {
-        // Use a fixed namespace UUID for entity IDs
-        let namespace = Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap();
-        Uuid::new_v5(&namespace, data.id.as_bytes())
-    });
-
-    sqlx::query(
+/// Create an entity on a cell; returns new entity id.
+pub async fn create_entity(
+    pool: &PgPool,
+    entity_type: &str,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> anyhow::Result<i64> {
+    let row: (i64,) = sqlx::query_as(
         r#"
-        INSERT INTO entities (id, entity_type_id, position_x, position_y, position_z, rotation_x, rotation_y, rotation_z)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (id) DO UPDATE SET
-            entity_type_id = EXCLUDED.entity_type_id,
-            position_x = EXCLUDED.position_x,
-            position_y = EXCLUDED.position_y,
-            position_z = EXCLUDED.position_z,
-            rotation_x = EXCLUDED.rotation_x,
-            rotation_y = EXCLUDED.rotation_y,
-            rotation_z = EXCLUDED.rotation_z,
-            updated_at = NOW()
+        INSERT INTO entity (x, y, z, entity_type)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
         "#,
     )
-    .bind(uuid_id)
-    .bind(type_id)
-    .bind(data.position_x)
-    .bind(data.position_y)
-    .bind(data.position_z)
-    .bind(data.rotation_x)
-    .bind(data.rotation_y)
-    .bind(data.rotation_z)
-    .execute(pool)
+    .bind(x)
+    .bind(y)
+    .bind(z)
+    .bind(entity_type)
+    .fetch_one(pool)
     .await?;
+    Ok(row.0)
+}
 
+pub async fn delete_entity(pool: &PgPool, entity_id: i64) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM entity WHERE id = $1")
+        .bind(entity_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
-/// Save all entities to the database.
-///
-/// Converts game entities to database format and upserts them.
-/// Called periodically (every 60 seconds) to persist game state.
-///
-/// # Arguments
-/// * `pool` - Database connection pool
-/// * `entities` - Slice of game entities to save
-pub async fn save_all_entities(
-    pool: &PgPool,
-    entities: &[crate::game::Entity],
-) -> anyhow::Result<()> {
-    for entity in entities {
-        // Simulation is in meters; DB storage is centimeters as integers.
-        let to_db_cm = |meters: f32| (meters * 100.0).round() as i32;
-        let data = EntityData {
-            id: entity.id.clone(),
-            entity_type_name: entity.entity_type.as_str().to_string(),
-            position_x: to_db_cm(entity.position.x),
-            position_y: to_db_cm(entity.position.y),
-            position_z: to_db_cm(entity.position.z),
-            rotation_x: entity.rotation.x as i32,
-            rotation_y: entity.rotation.y as i32,
-            rotation_z: entity.rotation.z as i32,
-        };
-        upsert_entity(pool, &data).await?;
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct GridEntity {
+    pub id: i64,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub entity_type: String,
+}
+
+pub async fn fetch_entities(pool: &PgPool) -> anyhow::Result<Vec<GridEntity>> {
+    let rows = sqlx::query_as::<_, GridEntity>(
+        r#"
+        SELECT id, x, y, z, entity_type
+        FROM entity
+        ORDER BY id
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CellApiRow {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub bow_wall: String,
+    pub stern_wall: String,
+    pub port_wall: String,
+    pub starboard_wall: String,
+    pub floor: String,
+    pub ceiling: String,
+}
+
+pub async fn fetch_all_cells(pool: &PgPool) -> anyhow::Result<Vec<CellApiRow>> {
+    fetch_cells_query(pool, None).await
+}
+
+pub async fn fetch_cells_on_deck(pool: &PgPool, deck_z: i32) -> anyhow::Result<Vec<CellApiRow>> {
+    fetch_cells_query(pool, Some(deck_z)).await
+}
+
+async fn fetch_cells_query(pool: &PgPool, deck_z: Option<i32>) -> anyhow::Result<Vec<CellApiRow>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            c.x,
+            c.y,
+            c.z,
+            bw.name AS bow_wall,
+            sw.name AS stern_wall,
+            pw.name AS port_wall,
+            stw.name AS starboard_wall,
+            fl.name AS floor,
+            ce.name AS ceiling
+        FROM cell c
+        JOIN wall_material bw ON c.bow_wall = bw.id
+        JOIN wall_material sw ON c.stern_wall = sw.id
+        JOIN wall_material pw ON c.port_wall = pw.id
+        JOIN wall_material stw ON c.starboard_wall = stw.id
+        JOIN floor_material fl ON c.floor = fl.id
+        JOIN ceiling_material ce ON c.ceiling = ce.id
+        WHERE ($1::INT IS NULL OR c.z = $1)
+        ORDER BY c.z, c.x, c.y
+        "#,
+    )
+    .bind(deck_z)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(CellApiRow {
+            x: row.get("x"),
+            y: row.get("y"),
+            z: row.get("z"),
+            bow_wall: row.get("bow_wall"),
+            stern_wall: row.get("stern_wall"),
+            port_wall: row.get("port_wall"),
+            starboard_wall: row.get("starboard_wall"),
+            floor: row.get("floor"),
+            ceiling: row.get("ceiling"),
+        });
     }
-    Ok(())
+    Ok(out)
+}
+
+/// Find a walkable spawn cell on deck `z` (corridor with open-ish neighbors).
+pub async fn find_spawn_cell(
+    pool: &PgPool,
+    deck_z: i32,
+) -> anyhow::Result<Option<(i32, i32, i32)>> {
+    let row = sqlx::query_as::<_, (i32, i32, i32)>(
+        r#"
+        SELECT c.x, c.y, c.z
+        FROM cell c
+        JOIN floor_material fl ON c.floor = fl.id
+        WHERE c.z = $1 AND fl.name = 'carpet'
+        ORDER BY c.x, c.y
+        LIMIT 1
+        "#,
+    )
+    .bind(deck_z)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
 }

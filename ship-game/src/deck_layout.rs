@@ -15,6 +15,9 @@ use std::collections::{HashMap, HashSet};
 /// Number of simulated decks (0-based indices).
 pub const NUM_DECKS: usize = 20;
 
+/// Default deck for NPC / player simulation (0-based deck index 4 = deck 5).
+pub const SIM_DECK_INDEX: usize = 4;
+
 /// Square deck cell size (m). **1 m** grid spacing in plan view and 3D deck slabs.
 pub const CELL_SIZE_M: f32 = 1.0;
 
@@ -905,11 +908,7 @@ fn edge_side(
     }
 }
 
-fn assign_cell_sides(
-    build: &mut DeckBuild,
-    deck_index: usize,
-    corridor_cells: &HashSet<PlanKey>,
-) {
+fn assign_cell_sides(build: &mut DeckBuild, deck_index: usize, corridor_cells: &HashSet<PlanKey>) {
     let occupied: HashSet<_> = build.cells.keys().copied().collect();
     let coords: Vec<_> = build.cells.keys().copied().collect();
     for plan in coords {
@@ -998,19 +997,13 @@ fn neighbor_is_corridor(
     plan: PlanKey,
     wall_idx: usize,
 ) -> bool {
-    neighbor_plan(plan, wall_idx).is_some_and(|nb| {
-        occupied.contains(&nb) && corridor_cells.contains(&nb)
-    })
+    neighbor_plan(plan, wall_idx)
+        .is_some_and(|nb| occupied.contains(&nb) && corridor_cells.contains(&nb))
 }
 
-fn neighbor_is_hull(
-    occupied: &HashSet<PlanKey>,
-    plan: PlanKey,
-    wall_idx: usize,
-) -> bool {
+fn neighbor_is_hull(occupied: &HashSet<PlanKey>, plan: PlanKey, wall_idx: usize) -> bool {
     neighbor_plan(plan, wall_idx).is_none_or(|nb| !occupied.contains(&nb))
 }
-
 
 fn assign_perimeter_cabin_sides_for_deck(
     build: &mut DeckBuild,
@@ -1031,10 +1024,8 @@ fn assign_perimeter_cabin_sides_for_deck(
         if is_perimeter_cabin_cell(deck_index, coord, cell, occupied).is_none() {
             continue;
         }
-        let ox =
-            (coord.0 as i32).div_euclid(CABIN_LENGTH_CELLS) as u16 * CABIN_LENGTH_CELLS as u16;
-        let oy =
-            (coord.1 as i32).div_euclid(CABIN_WIDTH_CELLS) as u16 * CABIN_WIDTH_CELLS as u16;
+        let ox = (coord.0 as i32).div_euclid(CABIN_LENGTH_CELLS) as u16 * CABIN_LENGTH_CELLS as u16;
+        let oy = (coord.1 as i32).div_euclid(CABIN_WIDTH_CELLS) as u16 * CABIN_WIDTH_CELLS as u16;
         module_anchors.insert((ox, oy));
     }
 
@@ -1047,7 +1038,11 @@ fn assign_perimeter_cabin_sides_for_deck(
             if cabin_room_key(coord) != cabin_room_key((ox, oy)) {
                 continue;
             }
-            if build.cells.get(&coord).is_some_and(|c| c.floor == FloorMaterial::Wood) {
+            if build
+                .cells
+                .get(&coord)
+                .is_some_and(|c| c.floor == FloorMaterial::Wood)
+            {
                 module_cells.push(coord);
             }
         }
@@ -1092,10 +1087,8 @@ fn assign_perimeter_cabin_sides_for_deck(
             }
             if neighbor_is_corridor(occupied, corridor_cells, door_cell, inboard_wi) {
                 door_x = Some(end_x);
-                *side_material_mut(
-                    build.cells.get_mut(&door_cell).expect("cell"),
-                    inboard_wi,
-                ) = SideMaterial::Door;
+                *side_material_mut(build.cells.get_mut(&door_cell).expect("cell"), inboard_wi) =
+                    SideMaterial::Door;
                 break;
             }
         }
@@ -1304,7 +1297,10 @@ mod cabin_sides_tests {
                 "cabin interior at {plan:?} should have open sides"
             );
         }
-        assert!(interior_count > 0, "expected cabin interior cells on deck 5");
+        assert!(
+            interior_count > 0,
+            "expected cabin interior cells on deck 5"
+        );
     }
 }
 
