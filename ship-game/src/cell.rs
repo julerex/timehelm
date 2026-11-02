@@ -56,12 +56,7 @@ pub enum SideMaterial {
 impl SideMaterial {
     pub const COUNT: usize = 4;
 
-    pub const ALL: [Self; Self::COUNT] = [
-        Self::Open,
-        Self::MarinePanel,
-        Self::Door,
-        Self::Window,
-    ];
+    pub const ALL: [Self; Self::COUNT] = [Self::Open, Self::MarinePanel, Self::Door, Self::Window];
 
     pub fn idx(self) -> usize {
         self as usize

@@ -2,8 +2,7 @@
 
 use crate::cell_box;
 use crate::deck_geometry::{
-    merged_plan_rectangles_mesh_colored, merged_plan_wall_borders_mesh_varied_colored,
-    PlanWallEdge,
+    merged_plan_rectangles_mesh_colored, merged_plan_wall_borders_mesh_varied_colored, PlanWallEdge,
 };
 use crate::deck_layout::{DeckCells, DeckLayouts, CELL_VISUAL_SCALE, NUM_DECKS};
 use bevy::prelude::*;
@@ -101,13 +100,21 @@ pub fn collect_deck_side_walls_3d(
         let x1 = c.x + half_x;
 
         let sides = [
-            (cell.side1, Vec3::new(x1, c.y, z_center), Vec3::new(half_t, half_y, half_h)),
+            (
+                cell.side1,
+                Vec3::new(x1, c.y, z_center),
+                Vec3::new(half_t, half_y, half_h),
+            ),
             (
                 cell.side2,
                 Vec3::new(c.x, y1, z_center),
                 Vec3::new(half_x, half_t, half_h),
             ),
-            (cell.side3, Vec3::new(x0, c.y, z_center), Vec3::new(half_t, half_y, half_h)),
+            (
+                cell.side3,
+                Vec3::new(x0, c.y, z_center),
+                Vec3::new(half_t, half_y, half_h),
+            ),
             (
                 cell.side4,
                 Vec3::new(c.x, y0, z_center),
