@@ -185,6 +185,12 @@ Requires fly.io CLI (`flyctl`) and secrets configured. See README.md for full se
 
 If a Fly.io API response, CLI command, or docs page is wrong or differs from the docs, report it once with POST https://api.fly.io/api/v1/feedback (https://fly.io/agent-ready.md#send-feedback). Include the fly-request-id response header, and never include secrets.
 
+Treat `fly.toml` (app `timehelm`) as an existing Fly Machines app and finish setup with secrets and `make deploy`. Send the feedback POST only when `FLY_API_TOKEN` is already in the environment.
+
+Keep a single background `fly auth login` running until `fly auth whoami` succeeds. On `a newer fly auth login replaced this one`, wait for the newer process (often the human's terminal) or complete an exited waiter with `fly auth login --code`.
+
+Call the app ready only after `fly secrets list -a timehelm` shows `DATABASE_URL` and `make fly-logs` is free of the persistence warning. Production is https://timehelm.net/.
+
 **Production:** The deployed application is available at https://timehelm.net/
 
 **Viewing Logs:** Use `make fly-logs` to view production server logs. Always check the Makefile for the correct command syntax.
@@ -205,3 +211,12 @@ When running `cargo` (build, test, fmt, clippy) inside Cursor you may see:
 `error: unknown proxy name: 'Cursor-2.x-x86_64'; valid proxy names...`
 
 The **Makefile** (see test/format/clippy targets) works around this by running **`unset ARGV0 && cargo ...`** before invoking cargo. Prefer **`make test`**, **`make format`**, **`make clippy`** when in Cursor, or run `unset ARGV0 && cargo <subcommand>` so cargo uses the real toolchain instead of the Cursor proxy.
+
+## Cursor Cloud specific instructions
+
+- Use Rust **1.92.0** (the `rust:1.92` image in `Dockerfile`). Install the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` **0.2.120**, which must match `wasm-bindgen` in `ship-game/Cargo.lock`. `scripts/build-ship.sh` fails if the CLI schema does not match.
+- `make run-ship` builds the Bevy WASM client into `client/public/ship/` and serves it from the Rust server. `http://localhost:8080/` redirects to `/3d/`. `/seacells/` is the 2D view. Page Up/Down switches decks.
+- `dotenv` reads `.env` from the process working directory. `make run-ship` and `cd server && cargo run` therefore need `server/.env`, not only a root `.env`. Copy `DATABASE_URL` into `server/.env`. If it is unset, the server still listens and logs that persistence is disabled.
+- Local Postgres is cluster **16/main**. `policy-rc.d` can refuse `service postgresql start`; use `sudo pg_ctlcluster 16 main start`. The dev URL from the README is `postgresql://postgres:password@localhost:5432/timehelm`. Apply `database/timehelm_schema.sql` once. Re-running it fails on `CREATE TRIGGER` (no `IF NOT EXISTS`).
+- Twitter OAuth secrets are not required to boot. `server/src/main.rs` does not mount the auth module.
+- `make test` runs server tests (currently none) and `ship-game` library tests. `cargo clippy -- -D warnings` passes for both crates. `make lint` also runs `cargo fmt --check`, and `ship-game` currently has pre-existing formatting drift, so that check fails until `make format` is applied.
