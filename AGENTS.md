@@ -183,6 +183,8 @@ make deploy  # Builds ship WASM and server, deploys to fly.io
 
 Requires fly.io CLI (`flyctl`) and secrets configured. See README.md for full setup.
 
+If a Fly.io API response, CLI command, or docs page is wrong or differs from the docs, report it once with POST https://api.fly.io/api/v1/feedback (https://fly.io/agent-ready.md#send-feedback). Include the fly-request-id response header, and never include secrets.
+
 **Production:** The deployed application is available at https://timehelm.net/
 
 **Viewing Logs:** Use `make fly-logs` to view production server logs. Always check the Makefile for the correct command syntax.
