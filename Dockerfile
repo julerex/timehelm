@@ -20,6 +20,10 @@ RUN cargo build --release
 FROM rust:1.92 as ship-builder
 
 WORKDIR /app
+# zstd-sys compiles its C sources for wasm32-unknown-unknown. cc-rs uses clang
+# for that target; the stock Rust image only has gcc, which has no wasm backend.
+RUN apt-get update && apt-get install -y --no-install-recommends clang \
+    && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
 # Must match ship-game's wasm-bindgen crate version in Cargo.lock (schema must match CLI).
 RUN cargo install wasm-bindgen-cli --version 0.2.120
