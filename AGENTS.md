@@ -183,6 +183,12 @@ make deploy  # Builds ship WASM and server, deploys to fly.io
 
 Requires fly.io CLI (`flyctl`) and secrets configured. See README.md for full setup.
 
+Treat `fly.toml` (app `timehelm`) as an existing Fly Machines app and finish setup with secrets and `make deploy`. Send the feedback POST only when `FLY_API_TOKEN` is already in the environment.
+
+Keep a single background `fly auth login` running until `fly auth whoami` succeeds. On `a newer fly auth login replaced this one`, wait for the newer process (often the human's terminal) or complete an exited waiter with `fly auth login --code`.
+
+Call the app ready only after `fly secrets list -a timehelm` shows `DATABASE_URL` and `make fly-logs` is free of the persistence warning. Production is https://timehelm.net/.
+
 **Production:** The deployed application is available at https://timehelm.net/
 
 **Viewing Logs:** Use `make fly-logs` to view production server logs. Always check the Makefile for the correct command syntax.
