@@ -1,21 +1,21 @@
 //! Cruise-ship deck outline in plan view (world **X** = aft→fore, **Y** = starboard→port).
 //! Origin at the aft-starboard corner; footprint matches [`SHIP_LENGTH_M`] × [`SHIP_BEAM_M`].
 
-use bevy::prelude::*;
+use glam::Vec2;
 
-/// Overall waterline length (bow tip to stern tip), metres — Oasis-class scale from reference plan.
+/// Overall waterline length (bow tip to stern tip), metres.
 pub const SHIP_LENGTH_M: f32 = 318.0;
-/// Maximum beam (width), metres (reference Deck 10 plan).
+/// Maximum beam (width), metres.
 pub const SHIP_BEAM_M: f32 = 60.0;
 
-/// Half-width of the open central void (atrium / “Central Park”), metres (~22 m total ≈ 37% of beam).
+/// Half-width of the open central void on upper decks, metres.
 pub const UPPER_VOID_HALF_WIDTH_M: f32 = 11.0;
 /// Forward (bow) end of the void along **+X** (metres from aft origin).
 pub const UPPER_VOID_X_FWD_M: f32 = SHIP_LENGTH_M * 0.5 + 50.0;
 /// Aft end of the void along **+X** (metres from aft origin).
 pub const UPPER_VOID_X_AFT_M: f32 = SHIP_LENGTH_M * 0.5 - 78.0;
-/// First deck index (0-based) that uses the upper-deck footprint with courtyard + U-stern.
-pub const FIRST_UPPER_DECK_STYLE_INDEX: usize = 9;
+/// First deck index that uses the upper-deck footprint (courtyard and U-stern).
+pub const UPPER_DECK_START: usize = 9;
 
 fn smoothstep01(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -37,7 +37,6 @@ fn deck_hull_polygon_centered() -> Vec<Vec2> {
     let y_bow_parallel = half_len - 0.22 * SHIP_LENGTH_M;
 
     let mut v = Vec::with_capacity(64);
-
     v.push(Vec2::new(0.0, half_len));
 
     for i in 0..12 {
@@ -69,7 +68,7 @@ fn deck_hull_polygon_centered() -> Vec<Vec2> {
     v
 }
 
-/// Closed deck outer boundary (CCW in XY, viewed from +Z). Bow at +X; origin aft-starboard.
+/// Closed lower-deck outer boundary. Bow at +X; origin aft-starboard.
 pub fn deck_hull_polygon() -> Vec<Vec2> {
     deck_hull_polygon_centered()
         .into_iter()
@@ -90,7 +89,6 @@ fn deck_hull_polygon_upper_centered() -> Vec<Vec2> {
     let y_wing_inner = y_stern_outer + r_wing;
 
     let mut v = Vec::with_capacity(72);
-
     v.push(Vec2::new(0.0, half_len));
 
     for i in 0..12 {
@@ -137,7 +135,7 @@ fn deck_hull_polygon_upper_centered() -> Vec<Vec2> {
     v
 }
 
-/// Upper-deck plan: bow fairing, long parallel sides, **U-shaped stern**, and central courtyard void.
+/// Upper-deck plan: bow fairing, parallel sides, U-shaped stern, and a central void.
 pub fn deck_hull_polygon_upper() -> Vec<Vec2> {
     deck_hull_polygon_upper_centered()
         .into_iter()
@@ -145,7 +143,16 @@ pub fn deck_hull_polygon_upper() -> Vec<Vec2> {
         .collect()
 }
 
-/// Ray-cast point-in-polygon (robust for deck footprint).
+/// Hull polygon for a deck index. Upper decks include the courtyard void.
+pub fn hull_for_deck(deck: usize) -> Vec<Vec2> {
+    if deck >= UPPER_DECK_START {
+        deck_hull_polygon_upper()
+    } else {
+        deck_hull_polygon()
+    }
+}
+
+/// Ray-cast point-in-polygon.
 pub fn point_in_polygon(point: Vec2, poly: &[Vec2]) -> bool {
     if poly.len() < 3 {
         return false;
@@ -186,16 +193,13 @@ mod tests {
     fn upper_deck_excludes_atrium_void() {
         let poly = deck_hull_polygon_upper();
         let mid = Vec2::new(SHIP_LENGTH_M * 0.5, SHIP_BEAM_M * 0.5);
-        assert!(
-            !point_in_polygon(mid, &poly),
-            "midship centreline should be open void"
-        );
+        assert!(!point_in_polygon(mid, &poly));
         let aft_void = Vec2::new(SHIP_LENGTH_M * 0.5 - 40.0, SHIP_BEAM_M * 0.5);
         assert!(!point_in_polygon(aft_void, &poly));
     }
 
     #[test]
-    fn upper_deck_includes_side_cabins_and_bow() {
+    fn upper_deck_includes_side_and_bow() {
         let poly = deck_hull_polygon_upper();
         assert!(point_in_polygon(
             legacy_centered_to_plan(Vec2::new(24.0, 5.0)),

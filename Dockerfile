@@ -1,23 +1,21 @@
-# Build stage for Rust server
-FROM rust:1.92 as rust-builder
+# Build stage for the Rust server. The repo is a Cargo workspace, so the
+# binary is /app/target/release/timehelm-server rather than a per-crate target.
+FROM rust:1.92 AS rust-builder
 
 WORKDIR /app
 
-# Copy Cargo files for dependency caching
-COPY server/Cargo.toml ./server/
-RUN mkdir -p server/src && echo "fn main() {}" > server/src/main.rs
-# Build dependencies only (for caching)
-RUN cd server && cargo build --release || true
-
-# Copy source code (this will overwrite the dummy main.rs)
+COPY Cargo.toml Cargo.lock ./
+COPY sim ./sim
 COPY server ./server
+COPY ship-game/Cargo.toml ./ship-game/Cargo.toml
+RUN mkdir -p ship-game/src && printf 'pub fn run_native() {}\n' > ship-game/src/lib.rs \
+    && printf 'fn main() {}\n' > ship-game/src/main.rs
+RUN cargo build --release -p timehelm-server
+COPY ship-game ./ship-game
+RUN cargo build --release -p timehelm-server
 
-# Build the application
-WORKDIR /app/server
-RUN cargo build --release
-
-# Build stage for ship game (Bevy WASM)
-FROM rust:1.92 as ship-builder
+# Build stage for the Bevy viewer.
+FROM rust:1.92 AS ship-builder
 
 WORKDIR /app
 # zstd-sys compiles its C sources for wasm32-unknown-unknown. cc-rs uses clang
@@ -25,17 +23,21 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends clang \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown
-# Must match ship-game's wasm-bindgen crate version in Cargo.lock (schema must match CLI).
-RUN cargo install wasm-bindgen-cli --version 0.2.120
+# Must match wasm-bindgen in Cargo.lock (web-sys 0.3.107 requires 0.2.130).
+RUN cargo install wasm-bindgen-cli --version 0.2.130
 
+COPY Cargo.toml Cargo.lock ./
+COPY sim ./sim
+COPY server/Cargo.toml ./server/Cargo.toml
+RUN mkdir -p server/src && printf 'fn main() {}\n' > server/src/main.rs
 COPY ship-game ./ship-game
-RUN RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build --manifest-path ship-game/Cargo.toml --target wasm32-unknown-unknown --release
+RUN RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build --release -p ship-game --target wasm32-unknown-unknown
 
 RUN mkdir -p /app/client-public/ship && \
     wasm-bindgen --no-typescript --target web \
         --out-dir /app/client-public/ship \
         --out-name ship \
-        /app/ship-game/target/wasm32-unknown-unknown/release/ship_game.wasm
+        /app/target/wasm32-unknown-unknown/release/ship_game.wasm
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -46,15 +48,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy the binary from builder
-COPY --from=rust-builder /app/server/target/release/timehelm-server /app/server
-
-# Copy static files: client/public (index.html, run.js) + ship WASM
+COPY --from=rust-builder /app/target/release/timehelm-server /app/server
 COPY client/public ./client/public
 COPY --from=ship-builder /app/client-public/ship ./client/public/ship
 
-# Expose port
 EXPOSE 8080
 
-# Run the server
 CMD ["/app/server"]

@@ -1,12 +1,5 @@
-.PHONY: dev build deploy install lint lint-server lint-ship fmt test build-ship run-ship build-ship-native run-ship-native run-ship-native-gl run-ship-native-vulkan \
-	gh-check ci ci-list ci-here ci-watch ci-watch-here ci-view ci-log ci-status \
-	inspect-ship write-ship-default refresh-ship-sides
-
-# Compressed ship save for agent analysis (override: make inspect-ship SAVE_SHIP=path/to/file.ship.zst)
-SAVE_SHIP ?= saved_ships/latest.ship.zst
-ifdef SAVE
-SAVE_SHIP := $(SAVE)
-endif
+.PHONY: dev build deploy install lint lint-server lint-ship lint-sim fmt test build-ship run-ship build-ship-native run-ship-native run-ship-native-gl run-ship-native-vulkan \
+	gh-check ci ci-list ci-here ci-watch ci-watch-here ci-view ci-log ci-status
 
 # Cursor sets ARGV0 to its binary path, which breaks cargo's proxy detection.
 CARGO = env -u ARGV0 cargo
@@ -74,7 +67,11 @@ run-ship-native-vulkan:
 install:
 	cd server && $(CARGO) build
 
-lint: lint-server lint-ship
+lint: lint-sim lint-server lint-ship
+
+lint-sim:
+	cd sim && $(CARGO) fmt --check
+	cd sim && $(CARGO) clippy -- -D warnings
 
 lint-server:
 	cd server && $(CARGO) fmt --check
@@ -85,10 +82,12 @@ lint-ship:
 	cd ship-game && $(CARGO) clippy -- -D warnings
 
 fmt:
+	cd sim && $(CARGO) fmt
 	cd server && $(CARGO) fmt
 	cd ship-game && $(CARGO) fmt
 
 test:
+	cd sim && $(CARGO) test
 	cd server && $(CARGO) test
 	cd ship-game && $(CARGO) test
 
@@ -108,18 +107,3 @@ fly-db-connect:
 
 fly-logs:
 	fly logs --app timehelm
-
-# Deserialize a saved ship and print CellBox / deck summary (for agents).
-inspect-ship:
-	cd ship-game && SAVE_SHIP=$(abspath $(SAVE_SHIP)) $(CARGO) test --lib ship_save::tests::inspect_ship_save -- --exact --ignored --nocapture
-
-# Reassign perimeter cabin doors/windows on a save (default: saved_ships/latest.ship.zst).
-refresh-ship-sides:
-	cd ship-game && SAVE_SHIP=$(abspath $(SAVE_SHIP)) $(CARGO) test --lib ship_save::tests::refresh_ship_sides_save -- --exact --ignored --nocapture
-
-# Write procedural default layout to saved_ships/default.ship.zst (for testing inspect-ship).
-write-ship-default:
-	@mkdir -p saved_ships client/public/saved_ships
-	cd ship-game && $(CARGO) test --lib ship_save::tests::write_default_ship_save -- --exact --nocapture
-	@cp -f saved_ships/*.ship.zst client/public/saved_ships/ 2>/dev/null || true
-	@cd ship-game && $(CARGO) test --lib ship_save::tests::sync_public_save_manifest -- --exact --nocapture

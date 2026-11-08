@@ -1,43 +1,56 @@
-import init, { run } from './ship.js';
+import init, { run } from './ship.js?v=3';
 
 const canvas = document.getElementById('ship-game-canvas');
 
-canvas?.addEventListener('keydown', (event) => {
-    const ctrl = event.ctrlKey || event.metaKey;
-    if (
-        event.code === 'PageUp' ||
-        event.code === 'PageDown' ||
-        event.code === 'ArrowUp' ||
-        event.code === 'ArrowDown' ||
-        event.code === 'Space' ||
-        (ctrl &&
-            (event.code === 'KeyS' ||
-                event.code === 'KeyC' ||
-                event.code === 'KeyV'))
-    ) {
-        event.preventDefault();
-    }
-}, { passive: false });
-
-/** Resolves run mode from URL path: `/seacells` or `/3d` (with optional trailing slash). */
-function modeFromPathname() {
-    let path = window.location.pathname;
-    while (path.length > 1 && path.endsWith('/')) {
-        path = path.slice(0, -1);
-    }
-    if (path === '/seacells') {
-        return 1;
-    }
-    if (path === '/3d') {
-        return 0;
-    }
-    return null;
+function isGameKey(code) {
+    return (
+        code === 'PageUp' ||
+        code === 'PageDown' ||
+        code === 'Space' ||
+        code === 'KeyK' ||
+        code === 'KeyW' ||
+        code === 'KeyA' ||
+        code === 'KeyS' ||
+        code === 'KeyD' ||
+        code === 'KeyQ' ||
+        code === 'KeyE' ||
+        code === 'KeyR' ||
+        code === 'KeyF' ||
+        code === 'KeyZ' ||
+        code === 'KeyX'
+    );
 }
 
-/** On WASM, Bevy returns from `run()` immediately after spawning the winit loop; a second `run()` panics with RecreationAttempt. */
+// Winit listens for keys on the canvas. Forward a key that landed elsewhere
+// so the first press still reaches the viewer.
+function forwardKey(event) {
+    if (!canvas || !isGameKey(event.code)) {
+        return;
+    }
+    event.preventDefault();
+    if (event.target === canvas) {
+        return;
+    }
+    canvas.focus();
+    canvas.dispatchEvent(
+        new KeyboardEvent(event.type, {
+            key: event.key,
+            code: event.code,
+            bubbles: true,
+            cancelable: true,
+            repeat: event.repeat,
+        }),
+    );
+}
+
+window.addEventListener('keydown', forwardKey, true);
+window.addEventListener('keyup', forwardKey, true);
+window.addEventListener('pointerdown', () => canvas?.focus());
+
+/** Bevy returns from `run()` once the winit loop is spawned. A second call panics. */
 let gameLaunchStarted = false;
 
-async function startGame(mode) {
+async function startGame() {
     if (gameLaunchStarted) {
         return;
     }
@@ -50,23 +63,17 @@ async function startGame(mode) {
         }
         if (canvas) {
             canvas.focus();
-            canvas.addEventListener('pointerdown', () => canvas.focus());
         }
         await init();
-        run(mode);
+        run(0);
     } catch (err) {
         gameLaunchStarted = false;
         throw err;
     }
 }
 
-const mode = modeFromPathname();
-if (mode !== null) {
-    startGame(mode).catch((error) => {
-        if (!error.message.startsWith('Using exceptions for control flow')) {
-            console.error(error);
-        }
-    });
-} else {
-    console.error('Time Helm: open /seacells/ or /3d/');
-}
+startGame().catch((error) => {
+    if (!error.message.startsWith('Using exceptions for control flow')) {
+        console.error(error);
+    }
+});

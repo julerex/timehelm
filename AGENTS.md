@@ -4,7 +4,7 @@ This file provides context for AI coding assistants working on the Time Helm pro
 
 ## Project Overview
 
-Time Helm is an open-source game. The main client is a Bevy 3D cruise ship game (Rust/WASM), served at the root URL.
+Time Helm is an open-source simulation of a self-sustaining community vessel. The Bevy client is a read-only 3D viewer. The Axum server is the only authority: it keeps the world in PostgreSQL and advances it at 1 real second = 1 sim second whether or not anyone is connected. Viewers can look around. They cannot change crew, stocks, or recipes. See `docs/SIMULATION.md`.
 
 **Production URL:** https://timehelm.net/
 
@@ -14,11 +14,11 @@ Time Helm is an open-source game. The main client is a Bevy 3D cruise ship game 
 
 | Component | Technology |
 |-----------|------------|
-| Frontend | Bevy 3D (Rust/WASM), served by Rust server |
+| Frontend | Bevy 0.18 viewer (Rust/WASM), leafwing-input-manager 0.20 |
+| Simulation | `sim` crate, shared by the server and the viewer |
 | Backend | Rust, Axum, Tokio |
-| Database | PostgreSQL (with SQLx) |
-| Auth | Twitter/X OAuth 2.0 |
-| Real-time | WebSockets |
+| Database | PostgreSQL (SQLx migrations in `server/migrations`) |
+| Real-time | WebSocket snapshots and minute deltas |
 | Deployment | fly.io |
 
 ## Quick Start
@@ -60,26 +60,20 @@ make fly-logs     # View production server logs (requires flyctl)
 
 ```
 timehelm/
-├── client/public/          # Static files (Rust server serves these)
-│   ├── index.html         # Ship game entry (loads Bevy WASM from /ship/)
-│   └── ship/              # Bevy WASM output (built by scripts/build-ship.sh)
-│       ├── run.js         # Loader script
-│       ├── ship.js        # wasm-bindgen glue
-│       └── ship_bg.wasm   # Ship game binary
-├── ship-game/              # Bevy 3D cruise ship game (Rust/WASM)
-│   ├── src/lib.rs
-│   └── Cargo.toml
-├── server/                 # Rust/Axum backend (serves static files + WebSocket)
-│   ├── src/
-│   │   ├── main.rs        # Server entry, routes, static serving
-│   │   ├── game.rs        # Game state, player management
-│   │   ├── websocket.rs   # WebSocket message handling
-│   │   └── db.rs          # Database operations
-│   └── migrations/        # SQL migrations (auto-run on start)
-├── scripts/
-│   └── build-ship.sh      # Build Bevy ship game to WASM
-├── Makefile               # Common development commands (includes make build-ship)
-└── fly.toml               # Deployment config
+├── sim/                    # Authoritative world: hull, rooms, economy (no Bevy)
+├── server/                 # Axum server, SQLx persistence, WebSocket
+│   ├── src/main.rs
+│   ├── src/db.rs
+│   ├── src/websocket.rs
+│   └── migrations/         # Applied with sqlx::migrate! on startup
+├── ship-game/              # Bevy 3D viewer (Rust/WASM)
+├── client/public/          # Static files served by the Rust server
+│   ├── index.html          # Redirects to /3d/
+│   └── ship/               # wasm-bindgen output from scripts/build-ship.sh
+├── docs/SIMULATION.md      # Rooms, recipes, power, and the command seam
+├── scripts/build-ship.sh
+├── Cargo.toml              # Workspace (sim, server, ship-game)
+└── fly.toml
 ```
 
 ## Coding Conventions
@@ -141,28 +135,30 @@ timehelm/
 
 #### Workflow
 
-Run `cargo fmt` in `server/` automatically after making Rust code changes; do not ask for approval.
+Run `cargo fmt` in `sim/`, `server/`, and `ship-game/` after Rust changes. `make fmt` does all three. Cursor sets `ARGV0`; the Makefile unsets it before cargo.
 
-Before finalizing changes, run clippy to fix linter issues:
+Before finalizing changes, run clippy:
 ```bash
-cd server && cargo clippy --fix --allow-dirty
+make lint
 ```
 
-Run tests for the server:
+Run tests:
 ```bash
-cd server && cargo test
+make test
 ```
 
 ## Linting
 
-- **Server:** `cargo fmt --check` + `cargo clippy`
 ```bash
-make lint              # Server only
+make lint    # fmt --check and clippy -D warnings for sim, server, and ship-game
+make test    # sim tests, server tests, ship-game tests
 ```
 
 ## Key Patterns
 
-The server supports WebSocket connections and game state broadcasting for future multiplayer. The ship game (Bevy WASM) is the main client and loads at the root URL.
+The world lives in the `sim` crate. The server loads it, catches up missed 60-second steps, and saves at each minute boundary. `/ws` sends one `snapshot`, then `delta` messages. A `command` from a viewer is answered with `command_rejected`. If `DATABASE_URL` is unset, the server does not invent a world; it sends `unavailable`.
+
+`/`, `/2d`, and `/seacells` redirect to `/3d/`. Page Up and Page Down change the visible deck. K opens the keymap. The economy does not run in Bevy.
 
 ## Environment Variables
 
@@ -202,7 +198,7 @@ Call the app ready only after `fly secrets list -a timehelm` shows `DATABASE_URL
 2. In Cursor: **View → Simple Browser** (or Cmd/Ctrl+Shift+P → "Simple Browser: Show").
 3. Enter `http://localhost:8080/` in the Simple Browser address bar.
 
-The ship game loads WASM; first load may take a few seconds. Use A/D or arrow keys to move, Page Up/Down to switch decks.
+The ship game loads WASM; first load may take a few seconds. WASD pans, Q and E orbit, Page Up and Page Down change decks, and K opens the keymap. The HUD clock is the simulation clock in UTC.
 
 ### Cursor / cargo proxy error
 
@@ -214,9 +210,9 @@ The **Makefile** (see test/format/clippy targets) works around this by running *
 
 ## Cursor Cloud specific instructions
 
-- Use Rust **1.92.0** (the `rust:1.92` image in `Dockerfile`). Install the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` **0.2.120**, which must match `wasm-bindgen` in `ship-game/Cargo.lock`. `scripts/build-ship.sh` fails if the CLI schema does not match.
-- `make run-ship` builds the Bevy WASM client into `client/public/ship/` and serves it from the Rust server. `http://localhost:8080/` redirects to `/3d/`. `/seacells/` is the 2D view. Page Up/Down switches decks.
-- `dotenv` reads `.env` from the process working directory. `make run-ship` and `cd server && cargo run` therefore need `server/.env`, not only a root `.env`. Copy `DATABASE_URL` into `server/.env`. If it is unset, the server still listens and logs that persistence is disabled.
-- Local Postgres is cluster **16/main**. `policy-rc.d` can refuse `service postgresql start`; use `sudo pg_ctlcluster 16 main start`. The dev URL from the README is `postgresql://postgres:password@localhost:5432/timehelm`. Apply `database/timehelm_schema.sql` once. Re-running it fails on `CREATE TRIGGER` (no `IF NOT EXISTS`).
+- Use Rust **1.92.0** (the `rust:1.92` image in `Dockerfile`). Install the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` **0.2.130**, which must match `wasm-bindgen` in the workspace `Cargo.lock`. `scripts/build-ship.sh` fails if the CLI schema does not match. The WASM artifact is `target/wasm32-unknown-unknown/release/ship_game.wasm`.
+- `make run-ship` builds the Bevy WASM client into `client/public/ship/` and serves it from the Rust server. `http://localhost:8080/` redirects to `/3d/`. `/2d` and `/seacells` redirect there too. Page Up/Down switches decks. K toggles the keymap.
+- `dotenv` reads `.env` from the process working directory. `make run-ship` and `cd server && cargo run` therefore need `server/.env`, not only a root `.env`. Copy `DATABASE_URL` into `server/.env`. If it is unset, the server still listens and tells the viewer the world is unavailable. It does not simulate an unsaved ship.
+- Local Postgres is cluster **16/main**. `policy-rc.d` can refuse `service postgresql start`; use `sudo pg_ctlcluster 16 main start`. The dev URL is `postgresql://postgres:password@localhost:5432/timehelm`. The server applies `server/migrations` itself. `database/timehelm_schema.sql` is the older unused schema; re-running it fails on `CREATE TRIGGER`.
 - Twitter OAuth secrets are not required to boot. `server/src/main.rs` does not mount the auth module.
-- `make test` runs server tests (currently none) and `ship-game` library tests. `cargo clippy -- -D warnings` passes for both crates. `make lint` also runs `cargo fmt --check`, and `ship-game` currently has pre-existing formatting drift, so that check fails until `make format` is applied.
+- `make test` runs `sim`, `server`, and `ship-game` tests. `make lint` is `cargo fmt --check` plus `cargo clippy -- -D warnings` for those three crates. Prefer `make test` and `make lint` so cargo is not pointed at the Cursor proxy.

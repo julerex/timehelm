@@ -1,36 +1,38 @@
 ---
 description: Game-specific patterns and conventions
-globs: ['client/**/*.ts', 'server/**/*.rs']
+globs: ["sim/**/*.rs", "server/**/*.rs", "ship-game/**/*.rs"]
 alwaysApply: false
 ---
 
 ## Game Patterns
 
-### Client-Server Communication
+The ship simulation lives in `sim`. The server is the only writer. The Bevy crate renders `WorldSnapshot` values and does not step the economy.
 
-Messages use tagged JSON via WebSocket:
-```typescript
-// Client sends
-{ "type": "Join", "player": { "id": "...", "username": "...", ... } }
-{ "type": "Move", "player_id": "...", "position": {...}, "rotation": 0.5, "is_moving": true }
+### Time
 
-// Server broadcasts
-{ "type": "WorldState", "players": [...] }
-{ "type": "PlayerJoin", "player": {...} }
-{ "type": "PlayerLeave", "player_id": "..." }
+One real second is one sim second. `World::step` advances 60 seconds. Catch-up on boot must match live stepping. Do not add a 60× clock.
+
+### WebSocket
+
+Messages are internally tagged JSON (`#[serde(tag = "type", rename_all = "snake_case")]`).
+
+Server:
+
+```json
+{ "type": "snapshot", "tick_unix": 0, "rooms": [], "crew": [], "stocks": [] }
+{ "type": "delta", "tick_unix": 60, "crew": [], "stocks": [] }
+{ "type": "command_rejected", "reason": "viewers cannot change the simulation" }
+{ "type": "unavailable", "reason": "DATABASE_URL is not set; the persistent world is unavailable" }
 ```
 
-### Adding World Objects
+Client:
 
-Use `WorldObjectFactory` in `client/src/world/WorldObjectFactory.ts`:
-```typescript
-const tree = WorldObjectFactory.createTree(x, z);
-this.scene.add(tree);
+```json
+{ "type": "command", "command": { "type": "set_station_recipe", "station": 1, "recipe": 0 } }
 ```
 
-### Game Time
+`Role::Viewer` is rejected by `authorize`. New mutations are new `Command` variants, still rejected for viewers until a participant role exists.
 
-Movement speed is scaled for 60x time:
-- `moveSpeed = 100` units/frame at 60 FPS = 6000 units/game-minute
-- Day/night cycle managed by `DayNightCycle` class
+### Rooms
 
+Add a room by extending `RoomKind` and handling it in the layout, the station table, and `color_rgba`. Matches on `RoomKind` stay exhaustive.
