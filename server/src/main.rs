@@ -1,243 +1,198 @@
-//! Time Helm Server
+//! Time Helm server.
 //!
-//! Main entry point for the Time Helm game server.
-//! Handles WebSocket connections, game state management, physics simulation,
-//! and periodic persistence of game data to PostgreSQL.
+//! Serves the 3D viewer and owns the persistent ship simulation. The simulation
+//! advances in real time and is stored in PostgreSQL. Viewers cannot change it.
 
-use axum::extract::WebSocketUpgrade;
-use axum::{
-    extract::State,
-    response::{Redirect, Response},
-    routing::get,
-    Router,
-};
+use axum::extract::{State, WebSocketUpgrade};
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::routing::get;
+use axum::Json;
+use axum::Router;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 
-// mod auth;  // Commented out - users/sessions tables not in use
 mod db;
-mod game;
-mod messages;
-mod physics;
 mod websocket;
 
-use db::{create_pool, save_all_entities, set_game_time_minutes};
-use game::GameState;
-use messages::GameMessage;
+use db::{bootstrap_world, create_pool, save_world};
+use sim::ServerMessage;
 use websocket::handle_websocket;
 
-/// Application state shared across all request handlers.
-///
-/// Contains:
-/// - `game`: Thread-safe game state (players, entities, physics)
-/// - `db`: PostgreSQL connection pool
-/// - `broadcast_tx`: Channel for broadcasting world state updates to all connected clients
+/// In-memory copy of the database world. `world` is absent when persistence is unavailable.
+pub struct SimState {
+    pub world: Option<sim::World>,
+    pub unavailable_reason: String,
+}
+
 #[derive(Clone)]
 pub struct AppState {
-    /// Thread-safe game state containing players, entities, and physics simulation
-    pub game: Arc<RwLock<GameState>>,
-    /// PostgreSQL database connection pool (optional for local dev)
+    pub sim: Arc<RwLock<SimState>>,
     pub db: Option<PgPool>,
-    /// Broadcast channel sender for distributing world state updates to WebSocket clients
     pub broadcast_tx: broadcast::Sender<String>,
 }
 
-/// Main entry point for the Time Helm server.
-///
-/// Initializes:
-/// 1. Database connection pool
-/// 2. Game state (thread-safe)
-/// 3. Background tasks for:
-///    - Game time persistence (every 60 seconds)
-///    - Entity persistence (every 60 seconds)
-///    - Physics simulation (60 FPS)
-///    - World state broadcasting (10 FPS)
-/// 4. HTTP/WebSocket server
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Load environment variables from .env file
     dotenv::dotenv().ok();
-    // Initialize tracing for structured logging
     tracing_subscriber::fmt::init();
 
-    // Connect to PostgreSQL database (optional for local dev).
-    // If DATABASE_URL is not set, the server still runs, but persistence is disabled.
-    let pool = match std::env::var("DATABASE_URL") {
-        Ok(database_url) => {
-            let pool = create_pool(&database_url).await?;
-            tracing::info!("Connected to database");
-            Some(pool)
-        }
+    let (broadcast_tx, _) = broadcast::channel::<String>(32);
+    let (pool, setup_reason) = match std::env::var("DATABASE_URL") {
+        Ok(database_url) => match create_pool(&database_url).await {
+            Ok(pool) => {
+                tracing::info!("Connected to database");
+                (Some(pool), String::new())
+            }
+            Err(error) => {
+                let reason = format!("Database connection failed: {error}");
+                tracing::error!("{reason}");
+                (None, reason)
+            }
+        },
         Err(_) => {
-            tracing::warn!("DATABASE_URL is not set; starting without persistence enabled");
-            None
+            let reason = "DATABASE_URL is not set; the persistent world is unavailable".to_string();
+            tracing::error!("{reason}");
+            (None, reason)
         }
     };
 
-    // Initialize game state with thread-safe access
-    let game_state = Arc::new(RwLock::new(GameState::new()));
-    // Create broadcast channel for sending world state updates to all WebSocket clients
-    // Channel capacity: 100 messages
-    let (broadcast_tx, _) = broadcast::channel::<String>(100);
+    let sim_state = match &pool {
+        Some(pool) => match bootstrap_world(pool).await {
+            Ok(world) => {
+                tracing::info!(
+                    "Ship world ready at unix {} with {} crew",
+                    world.last_tick_unix,
+                    world.crew.len()
+                );
+                SimState {
+                    world: Some(world),
+                    unavailable_reason: String::new(),
+                }
+            }
+            Err(error) => {
+                let reason = format!("Could not load the persistent world: {error}");
+                tracing::error!("{reason}");
+                SimState {
+                    world: None,
+                    unavailable_reason: reason,
+                }
+            }
+        },
+        None => SimState {
+            world: None,
+            unavailable_reason: setup_reason,
+        },
+    };
 
     let app_state = AppState {
-        game: game_state,
-        db: pool.clone(),
+        sim: Arc::new(RwLock::new(sim_state)),
+        db: pool,
         broadcast_tx: broadcast_tx.clone(),
     };
 
-    if let Some(pool) = pool.clone() {
-        // Background task: Persist game time to database every real-world minute
-        // Game time is derived from Unix timestamp (1 real second = 1 game minute)
-        let persist_pool = pool.clone();
+    if app_state.db.is_some() && app_state.sim.read().await.world.is_some() {
+        let tick_state = app_state.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
             loop {
                 interval.tick().await;
-                let game_time = GameState::get_game_time_minutes();
-                if let Err(e) = set_game_time_minutes(&persist_pool, game_time).await {
-                    tracing::error!("Failed to persist game time: {e}");
-                } else {
-                    tracing::debug!("Persisted game time: {game_time} minutes");
-                }
-            }
-        });
-
-        // Background task: Persist all entities to database every real-world minute
-        // This ensures entity positions and states are saved periodically
-        let persist_pool_entities = pool.clone();
-        let game_state_for_entities = app_state.game.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                // Read lock to get all entities, then drop lock before database write
-                let game = game_state_for_entities.read().await;
-                let entities: Vec<_> = game.get_all_entities();
-                drop(game);
-
-                if let Err(e) = save_all_entities(&persist_pool_entities, &entities).await {
-                    tracing::error!("Failed to persist entities: {e}");
-                } else {
-                    tracing::debug!("Persisted {} entities", entities.len());
+                if let Err(error) = tick_once(&tick_state).await {
+                    tracing::error!("Simulation tick failed: {error}");
                 }
             }
         });
     }
 
-    // Background task: Physics simulation update loop running at 60 FPS
-    // Updates physics world and syncs entity positions from physics simulation
-    let game_state_for_physics = app_state.game.clone();
-    tokio::spawn(async move {
-        // 16,666,667 nanoseconds = ~16.67ms = ~60 FPS
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_nanos(16_666_667));
-        loop {
-            interval.tick().await;
-            let mut game = game_state_for_physics.write().await;
-            // Step physics with delta time of 1.0 game second
-            // Each real-time step (1/60 second) represents 1 game second (60x time scale)
-            game.step_physics(1.0);
-        }
-    });
-
-    // Background task: Broadcast world state updates to all connected clients
-    // Runs at 10 FPS (every 100ms) for network efficiency
-    // Sends complete world state (all players + all entities) to all WebSocket clients
-    let game_state_for_broadcast = app_state.game.clone();
-    let broadcast_tx_for_task = broadcast_tx.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100)); // 10 FPS
-        loop {
-            interval.tick().await;
-            // Read lock to get world state, then drop lock before serialization
-            let game = game_state_for_broadcast.read().await;
-            let all_players = game.get_all_players();
-            let all_entities = game.get_all_entities();
-            drop(game);
-
-            let world_state = GameMessage::WorldState {
-                players: all_players,
-                entities: all_entities.clone(),
-            };
-            // Serialize and broadcast to all WebSocket clients
-            if let Ok(world_json) = serde_json::to_string(&world_state) {
-                let _ = broadcast_tx_for_task.send(world_json);
-                if !all_entities.is_empty() {
-                    tracing::info!(
-                        "Broadcasting {} entities: {:?}",
-                        all_entities.len(),
-                        all_entities
-                            .iter()
-                            .map(|e| (e.id.clone(), e.entity_type.as_str()))
-                            .collect::<Vec<_>>()
-                    );
-                }
-            } else {
-                tracing::warn!("Failed to serialize world state");
-            }
-        }
-    });
-
-    // Set up HTTP routes
     let app = Router::new()
-        // Ship game: canonical URLs with trailing slash (static `seacells/index.html`, `3d/index.html`)
         .route("/", get(|| async { Redirect::temporary("/3d/") }))
-        .route(
-            "/seacells",
-            get(|| async { Redirect::permanent("/seacells/") }),
-        )
-        .route("/2d", get(|| async { Redirect::permanent("/seacells/") }))
         .route("/3d", get(|| async { Redirect::permanent("/3d/") }))
-        // WebSocket endpoint for game client connections
+        .route("/seacells", get(|| async { Redirect::permanent("/3d/") }))
+        .route("/seacells/", get(|| async { Redirect::permanent("/3d/") }))
+        .route("/2d", get(|| async { Redirect::permanent("/3d/") }))
+        .route("/2d/", get(|| async { Redirect::permanent("/3d/") }))
         .route("/ws", get(websocket_handler))
-        // Browsers request /favicon.ico by default; we serve SVG and redirect here.
+        .route("/api/world", get(world_json))
         .route(
             "/favicon.ico",
             get(|| async { Redirect::temporary("/favicon.svg") }),
         )
-        // Serve static files from client/public (/3d/, /seacells/, /ship/, etc.)
         .fallback_service(ServeDir::new(static_dir()).append_index_html_on_directories(true))
-        // Enable CORS for all origins (development)
         .layer(CorsLayer::permissive())
-        .with_state(app_state);
+        .with_state(app_state.clone());
 
-    // Get port from environment variable or default to 8080
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "8080".to_string())
         .parse::<u16>()?;
-
-    // Bind to all network interfaces on the specified port
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
     tracing::info!("Server listening on 0.0.0.0:{port} — open http://localhost:{port}/");
 
-    // Start the HTTP server
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
+
+    if let (Some(pool), Some(world)) = {
+        let sim = app_state.sim.read().await;
+        (app_state.db.clone(), sim.world.clone())
+    } {
+        if let Err(error) = save_world(&pool, &world).await {
+            tracing::error!("Shutdown save failed: {error}");
+        }
+    }
 
     Ok(())
 }
 
-/// Returns the path to the static files directory (client/public).
-/// Tries multiple locations for local dev vs Docker/production.
+async fn tick_once(state: &AppState) -> anyhow::Result<()> {
+    let Some(pool) = state.db.clone() else {
+        return Ok(());
+    };
+    let now = chrono::Utc::now().timestamp();
+    let saved = {
+        let mut sim = state.sim.write().await;
+        let Some(world) = sim.world.as_mut() else {
+            return Ok(());
+        };
+        let before = world.last_tick_unix;
+        world.catch_up_to(now);
+        if world.last_tick_unix == before {
+            return Ok(());
+        }
+        world.clone()
+    };
+    let message = ServerMessage::Delta(saved.delta());
+    if let Ok(json) = serde_json::to_string(&message) {
+        let _ = state.broadcast_tx.send(json);
+    }
+    save_world(&pool, &saved).await
+}
+
+async fn world_json(State(state): State<AppState>) -> impl IntoResponse {
+    let sim = state.sim.read().await;
+    let message = match &sim.world {
+        Some(world) => ServerMessage::Snapshot(world.snapshot()),
+        None => ServerMessage::Unavailable {
+            reason: sim.unavailable_reason.clone(),
+        },
+    };
+    Json(message)
+}
+
 fn static_dir() -> std::path::PathBuf {
-    let candidates = [
-        "client/public",    // From project root
-        "../client/public", // From server/ directory
-    ];
+    let candidates = ["client/public", "../client/public"];
     for path in candidates {
-        let p = std::path::Path::new(path);
-        if p.join("index.html").exists() {
-            return p.to_path_buf();
+        let candidate = std::path::Path::new(path);
+        if candidate.join("index.html").exists() {
+            return candidate.to_path_buf();
         }
     }
     candidates[0].into()
 }
 
-/// WebSocket connection handler.
-///
-/// Upgrades HTTP connection to WebSocket and delegates to `handle_websocket`
-/// for message processing and game state synchronization.
 async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(|socket| handle_websocket(socket, state))
 }

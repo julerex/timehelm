@@ -1,45 +1,34 @@
-# Time Helm Development Skills
+# Time Helm
 
-This file defines custom skills and workflows for the Time Helm project.
+The playable world is a server-authoritative ship. Read `docs/SIMULATION.md` before changing the economy or the protocol.
 
-## Custom Commands
+## Run
 
-### `/run-server`
-Runs the Rust backend server with proper environment setup.
+- `make run-ship` builds the Bevy viewer to `client/public/ship/` and starts the Axum server. Open `http://localhost:8080/` (it redirects to `/3d/`).
+- `make dev-server` starts the server without rebuilding WASM.
+- `make run-ship-native` opens the same viewer in a desktop window. It connects to `ws://127.0.0.1:8080/ws` unless `TIMEHELM_WS` is set.
+- Put `DATABASE_URL` in `server/.env`. The server reads `.env` from its working directory. If the variable is missing, the viewer is told the world is unavailable.
 
-### `/run-client`
-Runs the Vite development server for the frontend.
+## Where code goes
 
-### `/run-full-stack`
-Starts both the database (if needed), backend, and frontend in the correct order.
+- Simulation, recipes, hull, and protocol types: `sim/`. Do not depend on Bevy from this crate.
+- Persistence and the WebSocket: `server/`. Call `World::step` only here.
+- Rendering, camera, and the keymap: `ship-game/`. The client interpolates crew between snapshots. It does not run recipes.
 
-### `/format-rust`
-Automatically formats Rust code using `cargo fmt` in the server directory.
+## Time
 
-### `/lint-all`
-Runs linting for both client and server code.
+One real second is one sim second. The server steps every 60 sim seconds, using the wall clock, and applies every missed step on boot. Do not reintroduce a 60× clock.
 
-## Hooks
+## Checks
 
-### Pre-commit
-- Run `cargo fmt` on Rust files
-- Run ESLint on TypeScript files
-- Run TypeScript type checking
+```bash
+make fmt
+make lint
+make test
+```
 
-### Post-code-generation
-- Format generated Rust code automatically
-- Check for common patterns (e.g., ensure WebSocket messages use tagged enums)
+`wasm-bindgen-cli` must be **0.2.130**, matching `Cargo.lock`. The WASM file is `target/wasm32-unknown-unknown/release/ship_game.wasm`.
 
-## Domain Knowledge
+## Protocol
 
-### Project Structure
-- Frontend: TypeScript + Three.js in `client/`
-- Backend: Rust + Axum in `server/`
-- Database: PostgreSQL with SQLx migrations
-
-### Key Concepts
-- 1 real minute = 1 game hour (60x time scale)
-- 360 game-days per game-year
-- Players controlled via schedules and conditions
-- Character behavior influenced by emotional state
-
+Messages are tagged JSON (`type` is `snake_case`): `snapshot`, `delta`, `command_rejected`, `unavailable`, and client `command`. A viewer command is rejected. See `.cursor/rules/game-patterns.md`.
