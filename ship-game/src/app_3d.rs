@@ -3,10 +3,12 @@
 //! Camera actions live in a leafwing action map. Press K for the keymap.
 //! Interaction actions are registered and left unbound.
 
+use crate::cabin_marks::{deck_door_mesh, deck_fitting_mesh};
 use crate::deck_geometry::{extruded_polygon_deck_mesh, procedural_deck_plan_texture_image};
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{asset_plugin, primary_window};
 use crate::viewer_net::{drain_inbox, start_inbox, LiveWorld};
+use bevy::camera::ScalingMode;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::pbr::{Material, MaterialPlugin, MeshMaterial3d};
@@ -15,8 +17,8 @@ use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 use leafwing_input_manager::prelude::*;
 use sim::{
-    format_unix_utc, point_in_polygon, CrewView, RoomKind, RoomView, WorldSnapshot, DECK_COUNT,
-    DECK_HEIGHT_M, DECK_NAMES, SHIP_BEAM_M, SHIP_LENGTH_M,
+    contents_label, format_unix_utc, point_in_polygon, CrewView, RoomKind, RoomView, WorldSnapshot,
+    DECK_COUNT, DECK_HEIGHT_M, DECK_NAMES, SHIP_BEAM_M, SHIP_LENGTH_M,
 };
 
 const CAMERA_PAN_SPEED_M_S: f32 = 520.0;
@@ -84,6 +86,8 @@ enum ViewerAction {
     #[actionlike(Button)]
     Keymap,
     #[actionlike(Button)]
+    Plan,
+    #[actionlike(Button)]
     OrbitDrag,
     #[actionlike(Button)]
     PanDrag,
@@ -134,6 +138,11 @@ const BINDINGS: &[Binding] = &[
         available: true,
     },
     Binding {
+        action: "Plan",
+        keys: "P",
+        available: true,
+    },
+    Binding {
         action: "Interact",
         keys: "Not available to viewers",
         available: false,
@@ -174,6 +183,12 @@ struct CurrentDeck(usize);
 
 #[derive(Resource, Default)]
 struct KeymapOpen(bool);
+
+#[derive(Resource)]
+struct PlanView {
+    enabled: bool,
+    scale: f32,
+}
 
 #[derive(Resource, Default)]
 struct ShipSpawned(bool);
@@ -223,6 +238,10 @@ pub fn run_app_3d() {
         .insert_resource(CurrentDeck(6))
         .insert_resource(CameraRig::default_for_deck(6))
         .insert_resource(KeymapOpen(false))
+        .insert_resource(PlanView {
+            enabled: false,
+            scale: 1.0,
+        })
         .insert_resource(ShipSpawned(false))
         .insert_resource(ClearColor(Color::srgb(0.55, 0.72, 0.84)))
         .add_systems(Startup, setup)
@@ -238,7 +257,10 @@ pub fn run_app_3d() {
             )
                 .chain(),
         )
-        .add_systems(Update, (camera_controls, deck_and_keymap, sync_clip))
+        .add_systems(
+            Update,
+            (camera_controls, apply_camera, deck_and_keymap, sync_clip).chain(),
+        )
         .run();
 }
 
@@ -326,6 +348,7 @@ fn viewer_input_map() -> InputMap<ViewerAction> {
         .with(ViewerAction::DeckUp, KeyCode::PageUp)
         .with(ViewerAction::DeckDown, KeyCode::PageDown)
         .with(ViewerAction::Keymap, KeyCode::KeyK)
+        .with(ViewerAction::Plan, KeyCode::KeyP)
         .with(ViewerAction::OrbitDrag, MouseButton::Right)
         .with(ViewerAction::PanDrag, MouseButton::Middle)
 }
@@ -442,6 +465,20 @@ fn spawn_ship_once(
                 Transform::from_xyz(0.0, 0.0, deck_z + FLOOR_THICKNESS_M),
             ));
         }
+        if let Some(mesh) = deck_door_mesh(&rooms) {
+            commands.spawn((
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(clip.0.clone()),
+                Transform::from_xyz(0.0, 0.0, deck_z + FLOOR_THICKNESS_M),
+            ));
+        }
+        if let Some(mesh) = deck_fitting_mesh(&rooms) {
+            commands.spawn((
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(clip.0.clone()),
+                Transform::from_xyz(0.0, 0.0, deck_z + FLOOR_THICKNESS_M),
+            ));
+        }
     }
     let now = time.elapsed_secs();
     for crew in &snapshot.crew {
@@ -516,52 +553,92 @@ fn camera_controls(
     mut scroll: MessageReader<MouseWheel>,
     mut motion: MessageReader<MouseMotion>,
     mut rig: ResMut<CameraRig>,
-    mut cameras: Query<&mut Transform, With<GameCamera3d>>,
+    mut plan: ResMut<PlanView>,
 ) {
     let Ok(action) = actions.single() else {
         return;
     };
+    if action.just_pressed(&ViewerAction::Plan) {
+        plan.enabled = !plan.enabled;
+    }
     let dt = time.delta_secs();
     let pan = action.axis_pair(&ViewerAction::Pan);
-    let (right, forward) = pan_basis(&rig);
+    let (right, forward) = if plan.enabled {
+        (Vec3::X, Vec3::Y)
+    } else {
+        pan_basis(&rig)
+    };
     rig.target += right * pan.x * CAMERA_PAN_SPEED_M_S * dt;
     rig.target += forward * pan.y * CAMERA_PAN_SPEED_M_S * dt;
-    rig.yaw += action.clamped_value(&ViewerAction::OrbitYaw) * CAMERA_YAW_SPEED_RAD_S * dt;
-    rig.target.z += action.clamped_value(&ViewerAction::Lift) * CAMERA_VERTICAL_SPEED_M_S * dt;
-    rig.distance = (rig.distance
-        + action.clamped_value(&ViewerAction::Dolly) * CAMERA_DOLLY_SPEED_M_S * dt)
-        .clamp(CAM_MIN_DISTANCE_M, CAM_MAX_DISTANCE_M);
 
+    let mut scroll_y = 0.0;
     for event in scroll.read() {
-        let dy = match event.unit {
+        scroll_y += match event.unit {
             MouseScrollUnit::Line => event.y,
             MouseScrollUnit::Pixel => event.y * 0.015,
         };
-        let factor = 1.0 - dy * CAMERA_SCROLL_ZOOM_FACTOR;
-        rig.distance = (rig.distance * factor).clamp(CAM_MIN_DISTANCE_M, CAM_MAX_DISTANCE_M);
     }
+    let zoom_factor = 1.0 - scroll_y * CAMERA_SCROLL_ZOOM_FACTOR;
 
-    let orbiting = action.pressed(&ViewerAction::OrbitDrag);
-    let panning = action.pressed(&ViewerAction::PanDrag);
-    if orbiting {
-        for event in motion.read() {
-            rig.yaw -= event.delta.x * CAMERA_MOUSE_ORBIT_SENS;
-            rig.pitch = (rig.pitch - event.delta.y * CAMERA_MOUSE_ORBIT_SENS)
-                .clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
-        }
-    } else if panning {
-        let (right, forward) = pan_basis(&rig);
-        let scale = rig.distance * CAMERA_MOUSE_PAN_SENS;
-        for event in motion.read() {
-            rig.target += right * -event.delta.x * scale + forward * event.delta.y * scale;
-        }
-    } else {
+    if plan.enabled {
+        let dolly = action.clamped_value(&ViewerAction::Dolly);
+        plan.scale = (plan.scale * zoom_factor * (1.0 + dolly * dt)).clamp(0.18, 4.5);
         for _ in motion.read() {}
-    }
+    } else {
+        rig.yaw += action.clamped_value(&ViewerAction::OrbitYaw) * CAMERA_YAW_SPEED_RAD_S * dt;
+        rig.target.z += action.clamped_value(&ViewerAction::Lift) * CAMERA_VERTICAL_SPEED_M_S * dt;
+        rig.distance = (rig.distance
+            + action.clamped_value(&ViewerAction::Dolly) * CAMERA_DOLLY_SPEED_M_S * dt)
+            .clamp(CAM_MIN_DISTANCE_M, CAM_MAX_DISTANCE_M);
+        rig.distance = (rig.distance * zoom_factor).clamp(CAM_MIN_DISTANCE_M, CAM_MAX_DISTANCE_M);
 
-    let transform = rig_transform(&rig);
-    for mut camera in &mut cameras {
-        *camera = transform;
+        let orbiting = action.pressed(&ViewerAction::OrbitDrag);
+        let panning = action.pressed(&ViewerAction::PanDrag);
+        if orbiting {
+            for event in motion.read() {
+                rig.yaw -= event.delta.x * CAMERA_MOUSE_ORBIT_SENS;
+                rig.pitch = (rig.pitch - event.delta.y * CAMERA_MOUSE_ORBIT_SENS)
+                    .clamp(CAM_PITCH_MIN, CAM_PITCH_MAX);
+            }
+        } else if panning {
+            let (right, forward) = pan_basis(&rig);
+            let scale = rig.distance * CAMERA_MOUSE_PAN_SENS;
+            for event in motion.read() {
+                rig.target += right * -event.delta.x * scale + forward * event.delta.y * scale;
+            }
+        } else {
+            for _ in motion.read() {}
+        }
+    }
+}
+
+fn apply_camera(
+    rig: Res<CameraRig>,
+    plan: Res<PlanView>,
+    deck: Res<CurrentDeck>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<GameCamera3d>>,
+) {
+    let deck_z = deck.0 as f32 * DECK_HEIGHT_M;
+    for (mut transform, mut projection) in &mut cameras {
+        if plan.enabled {
+            *projection = Projection::Orthographic(OrthographicProjection {
+                scaling_mode: ScalingMode::FixedVertical {
+                    viewport_height: SHIP_BEAM_M * 1.25,
+                },
+                scale: plan.scale,
+                near: 0.05,
+                far: 80.0,
+                ..OrthographicProjection::default_3d()
+            });
+            let eye = Vec3::new(rig.target.x, rig.target.y, deck_z + 24.0);
+            *transform = Transform::from_translation(eye)
+                .looking_at(Vec3::new(rig.target.x, rig.target.y, deck_z), Vec3::Y);
+        } else if !projection.is_perspective() {
+            *projection = Projection::Perspective(PerspectiveProjection::default());
+            *transform = rig_transform(&rig);
+        } else {
+            *transform = rig_transform(&rig);
+        }
     }
 }
 
@@ -615,9 +692,10 @@ fn sync_clip(
 fn update_hud(
     live: Res<LiveWorld>,
     deck: Res<CurrentDeck>,
+    plan: Res<PlanView>,
     mut status: Query<&mut Text, With<StatusText>>,
 ) {
-    let line = status_line(&live, deck.0);
+    let line = status_line(&live, deck.0, plan.enabled);
     for mut text in &mut status {
         if text.0 != line {
             text.0 = line.clone();
@@ -640,9 +718,10 @@ fn hover_room(
     }
 }
 
-fn status_line(live: &LiveWorld, deck: usize) -> String {
+fn status_line(live: &LiveWorld, deck: usize, plan: bool) -> String {
     let deck_name = DECK_NAMES.get(deck).copied().unwrap_or("Deck");
     let clock = wall_utc();
+    let view = if plan { "plan" } else { "orbit" };
     if let Some(reason) = live.unavailable.as_ref() {
         return format!("{clock}  ·  world unavailable  ·  {reason}");
     }
@@ -652,11 +731,11 @@ fn status_line(live: &LiveWorld, deck: usize) -> String {
         } else {
             "connecting"
         };
-        return format!("{clock}  ·  {state}  ·  {deck_name}  ·  K keymap");
+        return format!("{clock}  ·  {state}  ·  {deck_name}  ·  {view}  ·  P plan  ·  K keymap");
     };
     let totals = &snapshot.totals;
     format!(
-        "{clock}  ·  {deck_name}  ·  {} crew  ·  food {:.0} d  ·  water {:.0} d  ·  power {:.2}/{:.2} kWh/min  ·  K keymap",
+        "{clock}  ·  {deck_name}  ·  {view}  ·  {} crew  ·  food {:.0} d  ·  water {:.0} d  ·  power {:.2}/{:.2} kWh/min  ·  P plan",
         totals.crew,
         totals.food_days,
         totals.water_days,
@@ -713,13 +792,13 @@ fn hover_line(
     } else {
         people.join(", ")
     };
-    format!(
-        "{} — {} — {} — {}",
-        room.name,
-        room.kind.label(),
-        stock_text,
-        people_text
-    )
+    let contents = contents_label(room.kind);
+    let kind = if contents.is_empty() {
+        room.kind.label().to_string()
+    } else {
+        format!("{} · {contents}", room.kind.label())
+    };
+    format!("{} — {kind} — {stock_text} — {people_text}", room.name)
 }
 
 fn cursor_on_deck(

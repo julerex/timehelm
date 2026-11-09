@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::geom::polygon_centroid;
+use crate::geom::{polygon_centroid, shared_edge_span, EdgeSpan};
 use crate::kinds::{Activity, Department, Good, PowerClass, RoomKind, Skill};
 use crate::layout::build_ship;
 use crate::recipes::{is_sink, is_source, recipe, RecipeId};
@@ -632,23 +632,30 @@ impl World {
         let Some(next) = next_hop(adj, current, goal) else {
             return;
         };
-        let Some(target) = self.rooms.get(next as usize) else {
-            return;
+        let (target_deck, target_id, tx, ty, doorway) = {
+            let Some(target) = self.rooms.get(next as usize) else {
+                return;
+            };
+            let Some(from_room) = self.rooms.get(current as usize) else {
+                return;
+            };
+            let (tx, ty) = polygon_centroid(&target.polygon);
+            let doorway = if from_room.deck == target.deck {
+                shared_edge_span(&from_room.polygon, &target.polygon).map(EdgeSpan::midpoint)
+            } else {
+                None
+            };
+            (target.deck, target.id, tx, ty, doorway)
         };
-        let (tx, ty) = polygon_centroid(&target.polygon);
-        let dx = tx - self.crew[index].x;
-        let dy = ty - self.crew[index].y;
-        let distance = (dx * dx + dy * dy).sqrt();
-        if distance <= WALK_PER_STEP + 0.05 {
-            self.crew[index].room_id = target.id;
-            self.crew[index].deck = target.deck;
-            self.crew[index].x = tx;
-            self.crew[index].y = ty;
-        } else if distance > f32::EPSILON {
-            let scale = WALK_PER_STEP / distance;
-            self.crew[index].x += dx * scale;
-            self.crew[index].y += dy * scale;
+        let mut x = self.crew[index].x;
+        let mut y = self.crew[index].y;
+        let entered = walk_through_door(&mut x, &mut y, doorway, tx, ty);
+        if entered {
+            self.crew[index].room_id = target_id;
+            self.crew[index].deck = target_deck;
         }
+        self.crew[index].x = x;
+        self.crew[index].y = y;
         if self.crew[index].activity != Activity::Eating
             && self.crew[index].activity != Activity::Treating
         {
@@ -731,6 +738,50 @@ fn minute_of_day(unix: i64) -> u32 {
 pub fn on_shift(offset_min: u32, minute_of_day: u32) -> bool {
     let local = (minute_of_day + offset_min) % 1440;
     local < 8 * 60
+}
+
+/// Walk toward the doorway, then into the next room with whatever distance is left.
+/// A stair has no shared edge, so that hop still aims at the room centre.
+fn walk_through_door(
+    x: &mut f32,
+    y: &mut f32,
+    doorway: Option<[f32; 2]>,
+    tx: f32,
+    ty: f32,
+) -> bool {
+    let mut budget = WALK_PER_STEP;
+    if let Some(door) = doorway {
+        budget -= walk_toward(x, y, door[0], door[1], budget);
+        let at_door = (*x - door[0]).hypot(*y - door[1]) <= 0.08;
+        if !at_door {
+            return false;
+        }
+        let _ = walk_toward(x, y, tx, ty, budget);
+        return true;
+    }
+    let _ = walk_toward(x, y, tx, ty, budget);
+    (*x - tx).hypot(*y - ty) <= 0.08
+}
+
+fn walk_toward(x: &mut f32, y: &mut f32, tx: f32, ty: f32, budget: f32) -> f32 {
+    if budget <= 0.0 {
+        return 0.0;
+    }
+    let dx = tx - *x;
+    let dy = ty - *y;
+    let distance = (dx * dx + dy * dy).sqrt();
+    if distance <= budget + 0.05 {
+        *x = tx;
+        *y = ty;
+        distance
+    } else if distance > f32::EPSILON {
+        let scale = budget / distance;
+        *x += dx * scale;
+        *y += dy * scale;
+        budget
+    } else {
+        0.0
+    }
 }
 
 fn adjacency(doors: &[Door], room_count: usize) -> Vec<Vec<u32>> {
@@ -1010,6 +1061,8 @@ fn roster() -> Vec<(String, Department, Skill)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fittings::{cabin_fittings, fitting_inside_room, FittingKind};
+    use crate::geom::{polygon_centroid, segment_crosses_span, shared_edge_span};
     use crate::hull::{hull_for_deck, point_in_polygon};
     use crate::kinds::RoomKind;
     use glam::Vec2;
@@ -1113,6 +1166,232 @@ mod tests {
         let mut store = MemoryStore::default();
         store.save(&world);
         assert_eq!(store.load().as_ref(), Some(&world));
+    }
+
+    #[test]
+    fn crew_steps_through_a_berth_door_and_not_through_a_wall() {
+        let mut world = World::generate(7, 1_700_000_000).expect("layout");
+        let berth_ids: Vec<u32> = world
+            .rooms
+            .iter()
+            .filter(|room| room.kind == RoomKind::Berth)
+            .map(|room| room.id)
+            .collect();
+        let berth = berth_ids
+            .into_iter()
+            .find_map(|id| {
+                corridor_neighbor(&world, id)?;
+                world.rooms.iter().find(|room| room.id == id).cloned()
+            })
+            .expect("berth on a corridor");
+        let corridor = corridor_neighbor(&world, berth.id).expect("corridor");
+        let span = shared_edge_span(&corridor.polygon, &berth.polygon).expect("door span");
+        let door = span.midpoint();
+        let (bx, by) = polygon_centroid(&berth.polygon);
+        let start = beyond(door, [bx, by], 1.5);
+        assert!(
+            room_contains(&corridor, start[0], start[1]),
+            "approach point should sit in the corridor"
+        );
+
+        let minute = minute_of_day(world.last_tick_unix + STEP_SECONDS);
+        world.crew[0].watch_offset_min = (480 + 1440 - minute % 1440) % 1440;
+        world.crew[0].hunger = 0.0;
+        world.crew[0].health = 1.0;
+        world.crew[0].berth_id = berth.id;
+        world.crew[0].room_id = corridor.id;
+        world.crew[0].deck = corridor.deck;
+        world.crew[0].x = start[0];
+        world.crew[0].y = start[1];
+        world.step();
+
+        let arrived = &world.crew[0];
+        assert_eq!(arrived.room_id, berth.id);
+        assert!(room_contains(&berth, arrived.x, arrived.y));
+        assert!(segment_crosses_span(start, [arrived.x, arrived.y], span));
+
+        let blocked_ids: Vec<u32> = world
+            .rooms
+            .iter()
+            .filter(|room| {
+                room.deck == corridor.deck && room.id != corridor.id && room.id != berth.id
+            })
+            .map(|room| room.id)
+            .collect();
+        let blocked = blocked_ids
+            .into_iter()
+            .find_map(|id| {
+                if door_between(&world, corridor.id, id) {
+                    None
+                } else {
+                    world.rooms.iter().find(|room| room.id == id).cloned()
+                }
+            })
+            .expect("room that does not share the corridor door");
+        let minute = minute_of_day(world.last_tick_unix + STEP_SECONDS);
+        world.crew[0].watch_offset_min = (480 + 1440 - minute % 1440) % 1440;
+        world.crew[0].hunger = 0.0;
+        world.crew[0].health = 1.0;
+        world.crew[0].berth_id = blocked.id;
+        world.crew[0].room_id = corridor.id;
+        world.crew[0].deck = corridor.deck;
+        world.crew[0].x = start[0];
+        world.crew[0].y = start[1];
+        world.step();
+        assert_ne!(world.crew[0].room_id, blocked.id);
+        if world.crew[0].room_id != corridor.id {
+            let arrived_id = world.crew[0].room_id;
+            assert!(
+                door_between(&world, corridor.id, arrived_id),
+                "a step leaves only through a door"
+            );
+        }
+    }
+
+    #[test]
+    fn every_berth_has_a_bed_and_every_head_has_a_toilet_and_shower() {
+        let world = World::generate(8, 1_700_000_000).expect("layout");
+        let mut berths = 0;
+        let mut heads = 0;
+        for index in 0..world.rooms.len() {
+            let room = world.rooms[index].clone();
+            let doorway = door_midpoint(&world, room.id);
+            let fittings = cabin_fittings(room.kind, &room.polygon, doorway);
+            match room.kind {
+                RoomKind::Berth => {
+                    berths += 1;
+                    assert!(doorway.is_some(), "{} has no door", room.name);
+                    assert_eq!(
+                        fittings
+                            .iter()
+                            .filter(|fitting| fitting.kind == FittingKind::Bed)
+                            .count(),
+                        1,
+                        "{}",
+                        room.name
+                    );
+                }
+                RoomKind::Head => {
+                    heads += 1;
+                    assert!(doorway.is_some(), "{} has no door", room.name);
+                    assert!(
+                        fittings
+                            .iter()
+                            .any(|fitting| fitting.kind == FittingKind::Toilet),
+                        "{}",
+                        room.name
+                    );
+                    assert!(
+                        fittings
+                            .iter()
+                            .any(|fitting| fitting.kind == FittingKind::Shower),
+                        "{}",
+                        room.name
+                    );
+                    let toilet = fittings
+                        .iter()
+                        .find(|fitting| fitting.kind == FittingKind::Toilet)
+                        .unwrap();
+                    let shower = fittings
+                        .iter()
+                        .find(|fitting| fitting.kind == FittingKind::Shower)
+                        .unwrap();
+                    let dx = toilet.center[0] - shower.center[0];
+                    let dy = toilet.center[1] - shower.center[1];
+                    assert!(dx * dx + dy * dy > 1.0, "toilet and shower share a spot");
+                }
+                RoomKind::Corridor
+                | RoomKind::Stair
+                | RoomKind::Hydroponics
+                | RoomKind::Fishing
+                | RoomKind::ColdStore
+                | RoomKind::DryStore
+                | RoomKind::Galley
+                | RoomKind::Bakery
+                | RoomKind::Restaurant
+                | RoomKind::Mess
+                | RoomKind::Desalination
+                | RoomKind::WaterStore
+                | RoomKind::WasteTreatment
+                | RoomKind::Recycling
+                | RoomKind::Carpentry
+                | RoomKind::Sewing
+                | RoomKind::Metalwork
+                | RoomKind::Laundry
+                | RoomKind::TimberStore
+                | RoomKind::MetalStore
+                | RoomKind::Clinic
+                | RoomKind::Infirmary
+                | RoomKind::Engineering
+                | RoomKind::Electrical
+                | RoomKind::FuelStore
+                | RoomKind::Bridge => assert!(fittings.is_empty(), "{}", room.name),
+            }
+            for fitting in fittings {
+                assert!(
+                    fitting_inside_room(&room.polygon, fitting),
+                    "{:?} in {} sits outside the room",
+                    fitting.kind,
+                    room.name
+                );
+            }
+        }
+        assert!(berths > 0);
+        assert!(heads > 0);
+    }
+
+    fn corridor_neighbor(world: &World, room_id: u32) -> Option<Room> {
+        neighbor_ids(world, room_id)
+            .find_map(|other| {
+                world
+                    .rooms
+                    .iter()
+                    .find(|room| room.id == other && room.kind == RoomKind::Corridor)
+            })
+            .cloned()
+    }
+
+    fn neighbor_ids(world: &World, room_id: u32) -> impl Iterator<Item = u32> + '_ {
+        world.doors.iter().filter_map(move |door| {
+            if door.from_room == room_id {
+                Some(door.to_room)
+            } else if door.to_room == room_id {
+                Some(door.from_room)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn door_between(world: &World, left: u32, right: u32) -> bool {
+        world.doors.iter().any(|door| {
+            (door.from_room == left && door.to_room == right)
+                || (door.from_room == right && door.to_room == left)
+        })
+    }
+
+    fn door_midpoint(world: &World, room_id: u32) -> Option<[f32; 2]> {
+        let room = world.rooms.iter().find(|room| room.id == room_id)?;
+        neighbor_ids(world, room_id).find_map(|other| {
+            let neighbor = world.rooms.iter().find(|candidate| candidate.id == other)?;
+            shared_edge_span(&room.polygon, &neighbor.polygon).map(|span| span.midpoint())
+        })
+    }
+
+    fn beyond(door: [f32; 2], inside: [f32; 2], distance: f32) -> [f32; 2] {
+        let dx = door[0] - inside[0];
+        let dy = door[1] - inside[1];
+        let len = (dx * dx + dy * dy).sqrt().max(0.001);
+        [door[0] + dx / len * distance, door[1] + dy / len * distance]
+    }
+
+    fn room_contains(room: &Room, x: f32, y: f32) -> bool {
+        let hull: Vec<Vec2> = room
+            .polygon
+            .iter()
+            .map(|point| Vec2::new(point[0], point[1]))
+            .collect();
+        point_in_polygon(Vec2::new(x, y), &hull)
     }
 
     fn reachable_from(world: &World, start: u32) -> usize {

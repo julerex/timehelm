@@ -43,11 +43,12 @@ make run-ship-native
 | Dolly | Z / X, or the scroll wheel |
 | Pan with the mouse | Middle-drag |
 | Deck | Page Up / Page Down |
+| Plan | P |
 | Keymap | K |
 
 Interaction is listed in the keymap and is not available to viewers.
 
-The top bar shows the simulation clock in UTC, the deck, crew count, food and water in days, and power for the current minute. Hover a room for its name, stocks, and who is inside.
+The top bar shows the simulation clock in UTC, the deck, crew count, food and water in days, and power for the current minute. P switches to a top-down plan of the current deck, where berths show a bed and heads show a toilet and a shower. Hover a room for its name, stocks, and who is inside.
 
 ## Layout
 

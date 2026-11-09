@@ -2,7 +2,7 @@
 
 use glam::Vec2;
 
-use crate::geom::{rect_inside, rect_polygon};
+use crate::geom::{rect_inside, rect_polygon, shared_edge_span};
 use crate::hull::{hull_for_deck, UPPER_DECK_START};
 use crate::kinds::RoomKind;
 use crate::recipes::RecipeId;
@@ -452,14 +452,9 @@ fn doors_for(drafts: &[Draft]) -> Vec<Door> {
 }
 
 fn shares_edge(a: &Draft, b: &Draft) -> bool {
-    let y_overlap = a.y1.min(b.y1) - a.y0.max(b.y0);
-    let x_touch = (a.x1 - b.x0).abs() < 0.8 || (b.x1 - a.x0).abs() < 0.8;
-    if x_touch && y_overlap > 1.0 {
-        return true;
-    }
-    let x_overlap = a.x1.min(b.x1) - a.x0.max(b.x0);
-    let y_touch = (a.y1 - b.y0).abs() < 0.8 || (b.y1 - a.y0).abs() < 0.8;
-    y_touch && x_overlap > 1.0
+    let left = rect_polygon(a.x0, a.y0, a.x1, a.y1);
+    let right = rect_polygon(b.x0, b.y0, b.x1, b.y1);
+    shared_edge_span(&left, &right).is_some()
 }
 
 fn same_footprint(a: &Draft, b: &Draft) -> bool {
