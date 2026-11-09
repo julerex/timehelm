@@ -125,7 +125,7 @@ There is no participant role yet. `authorize` has nowhere to return `Ok(())`.
 
 `server/migrations` creates `world_meta`, `decks`, `rooms`, `doors`, `stations`, `crew`, `stocks`, `jobs`, and `crops`. Older `players`, `entities`, and `game_state` tables are left in place and unused.
 
-The server migrates on startup, loads the world or seeds it, catches up, then saves. It writes again at each minute boundary and on shutdown. Polygons are JSON. Enums are serde snake_case strings.
+The server applies migrations on startup when the database user can create tables. When `_sqlx_migrations` already matches this binary, startup skips DDL. It then loads the world or seeds it, catches up, and saves. It writes again at each minute boundary and on shutdown. Polygons are JSON. Enums are serde snake_case strings.
 
 ## Messages
 
