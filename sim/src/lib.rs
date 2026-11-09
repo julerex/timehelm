@@ -5,6 +5,7 @@
 //! should call [`World::step`].
 
 mod command;
+mod fittings;
 mod geom;
 mod hull;
 mod kinds;
@@ -14,7 +15,8 @@ mod recipes;
 mod world;
 
 pub use command::{authorize, Command, Role, ViewOnly};
-pub use geom::{polygon_area, polygon_centroid};
+pub use fittings::{cabin_fittings, contents_label, fitting_inside_room, Fitting, FittingKind};
+pub use geom::{polygon_area, polygon_centroid, segment_crosses_span, shared_edge_span, EdgeSpan};
 pub use hull::{
     deck_hull_polygon, deck_hull_polygon_upper, hull_for_deck, point_in_polygon, SHIP_BEAM_M,
     SHIP_LENGTH_M, UPPER_DECK_START,

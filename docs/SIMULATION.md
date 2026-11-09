@@ -8,7 +8,7 @@ Time is 1:1 with the wall clock. `World::step` covers 60 seconds. On boot the se
 
 The plan is 318 m long and 60 m across. Origin is the aft-starboard corner, +X points forward, +Y points to port. Decks are 3 m apart. Deck index 0 is the lowest. Decks 9 and above keep the upper-deck courtyard void.
 
-Rooms are named rectangles clipped to that deck's hull. A shared edge is a door. A corridor is a room. Crew walk the door graph at 1.3 m/s, in a straight line between room centroids (78 m per step).
+Rooms are named rectangles clipped to that deck's hull. A shared edge longer than a metre is a door. A corridor is a room. Crew walk the door graph at 1.3 m/s (78 m per step), aiming at the doorway and then into the next room. A stair, which has no shared edge, still aims at the room centre. A berth holds a bed. A head holds a toilet and a shower. Press P in the viewer for the top-down plan.
 
 | Deck | Name | Program |
 | --- | --- | --- |

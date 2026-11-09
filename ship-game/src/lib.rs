@@ -1,6 +1,7 @@
 //! Time Helm 3D viewer. The ship is simulated on the server; this crate only watches it.
 
 mod app_3d;
+mod cabin_marks;
 mod deck_geometry;
 mod shader_embed;
 mod shared;
