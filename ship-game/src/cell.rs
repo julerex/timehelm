@@ -71,9 +71,9 @@ impl SideMaterial {
         }
     }
 
-    /// Edges agents may cross when both sides are passable.
+    /// Open deck and doors can be crossed. Windows and marine panels block.
     pub fn is_passable(self) -> bool {
-        matches!(self, Self::Open)
+        matches!(self, Self::Open | Self::Door)
     }
 
     /// 2D plan / 3D fine-LOD stroke colour for non-open sides.
@@ -102,7 +102,13 @@ impl SideMaterial {
 }
 
 /// True when agents may cross the edge between two sides.
+///
+/// A door on either face is an opening, including when the other face is still a
+/// marine panel. A window or a pair of solid faces stays blocked.
 pub fn shared_edge_passable(from: SideMaterial, to: SideMaterial) -> bool {
+    if from == SideMaterial::Door || to == SideMaterial::Door {
+        return true;
+    }
     from.is_passable() && to.is_passable()
 }
 
@@ -335,6 +341,39 @@ mod tests {
         cells.insert((0, 0), open_cell());
         cells.insert((1, 0), open_cell());
         assert!(step_allowed(&cells, 0, 0, 1, 0));
+    }
+
+    #[test]
+    fn door_opens_edge_against_marine_panel_window_blocks() {
+        assert!(SideMaterial::Door.is_passable());
+        assert!(SideMaterial::Open.is_passable());
+        assert!(!SideMaterial::Window.is_passable());
+        assert!(!SideMaterial::MarinePanel.is_passable());
+        assert!(shared_edge_passable(
+            SideMaterial::Door,
+            SideMaterial::MarinePanel
+        ));
+        assert!(shared_edge_passable(
+            SideMaterial::MarinePanel,
+            SideMaterial::Door
+        ));
+        assert!(shared_edge_passable(SideMaterial::Open, SideMaterial::Door));
+        assert!(!shared_edge_passable(
+            SideMaterial::MarinePanel,
+            SideMaterial::Open
+        ));
+        assert!(!shared_edge_passable(
+            SideMaterial::MarinePanel,
+            SideMaterial::MarinePanel
+        ));
+        assert!(!shared_edge_passable(
+            SideMaterial::Window,
+            SideMaterial::Open
+        ));
+        assert!(!shared_edge_passable(
+            SideMaterial::Window,
+            SideMaterial::MarinePanel
+        ));
     }
 
     #[test]

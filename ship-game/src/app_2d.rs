@@ -10,7 +10,9 @@ use crate::cell_box::{deck_walk_grid, step_allowed, CellIndex, PlanKey};
 use crate::deck_layout::{DeckCells, DeckLayouts, CELL_SIZE_M, NUM_DECKS};
 use crate::edit_mode_2d::{spawn_edit_mode_panel, PlanEditPlugin};
 use crate::load_screen::{spawn_load_menu, GamePhase, LoadScreenPlugin};
-use crate::plan_mesh::{build_deck_mesh, build_deck_wall_mesh, DeckPlanMeshes};
+use crate::plan_mesh::{
+    build_deck_fixture_mesh, build_deck_mesh, build_deck_wall_mesh, DeckPlanMeshes,
+};
 use crate::shared::{
     asset_plugin, cursor_in_game_viewport, deck_info_text_2d, format_cell_hover_line,
     game_camera_viewport, primary_window,
@@ -338,6 +340,7 @@ fn spawn_plan_deck_entities(
     let mut deck_entities = [Entity::PLACEHOLDER; NUM_DECKS];
     let mut floor_meshes: [Handle<Mesh>; NUM_DECKS] = std::array::from_fn(|_| Handle::default());
     let mut wall_meshes: [Handle<Mesh>; NUM_DECKS] = std::array::from_fn(|_| Handle::default());
+    let mut fixture_meshes: [Handle<Mesh>; NUM_DECKS] = std::array::from_fn(|_| Handle::default());
     for (deck_i, slot) in deck_entities.iter_mut().enumerate() {
         let mesh_handle = meshes.add(build_deck_mesh(deck_i, layouts.deck(deck_i)));
         floor_meshes[deck_i] = mesh_handle.clone();
@@ -348,6 +351,8 @@ fn spawn_plan_deck_entities(
         };
         let wall_mesh_handle = meshes.add(build_deck_wall_mesh(layouts.deck(deck_i)));
         wall_meshes[deck_i] = wall_mesh_handle.clone();
+        let fixture_mesh_handle = meshes.add(build_deck_fixture_mesh(layouts.deck(deck_i)));
+        fixture_meshes[deck_i] = fixture_mesh_handle.clone();
         *slot = commands
             .spawn((
                 Mesh2d(mesh_handle),
@@ -360,6 +365,12 @@ fn spawn_plan_deck_entities(
             .with_children(|plan| {
                 plan.spawn((
                     Mesh2d(wall_mesh_handle),
+                    MeshMaterial2d(assets.shared_material.clone()),
+                    Transform::IDENTITY,
+                    plan_world_render_layers(),
+                ));
+                plan.spawn((
+                    Mesh2d(fixture_mesh_handle),
                     MeshMaterial2d(assets.shared_material.clone()),
                     Transform::IDENTITY,
                     plan_world_render_layers(),
@@ -397,6 +408,7 @@ fn spawn_plan_deck_entities(
         DeckPlanMeshes {
             floors: floor_meshes,
             walls: wall_meshes,
+            fixtures: fixture_meshes,
         },
     )
 }

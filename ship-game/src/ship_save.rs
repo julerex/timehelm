@@ -572,7 +572,26 @@ mod tests {
     use super::*;
     use crate::deck_layout::deck_cell_layouts;
     use crate::deck_layout::CELL_SIZE_M;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    fn publish_save(path: &Path, public_dir: &Path) {
+        std::fs::create_dir_all(public_dir).expect("create public dir");
+        let Some(name) = path.file_name() else {
+            return;
+        };
+        let dest = public_dir.join(name);
+        if paths_are_same_file(path, &dest) {
+            return;
+        }
+        std::fs::copy(path, dest).expect("copy to public");
+    }
+
+    fn paths_are_same_file(left: &Path, right: &Path) -> bool {
+        match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        }
+    }
 
     #[test]
     fn roundtrip_procedural_layout() {
@@ -717,14 +736,40 @@ mod tests {
         let mut layouts = read_save(&path).expect("read save");
         refresh_all_cabin_sides(&mut layouts);
         write_save(&path, &layouts).expect("write save");
+        let beds = layouts
+            .cells
+            .iter_occupied()
+            .filter(|(_, cell)| {
+                cell.fixtures
+                    .iter()
+                    .any(|fixture| fixture.to_tag() == Fixture::TAG_BED)
+            })
+            .count();
         let public_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/public/saved_ships");
-        std::fs::create_dir_all(&public_dir).expect("create public dir");
-        if let Some(name) = path.file_name() {
-            let dest = public_dir.join(name);
-            std::fs::copy(&path, &dest).expect("copy to public");
-        }
+        publish_save(Path::new(&path), &public_dir);
         super::write_save_manifest(&public_dir).expect("manifest");
-        eprintln!("refreshed cabin sides: {}", path.display());
+        eprintln!("refreshed cabin sides: {} ({beds} beds)", path.display());
+    }
+
+    #[test]
+    fn publish_save_keeps_bytes_when_source_is_already_public() {
+        let pid = std::process::id();
+        let public_dir = std::env::temp_dir().join(format!("timehelm-publish-{pid}"));
+        let elsewhere = std::env::temp_dir().join(format!("timehelm-publish-src-{pid}"));
+        std::fs::create_dir_all(&public_dir).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let public_file = public_dir.join("same.ship.zst");
+        std::fs::write(&public_file, b"ship-bytes").unwrap();
+        publish_save(&public_file, &public_dir);
+        assert_eq!(std::fs::read(&public_file).unwrap(), b"ship-bytes");
+
+        let source = elsewhere.join("same.ship.zst");
+        std::fs::write(&source, b"from-saved-ships").unwrap();
+        publish_save(&source, &public_dir);
+        assert_eq!(std::fs::read(&public_file).unwrap(), b"from-saved-ships");
+
+        std::fs::remove_dir_all(&public_dir).unwrap();
+        std::fs::remove_dir_all(&elsewhere).unwrap();
     }
 
     #[test]

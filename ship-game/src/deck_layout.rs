@@ -1,7 +1,8 @@
 //! Procedural deck grid and cell zoning shared by 3D and 2D ship views (+X aft→fore, corner origin).
 
 use crate::cell::{
-    Cell, Entity, EntityError, EntityId, EntityKind, FloorMaterial, Location, SideMaterial,
+    Bed, Cell, Entity, EntityError, EntityId, EntityKind, Fixture, FloorMaterial, Location, Shower,
+    SideMaterial, Toilet,
 };
 use crate::cell_box::{self, BEAM, LENGTH};
 use crate::cell_box::{CellBox, CellIndex, PlanKey};
@@ -884,6 +885,101 @@ fn side_material_mut(cell: &mut Cell, side_idx: usize) -> &mut SideMaterial {
     }
 }
 
+fn opposite_wall_idx(wall_idx: usize) -> usize {
+    match wall_idx {
+        0 => 2,
+        1 => 3,
+        2 => 0,
+        _ => 1,
+    }
+}
+
+fn same_fixture_kind(a: Fixture, b: Fixture) -> bool {
+    a.to_tag() == b.to_tag()
+}
+
+fn module_has_fixture(build: &DeckBuild, module_cells: &[PlanKey], kind: Fixture) -> bool {
+    module_cells.iter().any(|plan| {
+        build.cells.get(plan).is_some_and(|cell| {
+            cell.fixtures
+                .iter()
+                .copied()
+                .any(|f| same_fixture_kind(f, kind))
+        })
+    })
+}
+
+/// Door on the cabin face and the corridor face so both plan strokes and both step checks agree.
+fn write_door_both_faces(build: &mut DeckBuild, door_cell: PlanKey, wall_idx: usize) {
+    if let Some(cell) = build.cells.get_mut(&door_cell) {
+        *side_material_mut(cell, wall_idx) = SideMaterial::Door;
+    }
+    let Some(neighbor) = neighbor_plan(door_cell, wall_idx) else {
+        return;
+    };
+    if let Some(neighbor_cell) = build.cells.get_mut(&neighbor) {
+        *side_material_mut(neighbor_cell, opposite_wall_idx(wall_idx)) = SideMaterial::Door;
+    }
+}
+
+/// Bed, then toilet, then shower. A full 4-cell interior strip leaves the second cell empty.
+/// A clipped cabin uses the interior cells it has, then other cells in the module, so each
+/// kind still lands on its own cell when the module is large enough. Kinds already present
+/// are left alone.
+fn furnish_cabin_module(build: &mut DeckBuild, module_cells: &[PlanKey]) {
+    let mut interior: Vec<PlanKey> = module_cells
+        .iter()
+        .copied()
+        .filter(|plan| {
+            let (lx, ly) = cabin_local(*plan);
+            is_cabin_interior(lx, ly)
+        })
+        .collect();
+    interior.sort_by_key(|plan| (plan.0, plan.1));
+    let mut slots = if interior.len() >= 4 {
+        vec![interior[0], interior[2], interior[3]]
+    } else {
+        interior
+    };
+    if slots.len() < 3 {
+        let mut rest: Vec<PlanKey> = module_cells
+            .iter()
+            .copied()
+            .filter(|plan| !slots.contains(plan))
+            .collect();
+        rest.sort_by_key(|plan| {
+            let on_door = build.cells.get(plan).is_some_and(cell_has_door);
+            (on_door, plan.0, plan.1)
+        });
+        for plan in rest {
+            if slots.len() == 3 {
+                break;
+            }
+            slots.push(plan);
+        }
+    }
+    if slots.is_empty() {
+        return;
+    }
+    let kinds = [
+        Fixture::Bed(Bed),
+        Fixture::Toilet(Toilet),
+        Fixture::Shower(Shower),
+    ];
+    for (slot, kind) in slots.into_iter().zip(kinds) {
+        if module_has_fixture(build, module_cells, kind) {
+            continue;
+        }
+        if let Some(cell) = build.cells.get_mut(&slot) {
+            cell.fixtures.push(kind);
+        }
+    }
+}
+
+fn cell_has_door(cell: &Cell) -> bool {
+    [cell.side1, cell.side2, cell.side3, cell.side4].contains(&SideMaterial::Door)
+}
+
 fn edge_side(
     occupied: &HashSet<PlanKey>,
     corridor_cells: &HashSet<PlanKey>,
@@ -1075,6 +1171,7 @@ fn assign_perimeter_cabin_sides_for_deck(
         let outboard_wi = outboard_wall_idx(band);
 
         let mut door_x: Option<u16> = None;
+        let mut door_placement: Option<(PlanKey, usize)> = None;
         let mut ends = [(min_x, ()), (max_x, ())];
         ends.sort_by_key(|(x, _)| x.abs_diff(module_mid_x));
         for &(end_x, _) in &ends {
@@ -1084,8 +1181,7 @@ fn assign_perimeter_cabin_sides_for_deck(
             }
             if neighbor_is_corridor(occupied, corridor_cells, door_cell, inboard_wi) {
                 door_x = Some(end_x);
-                *side_material_mut(build.cells.get_mut(&door_cell).expect("cell"), inboard_wi) =
-                    SideMaterial::Door;
+                door_placement = Some((door_cell, inboard_wi));
                 break;
             }
         }
@@ -1127,12 +1223,7 @@ fn assign_perimeter_cabin_sides_for_deck(
                 if current != SideMaterial::Door && current != SideMaterial::Window {
                     *side_material_mut(cell, wi) = SideMaterial::MarinePanel;
                 }
-                let opposite = match wi {
-                    0 => 2,
-                    1 => 3,
-                    2 => 0,
-                    _ => 1,
-                };
+                let opposite = opposite_wall_idx(wi);
                 if let Some(nb_cell) = build.cells.get_mut(&nb) {
                     let nb_current = *side_material_mut(nb_cell, opposite);
                     if nb_current != SideMaterial::Door && nb_current != SideMaterial::Window {
@@ -1141,10 +1232,16 @@ fn assign_perimeter_cabin_sides_for_deck(
                 }
             }
         }
+        if let Some((door_cell, wall_idx)) = door_placement {
+            write_door_both_faces(build, door_cell, wall_idx);
+        }
+        furnish_cabin_module(build, &module_cells);
     }
 }
 
-/// Recompute corridor/cabin edge materials on every deck without changing floors or entities.
+/// Recompute corridor/cabin edge materials on every deck and fill missing cabin fixtures.
+///
+/// Floors and entities are left unchanged. Fixture kinds already in a cabin are kept.
 pub fn refresh_all_cabin_sides(layouts: &mut DeckLayouts) {
     for deck_i in 0..NUM_DECKS {
         let deck_z = deck_i as u8;
@@ -1173,6 +1270,7 @@ pub fn refresh_all_cabin_sides(layouts: &mut DeckLayouts) {
                 slot.side2 = cell.side2;
                 slot.side3 = cell.side3;
                 slot.side4 = cell.side4;
+                slot.fixtures = cell.fixtures;
             }
         }
     }
@@ -1250,6 +1348,7 @@ pub fn deck_layouts(step_m: f32) -> DeckLayouts {
 mod cabin_sides_tests {
     use super::*;
     use crate::cell::SideMaterial;
+    use std::collections::{HashMap, HashSet};
 
     fn cell_has_material(cell: &Cell, material: SideMaterial) -> bool {
         [cell.side1, cell.side2, cell.side3, cell.side4]
@@ -1297,6 +1396,148 @@ mod cabin_sides_tests {
         assert!(
             interior_count > 0,
             "expected cabin interior cells on deck 5"
+        );
+    }
+
+    fn side_at(cell: &Cell, idx: usize) -> SideMaterial {
+        match idx {
+            0 => cell.side1,
+            1 => cell.side2,
+            2 => cell.side3,
+            _ => cell.side4,
+        }
+    }
+
+    #[test]
+    fn deck_five_door_step_is_allowed_and_window_is_not() {
+        use crate::cell_box::{step_allowed, WALL_DELTAS};
+
+        let layouts = deck_cell_layouts(CELL_SIZE_M);
+        let mut door_steps = 0u32;
+        let mut window_blocks = 0u32;
+        for (idx, cell) in layouts.cells.iter_deck(4) {
+            for (wi, side) in [cell.side1, cell.side2, cell.side3, cell.side4]
+                .into_iter()
+                .enumerate()
+            {
+                let (dx, dy) = WALL_DELTAS[wi];
+                if side == SideMaterial::Door {
+                    let neighbor = idx.neighbor(wi).expect("door faces a cell");
+                    let neighbor_cell = layouts.cells.get(neighbor).expect("door neighbor");
+                    assert_eq!(
+                        side_at(neighbor_cell, opposite_wall_idx(wi)),
+                        SideMaterial::Door,
+                        "both faces of doorway at {idx:?} should be doors"
+                    );
+                    assert!(
+                        step_allowed(&layouts.cells, idx, dx, dy),
+                        "agent should step through the door at {idx:?}"
+                    );
+                    door_steps += 1;
+                } else if side == SideMaterial::Window {
+                    let other_is_door = idx.neighbor(wi).is_some_and(|neighbor| {
+                        layouts.cells.get(neighbor).is_some_and(|neighbor_cell| {
+                            side_at(neighbor_cell, opposite_wall_idx(wi)) == SideMaterial::Door
+                        })
+                    });
+                    if other_is_door {
+                        continue;
+                    }
+                    assert!(
+                        !step_allowed(&layouts.cells, idx, dx, dy),
+                        "window at {idx:?} should block"
+                    );
+                    window_blocks += 1;
+                }
+            }
+        }
+        assert!(door_steps > 0, "expected a passable cabin door on deck 5");
+        assert!(
+            window_blocks > 0,
+            "expected a blocking hull window on deck 5"
+        );
+    }
+
+    #[test]
+    fn deck_five_door_cabins_have_one_of_each_fixture() {
+        let layouts = deck_cell_layouts(CELL_SIZE_M);
+        let deck = layouts.deck(4);
+        let mut fixtures_by_module: HashMap<(i32, i32), Vec<(PlanKey, Fixture)>> = HashMap::new();
+        let mut door_modules: HashSet<(i32, i32)> = HashSet::new();
+        for (plan, cell) in deck.iter_cells() {
+            if cell.floor != FloorMaterial::Wood {
+                continue;
+            }
+            let key = cabin_room_key(plan);
+            if cell_has_material(cell, SideMaterial::Door) {
+                door_modules.insert(key);
+            }
+            for fixture in &cell.fixtures {
+                fixtures_by_module
+                    .entry(key)
+                    .or_default()
+                    .push((plan, *fixture));
+            }
+        }
+        assert!(!door_modules.is_empty(), "expected door cabins on deck 5");
+        for key in door_modules {
+            let fixtures = fixtures_by_module
+                .get(&key)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let beds = fixture_plans(fixtures, Fixture::Bed(Bed));
+            let toilets = fixture_plans(fixtures, Fixture::Toilet(Toilet));
+            let showers = fixture_plans(fixtures, Fixture::Shower(Shower));
+            assert_eq!(beds.len(), 1, "cabin {key:?} should have one bed");
+            assert_eq!(toilets.len(), 1, "cabin {key:?} should have one toilet");
+            assert_eq!(showers.len(), 1, "cabin {key:?} should have one shower");
+            assert_ne!(beds[0], toilets[0], "cabin {key:?} fixtures share a cell");
+            assert_ne!(beds[0], showers[0], "cabin {key:?} fixtures share a cell");
+            assert_ne!(
+                toilets[0], showers[0],
+                "cabin {key:?} fixtures share a cell"
+            );
+        }
+    }
+
+    fn fixture_plans(fixtures: &[(PlanKey, Fixture)], kind: Fixture) -> Vec<PlanKey> {
+        fixtures
+            .iter()
+            .filter(|(_, fixture)| same_fixture_kind(*fixture, kind))
+            .map(|(plan, _)| *plan)
+            .collect()
+    }
+
+    fn count_fixtures(layouts: &DeckLayouts, deck: u8, kind: Fixture) -> usize {
+        layouts
+            .cells
+            .iter_deck(deck)
+            .map(|(_, cell)| {
+                cell.fixtures
+                    .iter()
+                    .filter(|fixture| same_fixture_kind(**fixture, kind))
+                    .count()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn refresh_fills_missing_toilet_without_duplicating_beds() {
+        let mut layouts = deck_cell_layouts(CELL_SIZE_M);
+        let beds_before = count_fixtures(&layouts, 4, Fixture::Bed(Bed));
+        let toilets_before = count_fixtures(&layouts, 4, Fixture::Toilet(Toilet));
+        assert!(beds_before > 0, "expected beds before refresh");
+        assert!(toilets_before > 0, "expected toilets before refresh");
+        for (_, cell) in layouts.cells.iter_occupied_mut() {
+            cell.fixtures
+                .retain(|fixture| !same_fixture_kind(*fixture, Fixture::Toilet(Toilet)));
+        }
+        assert_eq!(count_fixtures(&layouts, 4, Fixture::Toilet(Toilet)), 0);
+        refresh_all_cabin_sides(&mut layouts);
+        assert_eq!(count_fixtures(&layouts, 4, Fixture::Bed(Bed)), beds_before);
+        assert_eq!(
+            count_fixtures(&layouts, 4, Fixture::Toilet(Toilet)),
+            toilets_before
         );
     }
 }

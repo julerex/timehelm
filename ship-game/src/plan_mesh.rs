@@ -1,5 +1,6 @@
-//! Baked 2D plan meshes (floor quads + wall strokes) per deck.
+//! Baked 2D plan meshes (floor quads, wall strokes, and fixture marks) per deck.
 
+use crate::cell::Fixture;
 use crate::cell_box;
 use crate::deck_geometry::{
     merged_plan_rectangles_mesh_colored, merged_plan_wall_borders_mesh_varied_colored, PlanWallEdge,
@@ -9,13 +10,18 @@ use bevy::prelude::*;
 
 const Z_CELL_PLANE: f32 = 0.0;
 const Z_WALL_PLANE: f32 = 0.001;
+/// Above wall strokes (`0.001`) and under wandering humans (`0.012`).
+const Z_FIXTURE_PLANE: f32 = 0.002;
 /// Plan-view wall stroke width (10 cm); each cell draws its own edges.
 pub const PLAN_WALL_THICKNESS_M: f32 = 0.10;
+/// Centered fixture mark, small enough to sit inside a ~1 m cell.
+const FIXTURE_MARK_M: f32 = 0.45;
 
 #[derive(Resource)]
 pub struct DeckPlanMeshes {
     pub floors: [Handle<Mesh>; NUM_DECKS],
     pub walls: [Handle<Mesh>; NUM_DECKS],
+    pub fixtures: [Handle<Mesh>; NUM_DECKS],
 }
 
 fn color_to_linear_array(c: Color) -> [f32; 4] {
@@ -78,6 +84,40 @@ fn collect_wall_edges(deck: DeckCells<'_>) -> Vec<(PlanWallEdge, f32, [f32; 4])>
 pub fn build_deck_wall_mesh(deck: DeckCells<'_>) -> Mesh {
     let edges = collect_wall_edges(deck);
     merged_plan_wall_borders_mesh_varied_colored(&edges, Z_WALL_PLANE)
+}
+
+fn fixture_mark_color(fixture: Fixture) -> Color {
+    match fixture {
+        Fixture::Bed(_) => Color::srgb(0.76, 0.58, 0.38),
+        Fixture::Shower(_) => Color::srgb(0.45, 0.78, 0.95),
+        Fixture::Toilet(_) => Color::srgb(0.93, 0.93, 0.88),
+    }
+}
+
+/// One small centered quad per fixture. Extra fixtures in the same cell shift along the ship.
+pub fn build_deck_fixture_mesh(deck: DeckCells<'_>) -> Mesh {
+    let half = FIXTURE_MARK_M * 0.5;
+    let mut centers = Vec::new();
+    let mut colors = Vec::new();
+    for (plan, cell) in deck.iter_cells() {
+        if cell.fixtures.is_empty() {
+            continue;
+        }
+        let origin = deck.index(plan).to_world_xy();
+        let count = cell.fixtures.len();
+        for (i, fixture) in cell.fixtures.iter().enumerate() {
+            let shift = if count == 1 {
+                0.0
+            } else {
+                let span = FIXTURE_MARK_M * 0.35;
+                let t = i as f32 / (count - 1) as f32;
+                (t - 0.5) * span
+            };
+            centers.push(origin + Vec2::new(shift, 0.0));
+            colors.push(color_to_linear_array(fixture_mark_color(*fixture)));
+        }
+    }
+    merged_plan_rectangles_mesh_colored(&centers, &colors, half, half, Z_FIXTURE_PLANE)
 }
 
 /// Fine-LOD 3D wall boxes (centre, half-extents, linear RGBA) for non-open sides.
@@ -143,6 +183,9 @@ pub fn rebuild_plan_deck_meshes(
     }
     if let Some(mesh) = meshes.get_mut(&handles.walls[deck_i]) {
         *mesh = build_deck_wall_mesh(deck);
+    }
+    if let Some(mesh) = meshes.get_mut(&handles.fixtures[deck_i]) {
+        *mesh = build_deck_fixture_mesh(deck);
     }
 }
 
