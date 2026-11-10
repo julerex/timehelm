@@ -37,8 +37,8 @@ make run-ship-native
 
 | Action | Binding |
 | --- | --- |
-| Pan | W A S D |
-| Orbit | Q / E, or right-drag |
+| Pan | W Q S D |
+| Orbit | A / E, or right-drag |
 | Lift | R / F |
 | Dolly | Z / X, or the scroll wheel |
 | Pan with the mouse | Middle-drag |
@@ -47,6 +47,8 @@ make run-ship-native
 | Keymap | K |
 
 Interaction is listed in the keymap and is not available to viewers.
+
+Page Up and Page Down change which deck is cut away. They leave the camera at the same height above the sea. Keyboard pan moves at 100 m/s.
 
 The top bar shows the simulation clock in UTC, the deck, crew count, food and water in days, and power for the current minute. P switches to a top-down plan of the current deck, where berths show a bed and heads show a toilet and a shower. Hover a room for its name, stocks, and who is inside.
 
