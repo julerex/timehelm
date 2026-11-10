@@ -11,6 +11,7 @@ use crate::deck_geometry::{
     extruded_polygon_deck_mesh, procedural_deck_plan_texture_image, ship_bulwark_mesh,
     ship_hull_plate,
 };
+use crate::lamps::{lamp_uniform, LAMP_LIMIT};
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{asset_plugin, primary_window};
 use crate::venue_props::venue_mesh;
@@ -217,6 +218,10 @@ struct ShipSpawned(bool);
 #[derive(Resource, Clone)]
 struct SharedClipMaterial(Handle<ShipClipMaterial>);
 
+/// Eight cabin lamps written into [`ShipClipMaterial::lamps`] from [`sync_clip`].
+#[derive(Resource, Clone, Copy)]
+struct CabinLamps([Vec4; LAMP_LIMIT]);
+
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 struct ShipClipMaterial {
     /// `.x` = world Z of the deck cut (m). `.y` = alpha for fragments above the cut.
@@ -228,6 +233,9 @@ struct ShipClipMaterial {
     /// `.xyz` = camera position (m). `.w` = [`SUN_SPECULAR_GAIN`].
     #[uniform(0)]
     eye: Vec4,
+    /// `.xyz` = lamp position (m). `.w` = radius (m). Zero radius marks an unused slot.
+    #[uniform(0)]
+    lamps: [Vec4; LAMP_LIMIT],
     #[texture(1)]
     #[sampler(2)]
     deck_pattern: Handle<Image>,
@@ -318,6 +326,7 @@ fn setup(
         clip_data: Vec4::new(cut_z(deck.0), 0.0, 0.0, 0.0),
         sun: sun_uniform(sun_rotation),
         eye: eye_uniform(Vec3::ZERO),
+        lamps: [Vec4::ZERO; LAMP_LIMIT],
         deck_pattern,
     });
     commands.insert_resource(SharedClipMaterial(clip_handle));
@@ -539,6 +548,7 @@ fn spawn_ship_once(
             }
         }
     }
+    commands.insert_resource(CabinLamps(lamp_uniform(&snapshot.rooms)));
     let now = time.elapsed_secs();
     for crew in &snapshot.crew {
         let pos = crew_pos(crew);
@@ -795,6 +805,7 @@ fn deck_and_keymap(
 fn sync_clip(
     deck: Res<CurrentDeck>,
     shared: Option<Res<SharedClipMaterial>>,
+    cabin_lamps: Option<Res<CabinLamps>>,
     mut materials: ResMut<Assets<ShipClipMaterial>>,
     lights: Query<&Transform, With<DirectionalLight>>,
     cameras: Query<&Transform, With<GameCamera3d>>,
@@ -817,7 +828,15 @@ fn sync_clip(
     } else {
         material.eye
     };
-    if clip_data == material.clip_data && sun == material.sun && eye == material.eye {
+    let lamps = cabin_lamps
+        .as_ref()
+        .map(|cabin_lamps| cabin_lamps.0)
+        .unwrap_or([Vec4::ZERO; LAMP_LIMIT]);
+    if clip_data == material.clip_data
+        && sun == material.sun
+        && eye == material.eye
+        && lamps == material.lamps
+    {
         return;
     }
     let Some(material) = materials.get_mut(&shared.0) else {
@@ -826,6 +845,7 @@ fn sync_clip(
     material.clip_data = clip_data;
     material.sun = sun;
     material.eye = eye;
+    material.lamps = lamps;
 }
 
 fn sun_light_rotation() -> Quat {
