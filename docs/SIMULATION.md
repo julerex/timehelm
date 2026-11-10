@@ -68,9 +68,9 @@ Eighty named people are seeded from a stored seed. They share 4-berth cabins. De
 | Bridge | 4 |
 | Relief | 9 |
 
-A watch is 8 hours. Department `i` is offset by `i * 45` minutes, so the watches stagger. On shift, a person walks to their assigned station. Off shift, hunger above 0.6 sends them to the mess; otherwise they return to their berth. Health below 0.55 sends them to the clinic first.
+A watch is 8 hours. Department `i` is offset by `i * 45` minutes, so the watches stagger. On shift, a person walks to their assigned station. Off shift, hunger above 0.6 sends them to the mess. When hunger and fatigue are both at most 0.6 and companionship is above 0.6, they go to a mess or restaurant that already holds another living person. If every mess and restaurant is empty, they go to an empty one. Otherwise they return to their berth. Health below 0.55 sends them to the clinic first.
 
-Each minute, hunger and thirst rise by `1/1440` (capped at 1.5). Fatigue rises by `1/480` on shift and falls by `1/480` while sleeping in a berth. Health falls slowly when hunger exceeds 0.85 or thirst exceeds 0.85.
+Each minute, hunger and thirst rise by `1/1440` (capped at 1.5). Fatigue rises by `1/480` on shift and falls by `1/480` while sleeping in a berth. Companionship above 0.8 halves that sleep recovery. Companionship starts at 0.5. A living person who is alone among living people gains `1/1440` each minute, capped at 1.5. Sharing a room with another living person removes `1/480` each minute, floored at 0. Health at or below 0 is not company, and that person's companionship stays put. Health falls slowly when hunger exceeds 0.85 or thirst exceeds 0.85.
 
 Eating requires hunger of at least 0.5 and a mess, restaurant, or galley. A portion is 0.45 kg of meals and relieves hunger by 0.4. Drinking takes 0.12 L from a water store when thirst is at least 0.35 and relieves thirst by 0.3. In the clinic, health below 0.9 consumes 0.02 kg of medical supplies and restores 0.05 health.
 
@@ -139,7 +139,7 @@ There is no participant role yet. `authorize` has nowhere to return `Ok(())`.
 
 ## Persistence
 
-`server/migrations` creates `world_meta`, `decks`, `rooms`, `doors`, `stations`, `crew`, `stocks`, `jobs`, and `crops`. Older `players`, `entities`, and `game_state` tables are left in place and unused.
+`server/migrations` creates `world_meta`, `decks`, `rooms`, `doors`, `stations`, `crew`, `stocks`, `jobs`, and `crops`. `0002_companionship.sql` adds `crew.companionship` as `DOUBLE PRECISION NOT NULL DEFAULT 0.5`. Older `players`, `entities`, and `game_state` tables are left in place and unused. The API crew object does not include companionship.
 
 The server applies migrations on startup when the database user can create tables. When `_sqlx_migrations` already matches this binary, startup skips DDL. It then loads the world or seeds it, catches up, and saves. It writes again at each minute boundary and on shutdown. Polygons are JSON. Enums are serde snake_case strings.
 

@@ -88,6 +88,7 @@ pub struct CrewMember {
     pub thirst: f64,
     pub fatigue: f64,
     pub health: f64,
+    pub companionship: f64,
     pub activity: Activity,
     pub berth_id: u32,
     pub station_id: Option<u32>,
@@ -347,6 +348,7 @@ impl World {
     }
 
     fn tick_needs(&mut self, minute: u32) {
+        let living_here = self.living_by_room();
         let crew_count = self.crew.len();
         let mut notes = Vec::new();
         for (index, crew) in self.crew.iter_mut().enumerate() {
@@ -354,6 +356,8 @@ impl World {
             let thirst_before = crew.thirst;
             let health_before = crew.health;
             let activity_before = crew.activity;
+            let companionship_before = crew.companionship;
+            let room_id = crew.room_id;
             crew.hunger = (crew.hunger + 1.0 / 1440.0).min(1.5);
             crew.thirst = (crew.thirst + 1.0 / 1440.0).min(1.5);
             if crew.hunger > 0.85 {
@@ -362,13 +366,26 @@ impl World {
             if crew.thirst > 0.85 {
                 crew.health = (crew.health - 0.03 / 1440.0).max(0.0);
             }
+            if health_before > 0.0 {
+                let with_company = living_here.get(room_id as usize).copied().unwrap_or(0) >= 2;
+                crew.companionship = if with_company {
+                    (companionship_before - 1.0 / 480.0).max(0.0)
+                } else {
+                    (companionship_before + 1.0 / 1440.0).min(1.5)
+                };
+            }
             if on_shift(crew.watch_offset_min, minute) {
                 crew.fatigue = (crew.fatigue + 1.0 / 480.0).min(1.0);
                 if crew.activity != Activity::Eating && crew.activity != Activity::Treating {
                     crew.activity = Activity::Working;
                 }
             } else if crew.room_id == crew.berth_id {
-                crew.fatigue = (crew.fatigue - 1.0 / 480.0).max(0.0);
+                let recovery = if companionship_before > 0.8 {
+                    0.5 / 480.0
+                } else {
+                    1.0 / 480.0
+                };
+                crew.fatigue = (crew.fatigue - recovery).max(0.0);
                 crew.activity = Activity::Sleeping;
             } else {
                 crew.activity = Activity::OffWatch;
@@ -748,8 +765,46 @@ impl World {
             if let Some(room_id) = self.first_room(RoomKind::Mess) {
                 return room_id;
             }
+        } else if !on_shift(crew.watch_offset_min, minute)
+            && crew.fatigue <= 0.6
+            && crew.companionship > 0.6
+        {
+            if let Some(room_id) = self.company_room(crew.id) {
+                return room_id;
+            }
         }
         crew.berth_id
+    }
+
+    fn company_room(&self, crew_id: u32) -> Option<u32> {
+        let mut empty = None;
+        for room in &self.rooms {
+            if !matches!(room.kind, RoomKind::Mess | RoomKind::Restaurant) {
+                continue;
+            }
+            let occupied = self
+                .crew
+                .iter()
+                .any(|other| other.id != crew_id && other.health > 0.0 && other.room_id == room.id);
+            if occupied {
+                return Some(room.id);
+            }
+            if empty.is_none() {
+                empty = Some(room.id);
+            }
+        }
+        empty
+    }
+
+    fn living_by_room(&self) -> Vec<u32> {
+        let mut counts = vec![0; self.rooms.len()];
+        for crew in &self.crew {
+            let index = crew.room_id as usize;
+            if crew.health > 0.0 && index < counts.len() {
+                counts[index] += 1;
+            }
+        }
+        counts
     }
 
     fn move_crew(&mut self, index: usize, goal: u32, adj: &[Vec<u32>]) {
@@ -1138,6 +1193,7 @@ fn muster(world: &World) -> Vec<CrewMember> {
                 thirst: 0.2,
                 fatigue: 0.15,
                 health: 0.95,
+                companionship: 0.5,
                 activity: Activity::Idle,
                 berth_id,
                 station_id,
@@ -1787,6 +1843,113 @@ mod tests {
         }
         assert!(berths > 0);
         assert!(heads > 0);
+    }
+
+    #[test]
+    fn a_lonely_rested_person_joins_an_occupied_mess() {
+        let mut world = World::generate(21, 1_700_000_000).expect("layout");
+        let messes: Vec<u32> = world
+            .rooms
+            .iter()
+            .filter(|room| room.kind == RoomKind::Mess)
+            .map(|room| room.id)
+            .collect();
+        assert!(messes.len() >= 2, "need two messes");
+        let empty = messes[0];
+        let occupied = messes[1];
+        let berth = world.crew[0].berth_id;
+        let park = world.first_room(RoomKind::Corridor).expect("corridor");
+        for index in 0..world.crew.len() {
+            place(&mut world, index, park);
+        }
+        place(&mut world, 0, berth);
+        place(&mut world, 3, berth);
+        place(&mut world, 1, occupied);
+        place(&mut world, 4, occupied);
+        place(&mut world, 5, empty);
+        world.crew[5].health = 0.0;
+        let minute = minute_of_day(world.last_tick_unix + STEP_SECONDS);
+        let off_watch = (480 + 1440 - minute % 1440) % 1440;
+        world.crew[0].watch_offset_min = off_watch;
+        world.crew[0].hunger = 0.2;
+        world.crew[0].thirst = 0.2;
+        world.crew[0].fatigue = 0.1;
+        world.crew[0].health = 1.0;
+        world.crew[0].companionship = 0.6;
+        world.crew[3].health = 0.0;
+        world.crew[3].hunger = 0.0;
+        world.crew[3].thirst = 0.0;
+        world.crew[3].companionship = 0.4;
+        world.crew[1].health = 1.0;
+        world.crew[1].hunger = 0.2;
+        world.crew[1].companionship = 0.5;
+        world.crew[4].health = 1.0;
+        world.crew[4].hunger = 0.2;
+        world.crew[4].companionship = 0.5;
+
+        assert_eq!(world.goal_room(&world.crew[0], minute), berth);
+        world.crew[0].companionship = 0.9;
+        world.crew[0].fatigue = 0.9;
+        assert_eq!(world.goal_room(&world.crew[0], minute), berth);
+        world.crew[0].fatigue = 0.1;
+        assert_eq!(world.goal_room(&world.crew[0], minute), occupied);
+        assert_ne!(world.goal_room(&world.crew[0], minute), empty);
+
+        world.step();
+        assert_eq!(world.crew[0].activity, Activity::Walking);
+        assert_ne!(world.crew[0].room_id, empty);
+        assert!((world.crew[0].companionship - (0.9 + 1.0 / 1440.0)).abs() < 1e-12);
+        assert!((world.crew[3].companionship - 0.4).abs() < 1e-12);
+        let shared = 0.5 - 1.0 / 480.0;
+        assert!((world.crew[1].companionship - shared).abs() < 1e-12);
+        assert!((world.crew[4].companionship - shared).abs() < 1e-12);
+    }
+
+    #[test]
+    fn isolation_slows_sleep_recovery() {
+        let mut world = World::generate(22, 1_700_000_000).expect("layout");
+        let berths: Vec<u32> = world
+            .rooms
+            .iter()
+            .filter(|room| room.kind == RoomKind::Berth)
+            .map(|room| room.id)
+            .collect();
+        assert!(berths.len() >= 2, "need two berths");
+        let full_berth = berths[0];
+        let lonely_berth = berths[1];
+        let park = world.first_room(RoomKind::Corridor).expect("corridor");
+        for index in 0..world.crew.len() {
+            place(&mut world, index, park);
+        }
+        place(&mut world, 0, full_berth);
+        place(&mut world, 1, lonely_berth);
+        let minute = minute_of_day(world.last_tick_unix + STEP_SECONDS);
+        let off_watch = (480 + 1440 - minute % 1440) % 1440;
+        world.crew[0].watch_offset_min = off_watch;
+        world.crew[1].watch_offset_min = off_watch;
+        world.crew[0].hunger = 0.2;
+        world.crew[1].hunger = 0.2;
+        world.crew[0].thirst = 0.2;
+        world.crew[1].thirst = 0.2;
+        world.crew[0].fatigue = 0.8;
+        world.crew[1].fatigue = 0.8;
+        world.crew[0].health = 1.0;
+        world.crew[1].health = 1.0;
+        world.crew[0].companionship = 0.0;
+        world.crew[1].companionship = 0.9;
+        world.crew[0].berth_id = full_berth;
+        world.crew[1].berth_id = lonely_berth;
+
+        world.step();
+
+        let full_drop = 0.8 - world.crew[0].fatigue;
+        let lonely_drop = 0.8 - world.crew[1].fatigue;
+        assert!((full_drop - 1.0 / 480.0).abs() < 1e-12);
+        assert!((lonely_drop - full_drop / 2.0).abs() < 1e-12);
+        assert_eq!(world.crew[0].activity, Activity::Sleeping);
+        assert_eq!(world.crew[1].activity, Activity::Sleeping);
+        assert_eq!(world.crew[0].room_id, full_berth);
+        assert_eq!(world.crew[1].room_id, lonely_berth);
     }
 
     fn place(world: &mut World, index: usize, room_id: u32) {
