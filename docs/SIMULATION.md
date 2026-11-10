@@ -68,13 +68,15 @@ Eighty named people are seeded from a stored seed. They share 4-berth cabins. De
 | Bridge | 4 |
 | Relief | 9 |
 
+Health at or below 0 is death. The body stays in the crew list, in the room and at the coordinates where they fell. A dead person does not eat, drink, walk, or fish, and does not staff a station or a room. The clinic does not raise that health and does not spend medical supplies on the body.
+
 A watch is 8 hours. Within a department, person `n` (counting from 0) has offset `(n mod 3) * 480` minutes, so three watches cover the day. A department of three or more has someone on shift at minutes 0, 480, and 960.
 
-Health below 0.55 sends a person to the clinic. Otherwise thirst above 0.7 sends them to a water store. Otherwise hunger above 0.7 sends them to a mess, restaurant, or galley that holds at least one 0.45 kg meal, or to the first mess when no portion is on board. Otherwise, on shift, they walk to their assigned station. Off shift, fatigue above 0.6 sends them to a head, and a person already in a head goes to their berth. Otherwise they go to a mess or restaurant.
+Health below 0.55 sends a living person to the clinic. Otherwise thirst above 0.7 sends them to a water store. Otherwise hunger above 0.7 sends them to a mess, restaurant, or galley that holds at least one 0.45 kg meal, or to the first mess when no portion is on board. Otherwise, on shift, they walk to their assigned station. Off shift, fatigue above 0.6 sends them to a head, and a person already in a head goes to their berth. Otherwise they go to a mess or restaurant.
 
-Each minute, hunger and thirst rise by `1/1440` (capped at 1.5). Fatigue rises by `1/480` on shift and falls by `1/480` while sleeping in a berth. Health falls slowly when hunger exceeds 0.85 or thirst exceeds 0.85.
+Each minute, a living person's hunger and thirst rise by `1/1440` (capped at 1.5). Fatigue rises by `1/480` on shift and falls by `1/480` while sleeping in a berth. Health falls slowly when hunger exceeds 0.85 or thirst exceeds 0.85.
 
-Eating requires hunger of at least 0.5 while standing in a mess, restaurant, or galley. A portion is 0.45 kg of meals taken from that room and relieves hunger by 0.4. Drinking requires thirst of at least 0.35 while standing in a water store. It takes 0.12 L from that room and relieves thirst by 0.3. In the clinic, health below 0.9 consumes 0.02 kg of medical supplies and restores 0.05 health.
+Eating requires hunger of at least 0.5 while standing in a mess, restaurant, or galley. A portion is 0.45 kg of meals taken from that room and relieves hunger by 0.4. Drinking requires thirst of at least 0.35 while standing in a water store. It takes 0.12 L from that room and relieves thirst by 0.3. In the clinic, a living patient with health below 0.9 consumes 0.02 kg of medical supplies and restores 0.05 health.
 
 ## Goods and recipes
 
@@ -98,9 +100,9 @@ Recipes are fixed data in `sim::recipes`. A job consumes its inputs when it star
 
 Output is added to the station room. Cook meal output, the meal and the compost, is added to the first mess.
 
-Hydroponics is not a job. Each crop room advances `1/1440` of a day per minute, times the power fraction, and only while a hydroponics crew member is in the room on shift. The cycle is 28 days. Harvest is 0.12 kg of vegetables per m², plus compost equal to 25% of that yield, and it consumes 0.01 kg of nutrients per m². If nutrients are short, the crop waits at day 28. Light, air, and irrigation water are inflows, so crop mass is not a closed balance.
+Hydroponics is not a job. Each crop room advances `1/1440` of a day per minute, times the power fraction, and only while a living hydroponics crew member is in the room on shift. The cycle is 28 days. Harvest is 0.12 kg of vegetables per m², plus compost equal to 25% of that yield, and it consumes 0.01 kg of nutrients per m². If nutrients are short, the crop waits at day 28. Light, air, and irrigation water are inflows, so crop mass is not a closed balance.
 
-Fishing adds 8 kg per on-shift fisher per day into the cold store, and only while that person is in the fishing room. That catch is a renewable inflow.
+Fishing adds 8 kg per living on-shift fisher per day into the cold store, and only while that person is in the fishing room. That catch is a renewable inflow.
 
 Once a day, at minute 0, 0.2% of stored garments become scrap.
 

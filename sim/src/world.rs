@@ -350,6 +350,9 @@ impl World {
         let crew_count = self.crew.len();
         let mut notes = Vec::new();
         for (index, crew) in self.crew.iter_mut().enumerate() {
+            if !is_alive(crew) {
+                continue;
+            }
             let hunger_before = crew.hunger;
             let thirst_before = crew.thirst;
             let health_before = crew.health;
@@ -429,6 +432,9 @@ impl World {
         let water_before = self.total(Good::WaterL);
         let mut missed_meals = 0u32;
         for index in 0..crew_count {
+            if !is_alive(&self.crew[index]) {
+                continue;
+            }
             let room_id = self.crew[index].room_id;
             let in_dining = dining.contains(&room_id);
             if self.crew[index].hunger >= 0.5 && in_dining {
@@ -506,19 +512,16 @@ impl World {
                 .rooms
                 .get(room_id as usize)
                 .is_some_and(|room| room.kind == RoomKind::Clinic);
+            let alive = is_alive(&self.crew[index]);
             let health_before = self.crew[index].health;
-            if in_clinic && health_before < 0.9 && self.take_good(Good::MedicalKg, 0.02) {
+            if alive && in_clinic && health_before < 0.9 && self.take_good(Good::MedicalKg, 0.02) {
                 self.crew[index].health = (health_before + 0.05).min(1.0);
                 self.crew[index].activity = Activity::Treating;
-                if health_before <= 0.0 {
-                    self.log_life(index, LifeEvent::Revived, "treatment raised health from 0");
-                } else {
-                    self.log_life(
-                        index,
-                        LifeEvent::Treated,
-                        &format!("treatment raised health from {health_before:.3}"),
-                    );
-                }
+                self.log_life(
+                    index,
+                    LifeEvent::Treated,
+                    &format!("treatment raised health from {health_before:.3}"),
+                );
             }
         }
         let medical_after = self.total(Good::MedicalKg);
@@ -695,7 +698,8 @@ impl World {
             let Some(room) = self.rooms.get(station.room_id as usize) else {
                 continue;
             };
-            if room.kind == RoomKind::Fishing
+            if is_alive(crew)
+                && room.kind == RoomKind::Fishing
                 && crew.room_id == room.id
                 && on_shift(crew.watch_offset_min, minute)
             {
@@ -734,6 +738,9 @@ impl World {
             .map(|crew| self.goal_room(crew, minute))
             .collect();
         for (index, goal) in goals.into_iter().enumerate() {
+            if !is_alive(&self.crew[index]) {
+                continue;
+            }
             self.move_crew(index, goal, &adj);
         }
     }
@@ -823,7 +830,8 @@ impl World {
             return false;
         };
         self.crew.iter().any(|crew| {
-            crew.station_id == Some(station_id)
+            is_alive(crew)
+                && crew.station_id == Some(station_id)
                 && crew.room_id == station.room_id
                 && on_shift(crew.watch_offset_min, minute)
         })
@@ -831,7 +839,8 @@ impl World {
 
     fn room_staffed(&self, room_id: u32, minute: u32) -> bool {
         self.crew.iter().any(|crew| {
-            crew.room_id == room_id
+            is_alive(crew)
+                && crew.room_id == room_id
                 && crew.station_id.is_some_and(|station_id| {
                     self.stations
                         .get(station_id as usize)
@@ -945,7 +954,6 @@ enum LifeEvent {
     Critical,
     Died,
     Treated,
-    Revived,
     Asleep,
     Awoke,
     MealsExhausted,
@@ -965,7 +973,6 @@ impl LifeEvent {
             LifeEvent::Critical => "critical",
             LifeEvent::Died => "died",
             LifeEvent::Treated => "treated",
-            LifeEvent::Revived => "revived",
             LifeEvent::Asleep => "asleep",
             LifeEvent::Awoke => "awoke",
             LifeEvent::MealsExhausted => "meals_exhausted",
@@ -1030,6 +1037,10 @@ fn class_served(demands: &[(PowerClass, f64)], served: &[f64], class: PowerClass
 
 fn minute_of_day(unix: i64) -> u32 {
     u32::try_from(unix.div_euclid(60).rem_euclid(1440)).unwrap_or(0)
+}
+
+fn is_alive(crew: &CrewMember) -> bool {
+    crew.health > 0.0
 }
 
 pub fn on_shift(offset_min: u32, minute_of_day: u32) -> bool {
@@ -1687,7 +1698,7 @@ mod tests {
     }
 
     #[test]
-    fn clinic_revival_is_logged() {
+    fn clinic_revival_does_not_raise_the_dead() {
         let start = 1_700_000_000;
         let mut world = World::generate(13, start).expect("layout");
         let clinic = world.first_room(RoomKind::Clinic).expect("clinic");
@@ -1697,40 +1708,83 @@ mod tests {
         world.crew[0].hunger = 0.0;
         world.crew[0].thirst = 0.0;
         world.crew[0].health = 0.0;
-        let name = world.crew[0].name.clone();
+        let room_id = world.crew[0].room_id;
+        let x = world.crew[0].x;
+        let y = world.crew[0].y;
+        let medical = world.total(Good::MedicalKg);
         let logs = capture_life_logs(|| {
             world.step();
             world.step();
         });
-        let expected = (0.0_f64 + 0.05).min(1.0);
-        let expected = (expected + 0.05).min(1.0);
-        assert!((world.crew[0].health - expected).abs() < 1e-12);
-        assert_eq!(world.crew[0].activity, Activity::Treating);
-        assert_logged(
-            &logs,
-            "revived",
-            &name,
-            &[
-                "treatment raised health from 0",
-                &format!("sim_unix={}", start + STEP_SECONDS),
-            ],
-        );
+        assert_eq!(world.crew[0].health, 0.0);
+        assert_eq!(world.crew[0].room_id, room_id);
+        assert_eq!(world.crew[0].x, x);
+        assert_eq!(world.crew[0].y, y);
+        assert_eq!(world.total(Good::MedicalKg), medical);
+        assert!(!logs.contains("revived:"));
+        assert!(!logs.contains("died:"));
+
+        place(&mut world, 1, clinic);
+        world.crew[1].hunger = 0.0;
+        world.crew[1].thirst = 0.0;
+        world.crew[1].health = 0.5;
+        let patient = world.crew[1].name.clone();
+        let logs = capture_life_logs(|| world.step());
+        let expected = (0.5_f64 + 0.05).min(1.0);
+        assert!((world.crew[1].health - expected).abs() < 1e-12);
+        assert_eq!(world.crew[0].health, 0.0);
+        assert_eq!(world.crew[0].room_id, room_id);
+        assert_eq!(world.crew[0].x, x);
+        assert_eq!(world.crew[0].y, y);
+        assert!((world.total(Good::MedicalKg) - (medical - 0.02)).abs() < 1e-9);
         assert_logged(
             &logs,
             "treated",
-            &name,
+            &patient,
             &[
-                "treatment raised health from",
-                &format!("sim_unix={}", start + 2 * STEP_SECONDS),
+                "treatment raised health from 0.500",
+                &format!("sim_unix={}", world.last_tick_unix),
             ],
         );
-        assert_eq!(count_life(&logs, "revived:"), 1);
-        assert_ship_logged(
-            &logs,
-            "medical_exhausted",
-            &["fell below one 0.02 kg treatment"],
-        );
-        assert!(!logs.contains("died:"));
+        assert!(!logs.contains("revived:"));
+    }
+
+    #[test]
+    fn a_dead_crew_member_stays_put_and_is_not_revived() {
+        let mut world = World::generate(14, 1_700_000_000).expect("layout");
+        let clinic = world.first_room(RoomKind::Clinic).expect("clinic");
+        place(&mut world, 0, clinic);
+        world.stocks.retain(|stock| stock.good != Good::MedicalKg);
+        world.add_stock(clinic, Good::MedicalKg, 1.0);
+        world.crew[0].health = 0.0;
+        world.crew[1].health = 0.0;
+        let id = world.crew[0].id;
+        let room_id = world.crew[0].room_id;
+        let x = world.crew[0].x;
+        let y = world.crew[0].y;
+        let berth = world.crew[1].room_id;
+        let berth_x = world.crew[1].x;
+        let berth_y = world.crew[1].y;
+        let medical = world.total(Good::MedicalKg);
+        let logs = capture_life_logs(|| {
+            world.step();
+            world.step();
+        });
+        assert_eq!(world.crew.len(), 80);
+        assert_eq!(world.crew[0].id, id);
+        assert_eq!(world.crew[0].health, 0.0);
+        assert_eq!(world.crew[0].room_id, room_id);
+        assert_eq!(world.crew[0].x, x);
+        assert_eq!(world.crew[0].y, y);
+        assert_eq!(world.crew[1].health, 0.0);
+        assert_eq!(world.crew[1].room_id, berth);
+        assert_eq!(world.crew[1].x, berth_x);
+        assert_eq!(world.crew[1].y, berth_y);
+        assert_ne!(berth, clinic);
+        assert_eq!(world.total(Good::MedicalKg), medical);
+        assert_ne!(world.crew[0].activity, Activity::Eating);
+        assert_ne!(world.crew[0].activity, Activity::Treating);
+        assert!(!logs.contains("revived:"));
     }
 
     #[test]
