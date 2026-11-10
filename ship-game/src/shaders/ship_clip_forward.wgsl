@@ -6,6 +6,9 @@ struct ShipClipMaterial {
     clip_data: vec4<f32>,
     sun: vec4<f32>,
     eye: vec4<f32>,
+    // Eight lamps. xyz is the position in metres, w is the radius. w <= 0 is unused.
+    // Same count as LAMP_LIMIT in lamps.rs.
+    lamps: array<vec4<f32>, 8>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: ShipClipMaterial;
@@ -18,6 +21,19 @@ fn safe_normalize(v: vec3<f32>) -> vec3<f32> {
         return vec3<f32>(0.0, 0.0, 1.0);
     }
     return v * inverseSqrt(len2);
+}
+
+// Same cubic as `one_lamp` in lamps.rs. 1 at the lamp, under 0.05 at 20 m for a 6 m radius.
+fn lamp_gain(world_pos: vec3<f32>) -> f32 {
+    var gain = 0.0;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let lamp = material.lamps[i];
+        if (lamp.w > 0.0) {
+            let q = length(world_pos - lamp.xyz) / lamp.w;
+            gain = gain + 1.0 / (1.0 + q * q * q);
+        }
+    }
+    return gain;
 }
 
 fn daylight(albedo: vec3<f32>, world_pos: vec3<f32>, world_normal: vec3<f32>) -> vec3<f32> {
@@ -40,6 +56,7 @@ fn daylight(albedo: vec3<f32>, world_pos: vec3<f32>, world_normal: vec3<f32>) ->
     let vertical = 1.0 - abs(n.z);
     let gloss = pow(clamp(dot(n, half_dir), 0.0, 1.0), mix(16.0, 72.0, vertical));
     color = color + sun_rgb * gloss * vertical * material.eye.w;
+    color = color + albedo * vec3<f32>(1.0, 0.78, 0.45) * lamp_gain(world_pos);
     return color;
 }
 
