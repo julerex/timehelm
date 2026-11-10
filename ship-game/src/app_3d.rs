@@ -67,6 +67,10 @@ const CLIP_SHADER_PREPASS: &str = concat!(
     env!("CARGO_CRATE_NAME"),
     "/shaders/ship_clip_prepass.wgsl"
 );
+/// Diffuse gain in [`ShipClipMaterial::sun`]. Tuned so a sunlit deck stays near the old flat albedo.
+const SUN_DIFFUSE_GAIN: f32 = 1.15;
+/// Specular gain in [`ShipClipMaterial::eye`], applied only on near-vertical faces.
+const SUN_SPECULAR_GAIN: f32 = 0.16;
 
 /// Controls a viewer can perform. [`ViewerAction::Interact`] stays unbound.
 #[derive(Actionlike, PartialEq, Eq, Clone, Copy, Debug, Hash, Reflect)]
@@ -198,8 +202,15 @@ struct SharedClipMaterial(Handle<ShipClipMaterial>);
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 struct ShipClipMaterial {
+    /// `.x` = world Z of the deck cut (m). `.y` = alpha for fragments above the cut.
     #[uniform(0)]
     clip_data: Vec4,
+    /// `.xyz` = world direction toward the sun. `.w` = [`SUN_DIFFUSE_GAIN`].
+    #[uniform(0)]
+    sun: Vec4,
+    /// `.xyz` = camera position (m). `.w` = [`SUN_SPECULAR_GAIN`].
+    #[uniform(0)]
+    eye: Vec4,
     #[texture(1)]
     #[sampler(2)]
     deck_pattern: Handle<Image>,
@@ -287,8 +298,11 @@ fn setup(
     deck: Res<CurrentDeck>,
 ) {
     let deck_pattern = images.add(procedural_deck_plan_texture_image());
+    let sun_rotation = sun_light_rotation();
     let clip_handle = materials.add(ShipClipMaterial {
         clip_data: Vec4::new(cut_z(deck.0), 0.0, 0.0, 0.0),
+        sun: sun_uniform(sun_rotation),
+        eye: eye_uniform(Vec3::ZERO),
         deck_pattern,
     });
     commands.insert_resource(SharedClipMaterial(clip_handle));
@@ -323,7 +337,7 @@ fn setup(
             illuminance: 14000.0,
             ..default()
         },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, 0.4, 0.0)),
+        Transform::from_rotation(sun_rotation),
     ));
 
     commands.spawn(viewer_input_map());
@@ -677,16 +691,54 @@ fn sync_clip(
     deck: Res<CurrentDeck>,
     shared: Option<Res<SharedClipMaterial>>,
     mut materials: ResMut<Assets<ShipClipMaterial>>,
+    lights: Query<&Transform, With<DirectionalLight>>,
+    cameras: Query<&Transform, With<GameCamera3d>>,
 ) {
     let Some(shared) = shared else {
         return;
     };
-    if !deck.is_changed() && !shared.is_changed() {
+    let Some(material) = materials.get(&shared.0) else {
+        return;
+    };
+    let mut clip_data = material.clip_data;
+    clip_data.x = cut_z(deck.0);
+    let sun = if let Ok(light) = lights.single() {
+        sun_uniform(light.rotation)
+    } else {
+        material.sun
+    };
+    let eye = if let Ok(camera) = cameras.single() {
+        eye_uniform(camera.translation)
+    } else {
+        material.eye
+    };
+    if clip_data == material.clip_data && sun == material.sun && eye == material.eye {
         return;
     }
-    if let Some(material) = materials.get_mut(&shared.0) {
-        material.clip_data.x = cut_z(deck.0);
-    }
+    let Some(material) = materials.get_mut(&shared.0) else {
+        return;
+    };
+    material.clip_data = clip_data;
+    material.sun = sun;
+    material.eye = eye;
+}
+
+fn sun_light_rotation() -> Quat {
+    Quat::from_euler(EulerRot::XYZ, -0.9, 0.4, 0.0)
+}
+
+/// Directional lights emit along local -Z. Daylight comes from local +Z.
+fn to_sun_direction(rotation: Quat) -> Vec3 {
+    Transform::from_rotation(rotation).back().as_vec3()
+}
+
+fn sun_uniform(rotation: Quat) -> Vec4 {
+    let to_sun = to_sun_direction(rotation);
+    Vec4::new(to_sun.x, to_sun.y, to_sun.z, SUN_DIFFUSE_GAIN)
+}
+
+fn eye_uniform(position: Vec3) -> Vec4 {
+    Vec4::new(position.x, position.y, position.z, SUN_SPECULAR_GAIN)
 }
 
 fn update_hud(
@@ -1157,4 +1209,28 @@ fn pan_basis(rig: &CameraRig) -> (Vec3, Vec3) {
     let forward = forward.normalize();
     let right = Vec3::new(forward.y, -forward.x, 0.0);
     (right, forward)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sun_light_rotation, sun_uniform, to_sun_direction};
+    use bevy::prelude::*;
+
+    #[test]
+    fn directional_light_sun_shades_decks_and_bulkheads() {
+        let rotation = sun_light_rotation();
+        let to_sun = to_sun_direction(rotation);
+        assert_eq!(to_sun, Transform::from_rotation(rotation).back().as_vec3());
+        assert!(
+            to_sun.z > 0.45,
+            "deck tops should receive direct sun, got {to_sun:?}"
+        );
+        assert!(
+            to_sun.xy().length() > 0.65,
+            "port and starboard bulkheads should shade differently, got {to_sun:?}"
+        );
+        let packed = sun_uniform(rotation);
+        assert_eq!(packed.truncate(), to_sun);
+        assert!((packed.w - super::SUN_DIFFUSE_GAIN).abs() < 1e-6);
+    }
 }
