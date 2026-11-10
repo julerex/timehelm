@@ -1,9 +1,5 @@
 //! Polygon helpers that do not depend on the ship outline.
 
-use glam::Vec2;
-
-use crate::hull::point_in_polygon;
-
 /// Shoelace area in square metres.
 pub fn polygon_area(poly: &[[f32; 2]]) -> f32 {
     if poly.len() < 3 {
@@ -162,28 +158,6 @@ fn collinear_overlap(a0: [f32; 2], a1: [f32; 2], b0: [f32; 2], b1: [f32; 2]) -> 
         }
     }
     None
-}
-
-/// True when an inset of the rectangle lies inside `hull`.
-pub fn rect_inside(hull: &[Vec2], x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
-    if x1 - x0 < 2.0 || y1 - y0 < 2.0 {
-        return false;
-    }
-    let inset = 0.2;
-    let points = [
-        (x0 + inset, y0 + inset),
-        (x1 - inset, y0 + inset),
-        (x1 - inset, y1 - inset),
-        (x0 + inset, y1 - inset),
-        ((x0 + x1) * 0.5, (y0 + y1) * 0.5),
-        ((x0 + x1) * 0.5, y0 + inset),
-        ((x0 + x1) * 0.5, y1 - inset),
-        (x0 + inset, (y0 + y1) * 0.5),
-        (x1 - inset, (y0 + y1) * 0.5),
-    ];
-    points
-        .into_iter()
-        .all(|(x, y)| point_in_polygon(Vec2::new(x, y), hull))
 }
 
 #[cfg(test)]

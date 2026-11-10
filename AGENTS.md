@@ -159,7 +159,7 @@ make test    # sim tests, server tests, ship-game tests
 
 The world lives in the `sim` crate. The server loads it, catches up missed 60-second steps, and saves at each minute boundary. `/ws` sends one `snapshot`, then `delta` messages. A `command` from a viewer is answered with `command_rejected`. If `DATABASE_URL` is unset, the server does not invent a world; it sends `unavailable`.
 
-`/`, `/2d`, and `/seacells` redirect to `/3d/`. Page Up and Page Down change the visible deck. K opens the keymap. The economy does not run in Bevy.
+`/`, `/2d`, and `/seacells` redirect to `/3d/`. Page Up and Page Down change the visible deck and do not move the camera. K opens the keymap. The economy does not run in Bevy.
 
 ## Environment Variables
 
@@ -199,7 +199,7 @@ Call the app ready only after `fly secrets list -a timehelm` shows `DATABASE_URL
 2. In Cursor: **View → Simple Browser** (or Cmd/Ctrl+Shift+P → "Simple Browser: Show").
 3. Enter `http://localhost:8080/` in the Simple Browser address bar.
 
-The ship game loads WASM; first load may take a few seconds. WASD pans, Q and E orbit, Page Up and Page Down change decks, and K opens the keymap. The HUD clock is the simulation clock in UTC.
+The ship game loads WASM; first load may take a few seconds. W, Q, S, and D pan, A and E orbit, Page Up and Page Down change decks without moving the camera, and K opens the keymap. The HUD clock is the simulation clock in UTC.
 
 ### Cursor / cargo proxy error
 
@@ -212,7 +212,7 @@ The **Makefile** (see test/format/clippy targets) works around this by running *
 ## Cursor Cloud specific instructions
 
 - Use Rust **1.92.0** (the `rust:1.92` image in `Dockerfile`). Install the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` **0.2.130**, which must match `wasm-bindgen` in the workspace `Cargo.lock`. `scripts/build-ship.sh` fails if the CLI schema does not match. The WASM artifact is `target/wasm32-unknown-unknown/release/ship_game.wasm`.
-- `make run-ship` builds the Bevy WASM client into `client/public/ship/` and serves it from the Rust server. `http://localhost:8080/` redirects to `/3d/`. `/2d` and `/seacells` redirect there too. Page Up/Down switches decks. K toggles the keymap.
+- `make run-ship` builds the Bevy WASM client into `client/public/ship/` and serves it from the Rust server. `http://localhost:8080/` redirects to `/3d/`. `/2d` and `/seacells` redirect there too. Page Up/Down switches decks without moving the camera. K toggles the keymap.
 - `dotenv` reads `.env` from the process working directory. `make run-ship` and `cd server && cargo run` therefore need `server/.env`, not only a root `.env`. Copy `DATABASE_URL` into `server/.env`. If it is unset, the server still listens and tells the viewer the world is unavailable. It does not simulate an unsaved ship.
 - Local Postgres is cluster **16/main**. `policy-rc.d` can refuse `service postgresql start`; use `sudo pg_ctlcluster 16 main start`. The dev URL is `postgresql://postgres:password@localhost:5432/timehelm`. The local database user can create tables, so the server applies `server/migrations` on startup. `database/timehelm_schema.sql` is the older unused schema; re-running it fails on `CREATE TRIGGER`.
 - Fly Managed Postgres attaches `timehelm` as a writer. That user can read and write rows and cannot create tables, including `CREATE TABLE IF NOT EXISTS` when the table is already there. Apply `server/migrations` from this computer as `fly-user` (schema_admin): `fly mpg connect <cluster-id> -u fly-user -d timehelm`. Record the matching `_sqlx_migrations` checksum. Leave the writer role and `DATABASE_URL` unchanged. After the history matches, startup skips DDL, then loads or seeds the world.

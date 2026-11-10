@@ -2,7 +2,7 @@
 
 Time Helm is a persistent simulation of a self-sustaining community ship.
 
-The ship is a set of rooms on a 318 m × 60 m hull, not a lattice of 1 m cells. About 80 named crew work watches, walk between rooms, and run a closed material economy: bread, meals, fresh water, crops, fishing, cloth, timber, metal, and a small clinic. Solar power is a fixed average. When it runs short, grow lights and desalination throttle before the galley and the clinic.
+The ship is a set of rooms on a 365 m × 65 m hull shaped like Icon of the Seas, not a lattice of 1 m cells. Public deck plans set where the cabins, promenade, park, theaters, pools, and waterpark sit. Workshops, the gas-generator hall, and waste treatment are below those plans. About 80 named crew work watches, walk between rooms, and run a closed material economy: bread, meals, fresh water, crops, fishing, cloth, timber, metal, and a small clinic. Solar power is a fixed average. When it runs short, grow lights and desalination throttle before the galley and the clinic.
 
 Time runs at **1 real second = 1 sim second**. The server keeps the world in PostgreSQL and catches up any missed minutes when it starts, including while nobody is watching. The Bevy client is a viewer. It can orbit the ship, change decks, and read the keymap. It cannot change crew, stocks, or recipes. The command path is in place so a later participant role can be added without a second world model.
 
@@ -37,8 +37,8 @@ make run-ship-native
 
 | Action | Binding |
 | --- | --- |
-| Pan | W A S D |
-| Orbit | Q / E, or right-drag |
+| Pan | W Q S D |
+| Orbit | A / E, or right-drag |
 | Lift | R / F |
 | Dolly | Z / X, or the scroll wheel |
 | Pan with the mouse | Middle-drag |
@@ -47,6 +47,8 @@ make run-ship-native
 | Keymap | K |
 
 Interaction is listed in the keymap and is not available to viewers.
+
+Page Up and Page Down change which deck is cut away. They leave the camera at the same height above the sea. Keyboard pan moves at 100 m/s.
 
 The top bar shows the simulation clock in UTC, the deck, crew count, food and water in days, and power for the current minute. P switches to a top-down plan of the current deck, where berths show a bed and heads show a toilet and a shower. Hover a room for its name, stocks, and who is inside.
 
