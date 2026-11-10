@@ -29,7 +29,8 @@ use sim::{
     SHIP_BEAM_M, SHIP_LENGTH_M,
 };
 
-const CAMERA_PAN_SPEED_M_S: f32 = 520.0;
+/// Keyboard pan (metres per second). Slowed from 520 so a hold stays steerable across the hull.
+const CAMERA_PAN_SPEED_M_S: f32 = 100.0;
 const CAMERA_VERTICAL_SPEED_M_S: f32 = 260.0;
 const CAMERA_YAW_SPEED_RAD_S: f32 = 1.75;
 const CAMERA_DOLLY_SPEED_M_S: f32 = 520.0;
@@ -115,12 +116,12 @@ struct Binding {
 const BINDINGS: &[Binding] = &[
     Binding {
         action: "Pan",
-        keys: "W A S D",
+        keys: "W Q S D",
         available: true,
     },
     Binding {
         action: "Orbit",
-        keys: "Q / E, or right-drag",
+        keys: "A / E, or right-drag",
         available: true,
     },
     Binding {
@@ -358,13 +359,19 @@ fn setup(
     spawn_hud(&mut commands, ui_camera);
 }
 
+fn pan_binding() -> VirtualDPad {
+    // Q strafes, which is what A used to do. A orbits in Q's old direction.
+    VirtualDPad::new(KeyCode::KeyW, KeyCode::KeyS, KeyCode::KeyQ, KeyCode::KeyD)
+}
+
+fn orbit_binding() -> VirtualAxis {
+    VirtualAxis::new(KeyCode::KeyA, KeyCode::KeyE)
+}
+
 fn viewer_input_map() -> InputMap<ViewerAction> {
     InputMap::default()
-        .with_dual_axis(ViewerAction::Pan, VirtualDPad::wasd())
-        .with_axis(
-            ViewerAction::OrbitYaw,
-            VirtualAxis::new(KeyCode::KeyQ, KeyCode::KeyE),
-        )
+        .with_dual_axis(ViewerAction::Pan, pan_binding())
+        .with_axis(ViewerAction::OrbitYaw, orbit_binding())
         .with_axis(
             ViewerAction::Lift,
             VirtualAxis::new(KeyCode::KeyF, KeyCode::KeyR),
@@ -676,8 +683,7 @@ fn camera_controls(
     } else {
         pan_basis(&rig)
     };
-    rig.target += right * pan.x * CAMERA_PAN_SPEED_M_S * dt;
-    rig.target += forward * pan.y * CAMERA_PAN_SPEED_M_S * dt;
+    rig.target += keyboard_pan_delta(pan, dt, right, forward);
 
     let mut scroll_y = 0.0;
     for event in scroll.read() {
@@ -729,16 +735,19 @@ fn apply_camera(
     let deck_z = deck.0 as f32 * DECK_HEIGHT_M;
     for (mut transform, mut projection) in &mut cameras {
         if plan.enabled {
+            // Fixed above the sea. Page Up / Page Down change the cut, not this height.
+            // Orthographic scale does not depend on distance, so the plan stays framed.
+            let eye_z = plan_camera_z();
             *projection = Projection::Orthographic(OrthographicProjection {
                 scaling_mode: ScalingMode::FixedVertical {
                     viewport_height: SHIP_BEAM_M * 1.25,
                 },
                 scale: plan.scale,
                 near: 0.05,
-                far: 200.0,
+                far: eye_z + 16.0,
                 ..OrthographicProjection::default_3d()
             });
-            let eye = Vec3::new(rig.target.x, rig.target.y, deck_z + 24.0);
+            let eye = Vec3::new(rig.target.x, rig.target.y, eye_z);
             *transform = Transform::from_translation(eye)
                 .looking_at(Vec3::new(rig.target.x, rig.target.y, deck_z), Vec3::Y);
         } else if !projection.is_perspective() {
@@ -753,20 +762,22 @@ fn apply_camera(
 fn deck_and_keymap(
     actions: Query<&ActionState<ViewerAction>>,
     mut deck: ResMut<CurrentDeck>,
-    mut rig: ResMut<CameraRig>,
     mut keymap: ResMut<KeymapOpen>,
     mut panels: Query<&mut Node, With<KeymapPanel>>,
 ) {
     let Ok(action) = actions.single() else {
         return;
     };
-    if action.just_pressed(&ViewerAction::DeckUp) && deck.0 + 1 < DECK_COUNT {
-        deck.0 += 1;
-        rig.target.z = (deck.0 as f32 + 0.4) * DECK_HEIGHT_M;
+    // The cut moves with the deck. The camera target stays where the player left it.
+    if action.just_pressed(&ViewerAction::DeckUp) {
+        if let Some(next) = stepped_deck(deck.0, true) {
+            deck.0 = next;
+        }
     }
-    if action.just_pressed(&ViewerAction::DeckDown) && deck.0 > 0 {
-        deck.0 -= 1;
-        rig.target.z = (deck.0 as f32 + 0.4) * DECK_HEIGHT_M;
+    if action.just_pressed(&ViewerAction::DeckDown) {
+        if let Some(next) = stepped_deck(deck.0, false) {
+            deck.0 = next;
+        }
     }
     if action.just_pressed(&ViewerAction::Keymap) {
         keymap.0 = !keymap.0;
@@ -1442,6 +1453,26 @@ fn dir_from_yaw_pitch(yaw: f32, pitch: f32) -> Vec3 {
     Vec3::new(cp * yaw.cos(), cp * yaw.sin(), pitch.sin())
 }
 
+fn keyboard_pan_delta(pan: Vec2, dt: f32, right: Vec3, forward: Vec3) -> Vec3 {
+    right * pan.x * CAMERA_PAN_SPEED_M_S * dt + forward * pan.y * CAMERA_PAN_SPEED_M_S * dt
+}
+
+/// Next deck index, or `None` when the press would move past an end deck.
+fn stepped_deck(deck: usize, up: bool) -> Option<usize> {
+    if up && deck + 1 < DECK_COUNT {
+        Some(deck + 1)
+    } else if !up && deck > 0 {
+        Some(deck - 1)
+    } else {
+        None
+    }
+}
+
+/// Plan camera height above the sea. Independent of the selected deck.
+fn plan_camera_z() -> f32 {
+    DECK_COUNT as f32 * DECK_HEIGHT_M + 24.0
+}
+
 fn pan_basis(rig: &CameraRig) -> (Vec3, Vec3) {
     let direction = dir_from_yaw_pitch(rig.yaw, rig.pitch);
     let forward = Vec3::new(direction.x, direction.y, 0.0);
@@ -1455,8 +1486,245 @@ fn pan_basis(rig: &CameraRig) -> (Vec3, Vec3) {
 
 #[cfg(test)]
 mod tests {
-    use super::{sun_light_rotation, sun_uniform, to_sun_direction};
-    use bevy::prelude::*;
+    use super::*;
+    use bevy::input::InputPlugin;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    const HELD_KEYS: [KeyCode; 10] = [
+        KeyCode::KeyW,
+        KeyCode::KeyA,
+        KeyCode::KeyS,
+        KeyCode::KeyD,
+        KeyCode::KeyQ,
+        KeyCode::KeyE,
+        KeyCode::KeyR,
+        KeyCode::KeyF,
+        KeyCode::PageUp,
+        KeyCode::PageDown,
+    ];
+
+    fn camera_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            InputPlugin,
+            InputManagerPlugin::<ViewerAction>::default(),
+        ));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(1)));
+        app.insert_resource(CameraRig::default_for_deck(6));
+        app.insert_resource(CurrentDeck(6));
+        app.insert_resource(KeymapOpen(false));
+        app.insert_resource(PlanView {
+            enabled: false,
+            scale: 1.0,
+        });
+        app.world_mut()
+            .spawn((viewer_input_map(), ActionState::<ViewerAction>::default()));
+        app.add_systems(Update, (camera_controls, deck_and_keymap).chain());
+        app
+    }
+
+    fn rig(app: &mut App) -> (Vec3, f32) {
+        let rig = app.world().resource::<CameraRig>();
+        (rig.target, rig.yaw)
+    }
+
+    fn hold(app: &mut App, key: KeyCode) {
+        for held in HELD_KEYS {
+            held.release(app.world_mut());
+        }
+        app.update();
+        key.press(app.world_mut());
+        app.update();
+    }
+
+    #[test]
+    fn keyboard_pan_is_100_metres_per_second_and_stays_level() {
+        let delta = keyboard_pan_delta(Vec2::new(1.0, -0.5), 2.0, Vec3::X, Vec3::Y);
+        assert_eq!(delta, Vec3::new(200.0, -100.0, 0.0));
+
+        let mut app = camera_app();
+        app.update();
+        let (start, yaw) = rig(&mut app);
+        let (_, forward) = pan_basis(app.world().resource::<CameraRig>());
+        hold(&mut app, KeyCode::KeyW);
+        let (end, end_yaw) = rig(&mut app);
+        let moved = end - start;
+        let dt = app.world().resource::<Time>().delta_secs();
+        assert!(dt > 0.0);
+        assert!((moved.dot(forward) - CAMERA_PAN_SPEED_M_S * dt).abs() < 1e-2);
+        assert!(moved.z.abs() < 1e-4);
+        assert_eq!(end.z, start.z);
+        assert_eq!(end_yaw, yaw);
+        assert_eq!(CAMERA_PAN_SPEED_M_S, 100.0);
+    }
+
+    #[test]
+    fn q_strafes_and_a_orbits_without_changing_height() {
+        let mut app = camera_app();
+        app.update();
+        let (start, yaw) = rig(&mut app);
+        let (right, _) = pan_basis(app.world().resource::<CameraRig>());
+
+        hold(&mut app, KeyCode::KeyQ);
+        let (after_q, yaw_after_q) = rig(&mut app);
+        let q_move = after_q - start;
+        let dt = app.world().resource::<Time>().delta_secs();
+        assert!((q_move.dot(-right) - CAMERA_PAN_SPEED_M_S * dt).abs() < 1e-2);
+        assert!(q_move.z.abs() < 1e-4);
+        assert_eq!(yaw_after_q, yaw);
+
+        let (before_a, _) = rig(&mut app);
+        hold(&mut app, KeyCode::KeyA);
+        let (after_a, yaw_after_a) = rig(&mut app);
+        assert_eq!(after_a, before_a);
+        let orbit_dt = app.world().resource::<Time>().delta_secs();
+        assert!((yaw_after_a - yaw + CAMERA_YAW_SPEED_RAD_S * orbit_dt).abs() < 1e-3);
+    }
+
+    #[test]
+    fn other_camera_keys_keep_their_directions() {
+        let mut app = camera_app();
+        app.update();
+        let (start, _) = rig(&mut app);
+        let (right, forward) = pan_basis(app.world().resource::<CameraRig>());
+
+        hold(&mut app, KeyCode::KeyD);
+        let (after_d, _) = rig(&mut app);
+        let dt = app.world().resource::<Time>().delta_secs();
+        assert!(((after_d - start).dot(right) - CAMERA_PAN_SPEED_M_S * dt).abs() < 1e-2);
+
+        hold(&mut app, KeyCode::KeyS);
+        let (after_s, _) = rig(&mut app);
+        let dt = app.world().resource::<Time>().delta_secs();
+        assert!(((after_s - after_d).dot(-forward) - CAMERA_PAN_SPEED_M_S * dt).abs() < 1e-2);
+
+        let (_, yaw_before_e) = rig(&mut app);
+        hold(&mut app, KeyCode::KeyE);
+        let (_, yaw_after_e) = rig(&mut app);
+        let dt = app.world().resource::<Time>().delta_secs();
+        assert!((yaw_after_e - yaw_before_e - CAMERA_YAW_SPEED_RAD_S * dt).abs() < 1e-3);
+
+        let (before_r, _) = rig(&mut app);
+        hold(&mut app, KeyCode::KeyR);
+        let (after_r, _) = rig(&mut app);
+        let dt = app.world().resource::<Time>().delta_secs();
+        assert!((after_r.z - before_r.z - CAMERA_VERTICAL_SPEED_M_S * dt).abs() < 1e-2);
+        assert_eq!(after_r.x, before_r.x);
+        assert_eq!(after_r.y, before_r.y);
+
+        hold(&mut app, KeyCode::KeyF);
+        let (after_f, _) = rig(&mut app);
+        let dt = app.world().resource::<Time>().delta_secs();
+        assert!((after_r.z - after_f.z - CAMERA_VERTICAL_SPEED_M_S * dt).abs() < 1e-2);
+    }
+
+    #[test]
+    fn page_up_and_page_down_change_deck_without_moving_the_camera() {
+        let mut app = camera_app();
+        app.update();
+        let (start, yaw) = rig(&mut app);
+        let eye_z = rig_transform(app.world().resource::<CameraRig>())
+            .translation
+            .z;
+
+        hold(&mut app, KeyCode::PageUp);
+        assert_eq!(app.world().resource::<CurrentDeck>().0, 7);
+        let (after_up, yaw_after_up) = rig(&mut app);
+        assert_eq!(after_up, start);
+        assert_eq!(yaw_after_up, yaw);
+        assert_eq!(
+            rig_transform(app.world().resource::<CameraRig>())
+                .translation
+                .z,
+            eye_z
+        );
+
+        app.world_mut().resource_mut::<CurrentDeck>().0 = DECK_COUNT - 1;
+        hold(&mut app, KeyCode::PageUp);
+        assert_eq!(app.world().resource::<CurrentDeck>().0, DECK_COUNT - 1);
+        assert_eq!(rig(&mut app).0, start);
+
+        app.world_mut().resource_mut::<CurrentDeck>().0 = 0;
+        hold(&mut app, KeyCode::PageDown);
+        assert_eq!(app.world().resource::<CurrentDeck>().0, 0);
+        assert_eq!(rig(&mut app).0, start);
+
+        app.world_mut().resource_mut::<CurrentDeck>().0 = 7;
+        hold(&mut app, KeyCode::PageDown);
+        assert_eq!(app.world().resource::<CurrentDeck>().0, 6);
+        assert_eq!(rig(&mut app).0, start);
+        assert_eq!(
+            rig_transform(app.world().resource::<CameraRig>())
+                .translation
+                .z,
+            eye_z
+        );
+    }
+
+    #[test]
+    fn plan_camera_height_does_not_follow_the_deck() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(CameraRig::default_for_deck(6));
+        app.insert_resource(CurrentDeck(0));
+        app.insert_resource(PlanView {
+            enabled: true,
+            scale: 1.0,
+        });
+        app.world_mut().spawn((
+            GameCamera3d,
+            Transform::default(),
+            Projection::Perspective(PerspectiveProjection::default()),
+        ));
+        app.add_systems(Update, apply_camera);
+
+        app.update();
+        let mut query = app.world_mut().query::<&Transform>();
+        let low = query.single(app.world()).unwrap().translation.z;
+
+        app.world_mut().resource_mut::<CurrentDeck>().0 = DECK_COUNT - 1;
+        app.update();
+        let mut query = app.world_mut().query::<&Transform>();
+        let high = query.single(app.world()).unwrap().translation.z;
+
+        assert_eq!(low, plan_camera_z());
+        assert_eq!(high, low);
+        assert!(plan_camera_z() > (DECK_COUNT - 1) as f32 * DECK_HEIGHT_M);
+    }
+
+    #[test]
+    fn keymap_names_the_swapped_keys() {
+        let pan = BINDINGS
+            .iter()
+            .find(|binding| binding.action == "Pan")
+            .unwrap();
+        let orbit = BINDINGS
+            .iter()
+            .find(|binding| binding.action == "Orbit")
+            .unwrap();
+        assert_eq!(pan.keys, "W Q S D");
+        assert_eq!(orbit.keys, "A / E, or right-drag");
+        assert_eq!(
+            format!("{:?}", pan_binding()),
+            format!(
+                "{:?}",
+                viewer_input_map()
+                    .get_dual_axislike(&ViewerAction::Pan)
+                    .unwrap()[0]
+            )
+        );
+        assert_eq!(
+            format!("{:?}", orbit_binding()),
+            format!(
+                "{:?}",
+                viewer_input_map()
+                    .get_axislike(&ViewerAction::OrbitYaw)
+                    .unwrap()[0]
+            )
+        );
+    }
 
     #[test]
     fn directional_light_sun_shades_decks_and_bulkheads() {

@@ -1,10 +1,14 @@
 //! World state, the one-minute economic step, and catch-up.
+//!
+//! Need and life transitions are logged from the step. Those lines are not
+//! read back into the world.
 
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{polygon_centroid, shared_edge_span, EdgeSpan};
 use crate::kinds::{Activity, Department, Good, PowerClass, RoomKind, Skill};
 use crate::layout::build_ship;
+use crate::proto::format_unix_utc;
 use crate::recipes::{is_sink, is_source, recipe, RecipeId};
 
 pub const STEP_SECONDS: i64 = 60;
@@ -344,7 +348,12 @@ impl World {
 
     fn tick_needs(&mut self, minute: u32) {
         let crew_count = self.crew.len();
-        for crew in &mut self.crew {
+        let mut notes = Vec::new();
+        for (index, crew) in self.crew.iter_mut().enumerate() {
+            let hunger_before = crew.hunger;
+            let thirst_before = crew.thirst;
+            let health_before = crew.health;
+            let activity_before = crew.activity;
             crew.hunger = (crew.hunger + 1.0 / 1440.0).min(1.5);
             crew.thirst = (crew.thirst + 1.0 / 1440.0).min(1.5);
             if crew.hunger > 0.85 {
@@ -364,28 +373,130 @@ impl World {
             } else {
                 crew.activity = Activity::OffWatch;
             }
+            if hunger_before <= 0.85 && crew.hunger > 0.85 {
+                notes.push((
+                    index,
+                    LifeEvent::Starving,
+                    "hunger rose above 0.85; health falls while it stays there".to_string(),
+                ));
+            }
+            if thirst_before <= 0.85 && crew.thirst > 0.85 {
+                notes.push((
+                    index,
+                    LifeEvent::Dehydrated,
+                    "thirst rose above 0.85; health falls while it stays there".to_string(),
+                ));
+            }
+            if health_before >= 0.55 && crew.health < 0.55 {
+                let (prose, token) =
+                    harm_cause(crew.hunger, crew.thirst).unwrap_or(("no hunger or thirst", "none"));
+                notes.push((
+                    index,
+                    LifeEvent::Critical,
+                    format!("health fell below 0.55 from {prose}; cause=\"{token}\""),
+                ));
+            }
+            if health_before > 0.0 && crew.health <= 0.0 {
+                let detail = match harm_cause(crew.hunger, crew.thirst) {
+                    Some((prose, token)) => format!(
+                        "died from {prose}; health reached 0; crew member stays aboard; cause=\"{token}\""
+                    ),
+                    None => "health reached 0 with no hunger or thirst damage; crew member stays aboard; cause=\"none\"".to_string(),
+                };
+                notes.push((index, LifeEvent::Died, detail));
+            }
+            if activity_before != Activity::Sleeping && crew.activity == Activity::Sleeping {
+                notes.push((
+                    index,
+                    LifeEvent::Asleep,
+                    format!("fell asleep in berth; was {}", activity_before.label()),
+                ));
+            }
+            if activity_before == Activity::Sleeping && crew.activity != Activity::Sleeping {
+                notes.push((
+                    index,
+                    LifeEvent::Awoke,
+                    format!("woke; now {}", crew.activity.label()),
+                ));
+            }
+        }
+        for (index, event, detail) in notes {
+            self.log_life(index, event, &detail);
         }
         let dining = self.dining_rooms();
         let water_rooms = self.rooms_of(RoomKind::WaterStore);
+        let meals_before = self.total(Good::MealKg);
+        let water_before = self.total(Good::WaterL);
+        let mut missed_meals = 0u32;
         for index in 0..crew_count {
             let room_id = self.crew[index].room_id;
             let in_dining = dining.contains(&room_id);
-            if self.crew[index].hunger >= 0.5
-                && in_dining
-                && self.take_from_rooms(&dining, Good::MealKg, MEAL_PORTION_KG)
-            {
-                self.crew[index].hunger = (self.crew[index].hunger - HUNGER_RELIEF).max(0.0);
-                self.crew[index].activity = Activity::Eating;
+            if self.crew[index].hunger >= 0.5 && in_dining {
+                if self.take_from_rooms(&dining, Good::MealKg, MEAL_PORTION_KG) {
+                    let hunger_before = self.crew[index].hunger;
+                    self.crew[index].hunger = (hunger_before - HUNGER_RELIEF).max(0.0);
+                    self.crew[index].activity = Activity::Eating;
+                    let hunger_after = self.crew[index].hunger;
+                    self.log_life(
+                        index,
+                        LifeEvent::Ate,
+                        &format!(
+                            "ate {MEAL_PORTION_KG:.2} kg of meals; hunger {hunger_before:.3} -> {hunger_after:.3}"
+                        ),
+                    );
+                    if hunger_before > 0.85 && hunger_after <= 0.85 {
+                        self.log_life(
+                            index,
+                            LifeEvent::HungerEased,
+                            "hunger fell to 0.85 or below after eating",
+                        );
+                    }
+                } else {
+                    missed_meals += 1;
+                }
             }
             if self.crew[index].thirst >= 0.35
                 && self.take_from_rooms(&water_rooms, Good::WaterL, DRINK_LITRES)
             {
-                self.crew[index].thirst = (self.crew[index].thirst - THIRST_RELIEF).max(0.0);
+                let thirst_before = self.crew[index].thirst;
+                self.crew[index].thirst = (thirst_before - THIRST_RELIEF).max(0.0);
+                let thirst_after = self.crew[index].thirst;
+                self.log_life(
+                    index,
+                    LifeEvent::Drank,
+                    &format!(
+                        "drank {DRINK_LITRES:.2} L of water; thirst {thirst_before:.3} -> {thirst_after:.3}"
+                    ),
+                );
+                if thirst_before > 0.85 && thirst_after <= 0.85 {
+                    self.log_life(
+                        index,
+                        LifeEvent::ThirstEased,
+                        "thirst fell to 0.85 or below after drinking",
+                    );
+                }
             }
+        }
+        let meals_after = self.total(Good::MealKg);
+        if meals_before + 1e-9 >= MEAL_PORTION_KG && meals_after + 1e-9 < MEAL_PORTION_KG {
+            self.log_ship(
+                LifeEvent::MealsExhausted,
+                &format!(
+                    "meal stock fell below one {MEAL_PORTION_KG:.2} kg portion; {missed_meals} crew missed a meal"
+                ),
+            );
+        }
+        let water_after = self.total(Good::WaterL);
+        if water_before + 1e-9 >= DRINK_LITRES && water_after + 1e-9 < DRINK_LITRES {
+            self.log_ship(
+                LifeEvent::WaterExhausted,
+                &format!("fresh water fell below one {DRINK_LITRES:.2} L drink"),
+            );
         }
     }
 
     fn tick_clinic(&mut self) {
+        let medical_before = self.total(Good::MedicalKg);
         let crew_count = self.crew.len();
         for index in 0..crew_count {
             let room_id = self.crew[index].room_id;
@@ -393,10 +504,27 @@ impl World {
                 .rooms
                 .get(room_id as usize)
                 .is_some_and(|room| room.kind == RoomKind::Clinic);
-            if in_clinic && self.crew[index].health < 0.9 && self.take_good(Good::MedicalKg, 0.02) {
-                self.crew[index].health = (self.crew[index].health + 0.05).min(1.0);
+            let health_before = self.crew[index].health;
+            if in_clinic && health_before < 0.9 && self.take_good(Good::MedicalKg, 0.02) {
+                self.crew[index].health = (health_before + 0.05).min(1.0);
                 self.crew[index].activity = Activity::Treating;
+                if health_before <= 0.0 {
+                    self.log_life(index, LifeEvent::Revived, "treatment raised health from 0");
+                } else {
+                    self.log_life(
+                        index,
+                        LifeEvent::Treated,
+                        &format!("treatment raised health from {health_before:.3}"),
+                    );
+                }
             }
+        }
+        let medical_after = self.total(Good::MedicalKg);
+        if medical_before + 1e-9 >= 0.02 && medical_after + 1e-9 < 0.02 {
+            self.log_ship(
+                LifeEvent::MedicalExhausted,
+                "medical supplies fell below one 0.02 kg treatment",
+            );
         }
     }
 
@@ -705,6 +833,127 @@ impl World {
             .filter(|room| room.kind == kind)
             .map(|room| room.id)
             .collect()
+    }
+
+    fn log_life(&self, index: usize, event: LifeEvent, detail: &str) {
+        let meals_kg = self.total(Good::MealKg);
+        let water_l = self.total(Good::WaterL);
+        let medical_kg = self.total(Good::MedicalKg);
+        let sim_unix = self.last_tick_unix;
+        let sim_utc = format_unix_utc(sim_unix);
+        let Some((crew_id, name, room_id, deck, hunger, thirst, fatigue, health, activity)) =
+            self.crew.get(index).map(|crew| {
+                (
+                    crew.id,
+                    crew.name.clone(),
+                    crew.room_id,
+                    crew.deck,
+                    crew.hunger,
+                    crew.thirst,
+                    crew.fatigue,
+                    crew.health,
+                    crew.activity.label(),
+                )
+            })
+        else {
+            return;
+        };
+        let room = match self.rooms.get(room_id as usize) {
+            Some(room) => format!("{} ({})", room.name, room.kind.label()),
+            None => format!("room {room_id}"),
+        };
+        let token = event.token();
+        let line = format!(
+            "{token}: {detail}; crew_id={crew_id} name=\"{name}\" sim_unix={sim_unix} sim_utc=\"{sim_utc}\" room_id={room_id} room=\"{room}\" deck={deck} hunger={hunger:.4} thirst={thirst:.4} fatigue={fatigue:.4} health={health:.4} activity=\"{activity}\" meals_kg={meals_kg:.4} water_l={water_l:.4} medical_kg={medical_kg:.4}"
+        );
+        emit_life(event, &line);
+    }
+
+    fn log_ship(&self, event: LifeEvent, detail: &str) {
+        let token = event.token();
+        let sim_unix = self.last_tick_unix;
+        let sim_utc = format_unix_utc(sim_unix);
+        let meals_kg = self.total(Good::MealKg);
+        let water_l = self.total(Good::WaterL);
+        let medical_kg = self.total(Good::MedicalKg);
+        let line = format!(
+            "{token}: {detail}; sim_unix={sim_unix} sim_utc=\"{sim_utc}\" meals_kg={meals_kg:.4} water_l={water_l:.4} medical_kg={medical_kg:.4}"
+        );
+        emit_life(event, &line);
+    }
+}
+
+/// Need and life transitions from one minute of [`World::step`].
+///
+/// Logging does not change the step. Health reaching 0 leaves the person aboard.
+#[derive(Clone, Copy)]
+enum LifeEvent {
+    Ate,
+    Drank,
+    Starving,
+    Dehydrated,
+    HungerEased,
+    ThirstEased,
+    Critical,
+    Died,
+    Treated,
+    Revived,
+    Asleep,
+    Awoke,
+    MealsExhausted,
+    WaterExhausted,
+    MedicalExhausted,
+}
+
+impl LifeEvent {
+    fn token(self) -> &'static str {
+        match self {
+            LifeEvent::Ate => "ate",
+            LifeEvent::Drank => "drank",
+            LifeEvent::Starving => "starving",
+            LifeEvent::Dehydrated => "dehydrated",
+            LifeEvent::HungerEased => "hunger_eased",
+            LifeEvent::ThirstEased => "thirst_eased",
+            LifeEvent::Critical => "critical",
+            LifeEvent::Died => "died",
+            LifeEvent::Treated => "treated",
+            LifeEvent::Revived => "revived",
+            LifeEvent::Asleep => "asleep",
+            LifeEvent::Awoke => "awoke",
+            LifeEvent::MealsExhausted => "meals_exhausted",
+            LifeEvent::WaterExhausted => "water_exhausted",
+            LifeEvent::MedicalExhausted => "medical_exhausted",
+        }
+    }
+
+    fn warns(self) -> bool {
+        matches!(
+            self,
+            LifeEvent::Starving
+                | LifeEvent::Dehydrated
+                | LifeEvent::Critical
+                | LifeEvent::Died
+                | LifeEvent::MealsExhausted
+                | LifeEvent::WaterExhausted
+                | LifeEvent::MedicalExhausted
+        )
+    }
+}
+
+fn harm_cause(hunger: f64, thirst: f64) -> Option<(&'static str, &'static str)> {
+    match (hunger > 0.85, thirst > 0.85) {
+        (true, false) => Some(("hunger", "hunger")),
+        (false, true) => Some(("thirst", "thirst")),
+        (true, true) => Some(("hunger and thirst", "hunger_and_thirst")),
+        (false, false) => None,
+    }
+}
+
+fn emit_life(event: LifeEvent, line: &str) {
+    if event.warns() {
+        tracing::warn!(target: "timehelm::life", "{line}");
+    } else {
+        tracing::info!(target: "timehelm::life", "{line}");
     }
 }
 
@@ -1060,8 +1309,12 @@ fn roster() -> Vec<(String, Department, Skill)> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
     use super::*;
     use crate::fittings::{cabin_fittings, fitting_inside_room, FittingKind};
+    use crate::format_unix_utc;
     use crate::geom::{polygon_centroid, segment_crosses_span, shared_edge_span};
     use crate::hull::{point_in_polygon, point_on_deck};
     use crate::kinds::RoomKind;
@@ -1149,6 +1402,197 @@ mod tests {
             world.crew[0].hunger
         );
         assert!(world.total(Good::MealKg) < before);
+    }
+
+    #[test]
+    fn hunger_and_thirst_deaths_are_logged() {
+        let start = 1_700_000_000;
+        let mut world = World::generate(11, start).expect("layout");
+        let starved = world.crew[0].name.clone();
+        let starved_id = world.crew[0].id;
+        let dehydrated = world.crew[1].name.clone();
+        let dehydrated_id = world.crew[1].id;
+        let critical = world.crew[2].name.clone();
+        let both = world.crew[3].name.clone();
+        world.crew[0].hunger = 1.0;
+        world.crew[0].thirst = 0.0;
+        world.crew[0].health = 1e-6;
+        world.crew[1].hunger = 0.0;
+        world.crew[1].thirst = 1.0;
+        world.crew[1].health = 1e-6;
+        world.crew[2].hunger = 1.0;
+        world.crew[2].thirst = 0.0;
+        world.crew[2].health = 0.55;
+        world.crew[3].hunger = 1.0;
+        world.crew[3].thirst = 1.0;
+        world.crew[3].health = 1e-6;
+        let sim_unix = start + STEP_SECONDS;
+        let logs = capture_life_logs(|| {
+            world.step();
+            world.step();
+        });
+        assert_eq!(world.crew.len(), 80);
+        assert!(world.crew[0].health <= 0.0);
+        assert!(world.crew[1].health <= 0.0);
+        assert!(world.crew[2].health > 0.0 && world.crew[2].health < 0.55);
+        assert!(world.crew[3].health <= 0.0);
+        assert_logged(
+            &logs,
+            "died",
+            &starved,
+            &[
+                "died from hunger;",
+                "cause=\"hunger\"",
+                "crew member stays aboard",
+                &format!("crew_id={starved_id}"),
+                &format!("sim_unix={sim_unix}"),
+                &format!("sim_utc=\"{}\"", format_unix_utc(sim_unix)),
+            ],
+        );
+        assert_logged(
+            &logs,
+            "died",
+            &dehydrated,
+            &[
+                "died from thirst;",
+                "cause=\"thirst\"",
+                "crew member stays aboard",
+                &format!("crew_id={dehydrated_id}"),
+                &format!("sim_unix={sim_unix}"),
+            ],
+        );
+        assert_logged(
+            &logs,
+            "critical",
+            &critical,
+            &["health fell below 0.55 from hunger", "cause=\"hunger\""],
+        );
+        assert_logged(
+            &logs,
+            "died",
+            &both,
+            &[
+                "died from hunger and thirst;",
+                "cause=\"hunger_and_thirst\"",
+                &format!("sim_unix={sim_unix}"),
+            ],
+        );
+        assert_eq!(count_life(&logs, "died from hunger;"), 1);
+        assert_eq!(count_life(&logs, "died from thirst;"), 1);
+        assert_eq!(count_life(&logs, "cause=\"hunger_and_thirst\""), 1);
+    }
+
+    #[test]
+    fn eating_drinking_and_shortages_are_logged() {
+        let start = 1_700_000_000;
+        let mut world = World::generate(12, start).expect("layout");
+        let mess = world.first_room(RoomKind::Mess).expect("mess");
+        let water = world.first_room(RoomKind::WaterStore).expect("water");
+        place(&mut world, 0, mess);
+        place(&mut world, 1, mess);
+        world.stocks.retain(|stock| stock.good != Good::MealKg);
+        world.add_stock(mess, Good::MealKg, 0.50);
+        world.stocks.retain(|stock| stock.good != Good::WaterL);
+        world.add_stock(water, Good::WaterL, 0.20);
+        for crew in &mut world.crew {
+            crew.hunger = 0.2;
+            crew.thirst = 0.2;
+        }
+        world.crew[0].hunger = 0.95;
+        world.crew[1].hunger = 0.95;
+        world.crew[2].hunger = 0.85;
+        world.crew[3].thirst = 0.50;
+        world.crew[4].thirst = 0.50;
+        let fed = world.crew[0].name.clone();
+        let missed = world.crew[1].name.clone();
+        let onset = world.crew[2].name.clone();
+        let drinker = world.crew[3].name.clone();
+        let meals_before = world.total(Good::MealKg);
+        let water_before = world.total(Good::WaterL);
+        let logs = capture_life_logs(|| world.step());
+        assert!(
+            world.crew[0].hunger < 0.7,
+            "hunger {}",
+            world.crew[0].hunger
+        );
+        assert!(
+            world.crew[1].hunger > 0.9,
+            "missed {}",
+            world.crew[1].hunger
+        );
+        assert!(world.total(Good::MealKg) < meals_before);
+        assert!(world.total(Good::WaterL) < water_before);
+        assert_logged(
+            &logs,
+            "ate",
+            &fed,
+            &[
+                "ate 0.45 kg of meals",
+                &format!("sim_unix={}", start + STEP_SECONDS),
+            ],
+        );
+        assert_logged(&logs, "hunger_eased", &fed, &["after eating"]);
+        assert!(
+            !logs.lines().any(|line| {
+                line.contains("ate:") && line.contains(&format!("name=\"{missed}\""))
+            }),
+            "the crew member who missed a meal was logged as eating\n{logs}"
+        );
+        assert_logged(&logs, "starving", &onset, &["hunger rose above 0.85"]);
+        assert_logged(&logs, "drank", &drinker, &["drank 0.12 L of water"]);
+        assert_ship_logged(
+            &logs,
+            "meals_exhausted",
+            &["fell below one 0.45 kg portion", "1 crew missed a meal"],
+        );
+        assert_ship_logged(&logs, "water_exhausted", &["fell below one 0.12 L drink"]);
+    }
+
+    #[test]
+    fn clinic_revival_is_logged() {
+        let start = 1_700_000_000;
+        let mut world = World::generate(13, start).expect("layout");
+        let clinic = world.first_room(RoomKind::Clinic).expect("clinic");
+        place(&mut world, 0, clinic);
+        world.stocks.retain(|stock| stock.good != Good::MedicalKg);
+        world.add_stock(clinic, Good::MedicalKg, 0.05);
+        world.crew[0].hunger = 0.0;
+        world.crew[0].thirst = 0.0;
+        world.crew[0].health = 0.0;
+        let name = world.crew[0].name.clone();
+        let logs = capture_life_logs(|| {
+            world.step();
+            world.step();
+        });
+        let expected = (0.0_f64 + 0.05).min(1.0);
+        let expected = (expected + 0.05).min(1.0);
+        assert!((world.crew[0].health - expected).abs() < 1e-12);
+        assert_eq!(world.crew[0].activity, Activity::Treating);
+        assert_logged(
+            &logs,
+            "revived",
+            &name,
+            &[
+                "treatment raised health from 0",
+                &format!("sim_unix={}", start + STEP_SECONDS),
+            ],
+        );
+        assert_logged(
+            &logs,
+            "treated",
+            &name,
+            &[
+                "treatment raised health from",
+                &format!("sim_unix={}", start + 2 * STEP_SECONDS),
+            ],
+        );
+        assert_eq!(count_life(&logs, "revived:"), 1);
+        assert_ship_logged(
+            &logs,
+            "medical_exhausted",
+            &["fell below one 0.02 kg treatment"],
+        );
+        assert!(!logs.contains("died:"));
     }
 
     #[test]
@@ -1343,6 +1787,75 @@ mod tests {
         }
         assert!(berths > 0);
         assert!(heads > 0);
+    }
+
+    fn place(world: &mut World, index: usize, room_id: u32) {
+        let room = world.rooms[room_id as usize].clone();
+        let (x, y) = polygon_centroid(&room.polygon);
+        let crew = &mut world.crew[index];
+        crew.room_id = room_id;
+        crew.deck = room.deck;
+        crew.x = x;
+        crew.y = y;
+    }
+
+    fn capture_life_logs(run: impl FnOnce()) -> String {
+        let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer = SharedWriter(Arc::clone(&buffer));
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .without_time()
+            .with_ansi(false)
+            .with_target(true)
+            .with_thread_ids(false)
+            .with_thread_names(false)
+            .with_file(false)
+            .with_line_number(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let bytes = buffer.lock().expect("log buffer").clone();
+        String::from_utf8(bytes).expect("log text")
+    }
+
+    fn assert_logged(logs: &str, event: &str, name: &str, parts: &[&str]) {
+        let found = logs.lines().any(|line| {
+            line.contains("timehelm::life")
+                && line.contains(&format!("{event}:"))
+                && line.contains(&format!("name=\"{name}\""))
+                && parts.iter().all(|part| line.contains(part))
+        });
+        assert!(
+            found,
+            "no {event} line for {name} including {parts:?}\n{logs}"
+        );
+    }
+
+    fn assert_ship_logged(logs: &str, event: &str, parts: &[&str]) {
+        let found = logs.lines().any(|line| {
+            line.contains("timehelm::life")
+                && line.contains(&format!("{event}:"))
+                && parts.iter().all(|part| line.contains(part))
+        });
+        assert!(found, "no {event} line including {parts:?}\n{logs}");
+    }
+
+    fn count_life(logs: &str, needle: &str) -> usize {
+        logs.lines().filter(|line| line.contains(needle)).count()
+    }
+
+    #[derive(Clone)]
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     fn corridor_neighbor(world: &World, room_id: u32) -> Option<Room> {
