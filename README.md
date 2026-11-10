@@ -60,6 +60,7 @@ The top bar shows the simulation clock in UTC, the deck, crew count, food and wa
 | `server/` | Load, catch up, save, and stream the world. |
 | `ship-game/` | Bevy 0.18 viewer. |
 | `docs/SIMULATION.md` | Rooms, goods, recipes, power priority, and the `Role` / `Command` seam. |
+| `docs/bevy-plugins.md` | Bevy 0.18 plugins that fit the read-only WebGL2 viewer, and the ones that do not. |
 | `client/public/` | Pages and the built WASM viewer. |
 
 The repository is one Cargo workspace. `make test` and `make lint` cover `sim`, `server`, and `ship-game`.
