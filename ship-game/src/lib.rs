@@ -3,6 +3,7 @@
 mod app_3d;
 mod cabin_marks;
 mod deck_geometry;
+mod lamps;
 mod shader_embed;
 mod shared;
 mod venue_props;

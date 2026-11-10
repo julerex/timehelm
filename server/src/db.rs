@@ -171,7 +171,7 @@ pub async fn load_world(pool: &PgPool) -> anyhow::Result<Option<World>> {
             .await?;
     let crew = sqlx::query_as::<_, CrewRow>(
         "SELECT id, name, department, skill, room_id, x, y, deck, hunger, thirst, fatigue, health,
-                activity, berth_id, station_id, watch_offset_min
+                activity, berth_id, station_id, watch_offset_min, companionship
          FROM crew ORDER BY id",
     )
     .fetch_all(pool)
@@ -259,9 +259,9 @@ pub async fn save_world(pool: &PgPool, world: &World) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO crew (
                 id, name, department, skill, room_id, x, y, deck, hunger, thirst, fatigue, health,
-                activity, berth_id, station_id, watch_offset_min
+                activity, berth_id, station_id, watch_offset_min, companionship
              ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
              )",
         )
         .bind(member.id)
@@ -280,6 +280,7 @@ pub async fn save_world(pool: &PgPool, world: &World) -> anyhow::Result<()> {
         .bind(member.berth_id)
         .bind(member.station_id)
         .bind(member.watch_offset_min)
+        .bind(member.companionship)
         .execute(&mut *tx)
         .await?;
     }
@@ -400,6 +401,7 @@ struct CrewRow {
     berth_id: i32,
     station_id: Option<i32>,
     watch_offset_min: i32,
+    companionship: f64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -490,6 +492,7 @@ fn encode_world(world: &World) -> StoredWorld {
                 berth_id: crew.berth_id as i32,
                 station_id: crew.station_id.map(|id| id as i32),
                 watch_offset_min: crew.watch_offset_min as i32,
+                companionship: crew.companionship,
             })
             .collect(),
         stocks: world
@@ -597,6 +600,7 @@ fn decode_world(stored: StoredWorld) -> anyhow::Result<World> {
                     berth_id: crew.berth_id as u32,
                     station_id: crew.station_id.map(|id| id as u32),
                     watch_offset_min: crew.watch_offset_min as u32,
+                    companionship: crew.companionship,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?,
@@ -751,6 +755,16 @@ mod tests {
         assert_eq!(
             hex_encode(migration.checksum.as_ref()),
             "aef2ddacb6e8bc1dd89506a3a910cdfe592b652f4a202ebc83ad40a85a33fb805da412a61799e6bc4842b74d1115ea54"
+        );
+        let companionship = migrator
+            .migrations
+            .iter()
+            .find(|migration| migration.version == 2)
+            .expect("version 2");
+        assert_eq!(companionship.description.as_ref(), "companionship");
+        assert_eq!(
+            hex_encode(companionship.checksum.as_ref()),
+            "4985ae9c4847fe7d1361e1dce7efbe680038ab7d7250d2dfc488d90b5ecbb154ca2ea4eb69edfe5d2a386d5c523a2e46"
         );
     }
 
