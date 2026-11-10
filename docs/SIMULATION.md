@@ -82,7 +82,11 @@ A living person eats in a mess, restaurant, or galley when hunger is at least 0.
 
 Quantities are kilograms. Litres of water are treated as kilograms. Environmental sources (seawater) are not taken from a tank. Environmental sinks (brine, vapor, wastewater, process loss) are not stored.
 
-Recipes are fixed data in `sim::recipes`. A job consumes its inputs when it starts and advances only while it is staffed and receives power. One batch:
+Recipes are fixed data in `sim::recipes`. A job consumes its inputs when it starts. Elapsed time increases only while a living on-shift assignee is in the station room and the station receives power. An empty room pauses the job and keeps the elapsed time it already has. One living on-shift assignee whose skill matches the recipe adds 60 seconds times the power fraction. A living on-shift assignee whose skill does not match adds half of that. Fatigue of 1 halves that person's share, and health below 0.55 halves it again. `CookMeal` and `BakeBread` set those people to cooking. Every other staffed recipe sets them to working.
+
+Skill matches the recipe as follows. `BakeBread` matches Baking. `CookMeal` matches Cooking. `Desalinate`, `RecycleMetal`, and `CompostNutrients` match Engineering. `SpinCloth` and `SewGarment` match Sewing. `SawPlanks` and `RepairTools` match Carpentry. `ForgeFitting` matches Metalwork. `WashClothes` matches General.
+
+One batch:
 
 | Recipe | Station | Time | Energy | Balance |
 | --- | --- | --- | --- | --- |
@@ -102,7 +106,7 @@ Output is added to the station room. Cook meal output, the meal and the compost,
 
 Hydroponics is not a job. Each crop room advances `1/1440` of a day per minute, times the power fraction, and only while a living hydroponics crew member is in the room on shift. The cycle is 28 days. Harvest is 0.12 kg of vegetables per m², plus compost equal to 25% of that yield, and it consumes 0.01 kg of nutrients per m². If nutrients are short, the crop waits at day 28. Light, air, and irrigation water are inflows, so crop mass is not a closed balance.
 
-Fishing adds 8 kg per living on-shift fisher per day into the cold store, and only while that person is in the fishing room. That catch is a renewable inflow.
+Fishing adds 8 kg per living on-shift fisher per day into the cold store, and only while that person is in the fishing room. Fatigue of 1 halves that fisher's share. A dead fisher adds nothing. That catch is a renewable inflow.
 
 Once a day, at minute 0, 0.2% of stored garments become scrap. At that same minute, meals, bread, fish, and vegetables stored outside a cold store lose 2 percent. Cold-store quantities stay put.
 
@@ -119,7 +123,7 @@ The solar plant is a constant 90 kW, so each minute has 1.5 kWh available. `allo
 5. Hydroponics (0.0008 kWh per m² per minute, about 48 W/m²)
 6. Desalination
 
-A job asks for `energy_kwh * 60 / duration` only when it is already running, or when it is staffed and its inputs are in stock. Progress equals 60 seconds times the fraction of requested power it received. Hydroponic lights and desalination therefore drop before the clinic and the galley.
+A job asks for `energy_kwh * 60 / duration` only when it is already running, or when a living on-shift assignee is in the room and its inputs are in stock. Progress equals 60 seconds times the fraction of requested power it received, times the staff rate in Goods and recipes. Hydroponic lights and desalination therefore drop before the clinic and the galley.
 
 ## Authority
 
