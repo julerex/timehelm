@@ -3,10 +3,17 @@
 //! Camera actions live in a leafwing action map. Press K for the keymap.
 //! Interaction actions are registered and left unbound.
 
-use crate::cabin_marks::{deck_door_mesh, deck_fitting_mesh};
-use crate::deck_geometry::{extruded_polygon_deck_mesh, procedural_deck_plan_texture_image};
+use crate::cabin_marks::{
+    bulkhead_mesh, corridor_runner_mesh, deck_fitting_mesh, door_frame_mesh, door_leaf_mesh,
+    door_placements, opening_width, PARTITION_HEIGHT_M,
+};
+use crate::deck_geometry::{
+    extruded_polygon_deck_mesh, procedural_deck_plan_texture_image, ship_bulwark_mesh,
+    ship_hull_plate,
+};
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{asset_plugin, primary_window};
+use crate::venue_props::venue_mesh;
 use crate::viewer_net::{drain_inbox, start_inbox, LiveWorld};
 use bevy::camera::ScalingMode;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
@@ -17,8 +24,9 @@ use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 use leafwing_input_manager::prelude::*;
 use sim::{
-    contents_label, format_unix_utc, point_in_polygon, CrewView, RoomKind, RoomView, WorldSnapshot,
-    DECK_COUNT, DECK_HEIGHT_M, DECK_NAMES, SHIP_BEAM_M, SHIP_LENGTH_M,
+    contents_label, deck_hull, format_unix_utc, point_in_polygon, segment_crosses_span, CrewView,
+    EdgeSpan, RoomKind, RoomView, WorldSnapshot, DECK_COUNT, DECK_HEIGHT_M, DECK_NAMES,
+    SHIP_BEAM_M, SHIP_LENGTH_M,
 };
 
 const CAMERA_PAN_SPEED_M_S: f32 = 520.0;
@@ -28,13 +36,12 @@ const CAMERA_DOLLY_SPEED_M_S: f32 = 520.0;
 const CAMERA_SCROLL_ZOOM_FACTOR: f32 = 0.12;
 const CAMERA_MOUSE_ORBIT_SENS: f32 = 0.005;
 const CAMERA_MOUSE_PAN_SENS: f32 = 0.0022;
-const CAM_DEFAULT_DISTANCE_M: f32 = 340.0;
-const CAM_MIN_DISTANCE_M: f32 = 28.0;
+const CAM_DEFAULT_DISTANCE_M: f32 = 44.0;
+const CAM_MIN_DISTANCE_M: f32 = 5.0;
 const CAM_MAX_DISTANCE_M: f32 = 6200.0;
 const CAM_PITCH_MIN: f32 = 0.15;
 const CAM_PITCH_MAX: f32 = 1.42;
 const FLOOR_THICKNESS_M: f32 = 0.22;
-const WALL_HEIGHT_M: f32 = 1.15;
 const CREW_SCALE: f32 = 0.55;
 const CREW_MODELS: [&str; 18] = [
     "character-a.glb",
@@ -174,6 +181,15 @@ struct CrewBody {
     deck: u8,
 }
 
+#[derive(Component)]
+struct DoorLeaf {
+    deck: u8,
+    yaw: f32,
+    swing: f32,
+    span: EdgeSpan,
+    openness: f32,
+}
+
 #[derive(Resource)]
 struct CameraRig {
     target: Vec3,
@@ -246,8 +262,8 @@ pub fn run_app_3d() {
         .add_plugins(InputManagerPlugin::<ViewerAction>::default())
         .insert_resource(start_inbox())
         .init_resource::<LiveWorld>()
-        .insert_resource(CurrentDeck(6))
-        .insert_resource(CameraRig::default_for_deck(6))
+        .insert_resource(CurrentDeck(8))
+        .insert_resource(CameraRig::default_for_deck(8))
         .insert_resource(KeymapOpen(false))
         .insert_resource(PlanView {
             enabled: false,
@@ -263,6 +279,7 @@ pub fn run_app_3d() {
                 spawn_ship_once,
                 sync_crew,
                 animate_crew,
+                animate_doors,
                 update_hud,
                 hover_room,
             )
@@ -277,15 +294,12 @@ pub fn run_app_3d() {
 
 impl CameraRig {
     fn default_for_deck(deck: usize) -> Self {
-        let dir0 = Vec3::new(0.82, -1.02, 0.55).normalize();
+        // Starboard of Central Park, so the cabin row, the alley, and the trees share the frame.
+        let dir = Vec3::new(-0.42, -0.58, 0.70).normalize();
         Self {
-            target: Vec3::new(
-                SHIP_LENGTH_M * 0.5,
-                SHIP_BEAM_M * 0.5,
-                (deck as f32 + 0.4) * DECK_HEIGHT_M,
-            ),
-            yaw: dir0.y.atan2(dir0.x),
-            pitch: dir0.z.clamp(-1.0, 1.0).asin(),
+            target: Vec3::new(150.0, 18.0, (deck as f32 + 0.45) * DECK_HEIGHT_M),
+            yaw: dir.y.atan2(dir.x),
+            pitch: dir.z.asin(),
             distance: CAM_DEFAULT_DISTANCE_M,
         }
     }
@@ -465,6 +479,8 @@ fn spawn_ship_once(
             continue;
         }
         let deck_z = deck as f32 * DECK_HEIGHT_M;
+        let floor_top = deck_z + FLOOR_THICKNESS_M;
+        spawn_hull(&mut commands, &mut meshes, &clip.0, deck, deck_z);
         if let Some(mesh) = deck_floor_mesh(&rooms) {
             commands.spawn((
                 Mesh3d(meshes.add(mesh)),
@@ -476,22 +492,44 @@ fn spawn_ship_once(
             commands.spawn((
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(clip.0.clone()),
-                Transform::from_xyz(0.0, 0.0, deck_z + FLOOR_THICKNESS_M),
+                Transform::from_xyz(0.0, 0.0, floor_top),
             ));
         }
-        if let Some(mesh) = deck_door_mesh(&rooms) {
+        for (mesh, z) in [
+            bulkhead_mesh(&rooms).map(|mesh| (mesh, floor_top)),
+            door_frame_mesh(&rooms).map(|mesh| (mesh, floor_top)),
+            corridor_runner_mesh(&rooms).map(|mesh| (mesh, floor_top)),
+            deck_fitting_mesh(&rooms).map(|mesh| (mesh, floor_top)),
+            venue_mesh(deck, &rooms).map(|mesh| (mesh, floor_top)),
+        ]
+        .into_iter()
+        .flatten()
+        {
             commands.spawn((
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(clip.0.clone()),
-                Transform::from_xyz(0.0, 0.0, deck_z + FLOOR_THICKNESS_M),
+                Transform::from_xyz(0.0, 0.0, z),
             ));
         }
-        if let Some(mesh) = deck_fitting_mesh(&rooms) {
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(clip.0.clone()),
-                Transform::from_xyz(0.0, 0.0, deck_z + FLOOR_THICKNESS_M),
-            ));
+        let placements = door_placements(&rooms);
+        if !placements.is_empty() {
+            let leaf = meshes.add(door_leaf_mesh());
+            for door in placements {
+                commands.spawn((
+                    Mesh3d(leaf.clone()),
+                    MeshMaterial3d(clip.0.clone()),
+                    Transform::from_xyz(door.hinge[0], door.hinge[1], floor_top)
+                        .with_rotation(Quat::from_rotation_z(door.yaw))
+                        .with_scale(Vec3::new(door.width, 1.0, 1.0)),
+                    DoorLeaf {
+                        deck: deck as u8,
+                        yaw: door.yaw,
+                        swing: door.swing,
+                        span: door.span,
+                        openness: 0.0,
+                    },
+                ));
+            }
         }
     }
     let now = time.elapsed_secs();
@@ -536,6 +574,62 @@ fn sync_crew(time: Res<Time>, live: Res<LiveWorld>, mut crew: Query<&mut CrewBod
         body.deck = view.deck;
         body.started = now;
     }
+}
+
+fn animate_doors(
+    time: Res<Time>,
+    crew: Query<&CrewBody>,
+    mut doors: Query<(&mut DoorLeaf, &mut Transform)>,
+) {
+    let now = time.elapsed_secs();
+    let walking: Vec<Passing> = crew
+        .iter()
+        .map(|body| {
+            let pos = sample_crew(body, now);
+            Passing {
+                deck: body.deck,
+                from: [body.from.x, body.from.y],
+                to: [body.to.x, body.to.y],
+                pos: [pos.x, pos.y],
+            }
+        })
+        .collect();
+    let blend = 1.0 - (-5.0 * time.delta_secs()).exp();
+    for (mut door, mut transform) in &mut doors {
+        let open = walking.iter().any(|crew| {
+            crew.deck == door.deck
+                && (near_span(crew.pos, door.span) < 1.35
+                    || (segment_crosses_span(crew.from, crew.to, door.span)
+                        && near_span(crew.pos, door.span) < 5.5))
+        });
+        let target = if open { 1.0 } else { 0.0 };
+        door.openness += (target - door.openness) * blend;
+        if (door.openness - target).abs() < 0.001 {
+            door.openness = target;
+        }
+        transform.rotation = Quat::from_rotation_z(door.yaw + door.openness * door.swing);
+    }
+}
+
+struct Passing {
+    deck: u8,
+    from: [f32; 2],
+    to: [f32; 2],
+    pos: [f32; 2],
+}
+
+fn near_span(point: [f32; 2], span: EdgeSpan) -> f32 {
+    let abx = span.end[0] - span.start[0];
+    let aby = span.end[1] - span.start[1];
+    let len2 = abx * abx + aby * aby;
+    if len2 < 1e-6 {
+        return (point[0] - span.start[0]).hypot(point[1] - span.start[1]);
+    }
+    let t = (((point[0] - span.start[0]) * abx + (point[1] - span.start[1]) * aby) / len2)
+        .clamp(0.0, 1.0);
+    let x = span.start[0] + abx * t;
+    let y = span.start[1] + aby * t;
+    (point[0] - x).hypot(point[1] - y)
 }
 
 fn animate_crew(
@@ -641,7 +735,7 @@ fn apply_camera(
                 },
                 scale: plan.scale,
                 near: 0.05,
-                far: 80.0,
+                far: 200.0,
                 ..OrthographicProjection::default_3d()
             });
             let eye = Vec3::new(rig.target.x, rig.target.y, deck_z + 24.0);
@@ -883,6 +977,90 @@ fn point_in_room(polygon: &[[f32; 2]], x: f32, y: f32) -> bool {
     point_in_polygon(Vec2::new(x, y), &hull)
 }
 
+fn spawn_hull(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    clip: &Handle<ShipClipMaterial>,
+    deck: usize,
+    deck_z: f32,
+) {
+    let hull = deck_hull(deck);
+    let outlines: Vec<Vec<[f32; 2]>> = hull
+        .outlines
+        .iter()
+        .map(|ring| ring.iter().map(|point| [point.x, point.y]).collect())
+        .collect();
+    let holes: Vec<Vec<[f32; 2]>> = hull
+        .holes
+        .iter()
+        .map(|ring| ring.iter().map(|point| [point.x, point.y]).collect())
+        .collect();
+    let floor_top = deck_z + FLOOR_THICKNESS_M;
+    if outlines.len() == 1 {
+        spawn_plate(commands, meshes, clip, &outlines[0], &holes, floor_top);
+    } else {
+        for outline in &outlines {
+            spawn_plate(commands, meshes, clip, outline, &[], floor_top);
+        }
+    }
+    spawn_band(
+        commands,
+        meshes,
+        clip,
+        ship_bulwark_mesh(&outlines, 0.0, 0.62, 0.8, [0.14, 0.17, 0.22, 1.0]),
+        floor_top,
+    );
+    spawn_band(
+        commands,
+        meshes,
+        clip,
+        ship_bulwark_mesh(&outlines, 0.62, 2.45, 0.55, [0.90, 0.92, 0.94, 1.0]),
+        floor_top,
+    );
+    if !holes.is_empty() {
+        spawn_band(
+            commands,
+            meshes,
+            clip,
+            ship_bulwark_mesh(&holes, 0.0, 1.1, 0.28, [0.68, 0.80, 0.76, 1.0]),
+            floor_top,
+        );
+    }
+}
+
+fn spawn_plate(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    clip: &Handle<ShipClipMaterial>,
+    outline: &[[f32; 2]],
+    holes: &[Vec<[f32; 2]>],
+    floor_top: f32,
+) {
+    if let Some(mesh) = ship_hull_plate(outline, holes) {
+        commands.spawn((
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(clip.clone()),
+            Transform::from_xyz(0.0, 0.0, floor_top - 0.12),
+        ));
+    }
+}
+
+fn spawn_band(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    clip: &Handle<ShipClipMaterial>,
+    mesh: Option<Mesh>,
+    floor_top: f32,
+) {
+    if let Some(mesh) = mesh {
+        commands.spawn((
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(clip.clone()),
+            Transform::from_xyz(0.0, 0.0, floor_top),
+        ));
+    }
+}
+
 fn deck_floor_mesh(rooms: &[&RoomView]) -> Option<Mesh> {
     let mut parts = Vec::new();
     for room in rooms {
@@ -986,7 +1164,7 @@ fn wall_segments(
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
         .unwrap_or((0.0, 0.0));
-    let gap = 1.6_f32.min((hi - lo) * 0.7);
+    let gap = opening_width(hi - lo);
     if hi - lo < 1.2 || gap < 0.8 {
         return vec![(start, end)];
     }
@@ -1063,18 +1241,82 @@ fn push_wall(parts: &mut MeshParts, start: [f32; 2], end: [f32; 2], color: [f32;
     if length < 0.35 {
         return;
     }
-    let nx = -dy / length;
-    let ny = dx / length;
-    let inset = 0.08;
-    let x0 = start[0] + nx * inset;
-    let y0 = start[1] + ny * inset;
-    let x1 = end[0] + nx * inset;
-    let y1 = end[1] + ny * inset;
+    let tx = dx / length;
+    let ty = dy / length;
+    let nx = -ty;
+    let ny = tx;
+    let half = 0.09;
+    let z1 = PARTITION_HEIGHT_M;
+    let at = |along: f32, side: f32, z: f32| {
+        [
+            start[0] + tx * along + nx * side,
+            start[1] + ty * along + ny * side,
+            z,
+        ]
+    };
+    // Top, then the two long faces and the two ends. Winding faces outward.
+    push_quad(
+        parts,
+        [
+            at(0.0, half, z1),
+            at(0.0, -half, z1),
+            at(length, -half, z1),
+            at(length, half, z1),
+        ],
+        [0.0, 0.0, 1.0],
+        color,
+    );
+    push_quad(
+        parts,
+        [
+            at(0.0, half, 0.0),
+            at(length, half, 0.0),
+            at(length, half, z1),
+            at(0.0, half, z1),
+        ],
+        [nx, ny, 0.0],
+        color,
+    );
+    push_quad(
+        parts,
+        [
+            at(length, -half, 0.0),
+            at(0.0, -half, 0.0),
+            at(0.0, -half, z1),
+            at(length, -half, z1),
+        ],
+        [-nx, -ny, 0.0],
+        color,
+    );
+    push_quad(
+        parts,
+        [
+            at(0.0, -half, 0.0),
+            at(0.0, half, 0.0),
+            at(0.0, half, z1),
+            at(0.0, -half, z1),
+        ],
+        [-tx, -ty, 0.0],
+        color,
+    );
+    push_quad(
+        parts,
+        [
+            at(length, half, 0.0),
+            at(length, -half, 0.0),
+            at(length, -half, z1),
+            at(length, half, z1),
+        ],
+        [tx, ty, 0.0],
+        color,
+    );
+}
+
+fn push_quad(parts: &mut MeshParts, quad: [[f32; 3]; 4], normal: [f32; 3], color: [f32; 4]) {
     let base = parts.positions.len() as u32;
-    let z1 = WALL_HEIGHT_M;
-    for (x, y, z) in [(x0, y0, 0.0), (x1, y1, 0.0), (x1, y1, z1), (x0, y0, z1)] {
-        parts.positions.push([x, y, z]);
-        parts.normals.push([nx, ny, 0.0]);
+    for point in quad {
+        parts.positions.push(point);
+        parts.normals.push(normal);
         parts.uvs.push([0.0, 0.0]);
         parts.colors.push(color);
     }
