@@ -3,6 +3,8 @@
 
 struct ShipClipMaterial {
     clip_data: vec4<f32>,
+    sun: vec4<f32>,
+    eye: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: ShipClipMaterial;
