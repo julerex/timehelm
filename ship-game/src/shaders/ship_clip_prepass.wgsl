@@ -5,6 +5,7 @@ struct ShipClipMaterial {
     clip_data: vec4<f32>,
     sun: vec4<f32>,
     eye: vec4<f32>,
+    lamps: array<vec4<f32>, 8>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: ShipClipMaterial;
@@ -15,6 +16,7 @@ struct ShipClipMaterial {
 fn fragment(in: VertexOutput) -> FragmentOutput {
     let _alpha = select(1.0, material.clip_data.y, in.world_position.z > material.clip_data.x);
     let _pat = textureSample(deck_tex, deck_samp, vec2<f32>(0.5, 0.5)).rgb;
+    let _lamps = material.lamps[0];
     var out: FragmentOutput;
     return out;
 }
