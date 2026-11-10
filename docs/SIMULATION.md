@@ -72,9 +72,9 @@ Health at or below 0 is death. The body stays in the crew list, in the room and 
 
 A watch is 8 hours. Within a department, person `n` (counting from 0) has offset `(n mod 3) * 480` minutes, so three watches cover the day. A department of three or more has someone on shift at minutes 0, 480, and 960.
 
-Health below 0.55 sends a living person to the clinic. Otherwise thirst above 0.7 sends them to a water store. Otherwise hunger above 0.7 sends them to a mess, restaurant, or galley that holds at least one 0.45 kg meal, or to the first mess when no portion is on board. Otherwise, on shift, they walk to their assigned station. Off shift, fatigue above 0.6 sends them to a head, and a person already in a head goes to their berth. Otherwise they go to a mess or restaurant.
+Health below 0.55 sends a living person to the clinic. Otherwise thirst above 0.7 sends them to a water store. Otherwise hunger above 0.7 sends them to a mess, restaurant, or galley that holds at least one 0.45 kg meal, or to the first mess when no portion is on board. Otherwise, on shift, they walk to their assigned station. Off shift, fatigue above 0.6 sends them to a head, and a person already in a head goes to their berth. When hunger and fatigue are both at most 0.6 and companionship is above 0.6, they go to a mess or restaurant that already holds another living person. If every mess and restaurant is empty, they go to an empty one. Otherwise they go to a mess or restaurant.
 
-Each minute, a living person's hunger and thirst rise by `1/1440` (capped at 1.5). Fatigue rises by `1/480` on shift and falls by `1/480` while sleeping in a berth. Health falls slowly when hunger exceeds 0.85 or thirst exceeds 0.85.
+Each minute, a living person's hunger and thirst rise by `1/1440` (capped at 1.5). Fatigue rises by `1/480` on shift and falls by `1/480` while sleeping in a berth. Companionship above 0.8 halves that sleep recovery. Companionship starts at 0.5. A living person who is alone among living people gains `1/1440` each minute, capped at 1.5. Sharing a room with another living person removes `1/480` each minute, floored at 0. Health at or below 0 is not company, and that person's companionship stays put. Health falls slowly when hunger exceeds 0.85 or thirst exceeds 0.85.
 
 Eating requires hunger of at least 0.5 while standing in a mess, restaurant, or galley. A portion is 0.45 kg of meals taken from that room and relieves hunger by 0.4. Drinking requires thirst of at least 0.35 while standing in a water store. It takes 0.12 L from that room and relieves thirst by 0.3. In the clinic, a living patient with health below 0.9 consumes 0.02 kg of medical supplies and restores 0.05 health.
 
@@ -145,7 +145,7 @@ There is no participant role yet. `authorize` has nowhere to return `Ok(())`.
 
 ## Persistence
 
-`server/migrations` creates `world_meta`, `decks`, `rooms`, `doors`, `stations`, `crew`, `stocks`, `jobs`, and `crops`. Older `players`, `entities`, and `game_state` tables are left in place and unused.
+`server/migrations` creates `world_meta`, `decks`, `rooms`, `doors`, `stations`, `crew`, `stocks`, `jobs`, and `crops`. `0002_companionship.sql` adds `crew.companionship` as `DOUBLE PRECISION NOT NULL DEFAULT 0.5`. Older `players`, `entities`, and `game_state` tables are left in place and unused. The API crew object does not include companionship.
 
 The server applies migrations on startup when the database user can create tables. When `_sqlx_migrations` already matches this binary, startup skips DDL. It then loads the world or seeds it, catches up, and saves. It writes again at each minute boundary and on shutdown. Polygons are JSON. Enums are serde snake_case strings.
 
