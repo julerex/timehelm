@@ -20,6 +20,8 @@ pub struct Fitting {
     pub kind: FittingKind,
     pub center: [f32; 2],
     pub half: [f32; 2],
+    /// Unit vector toward the head of the bed, the toilet tank, or the shower's back wall.
+    pub facing: [f32; 2],
 }
 
 /// What a room shows on the plan. Empty for every kind except berth and head.
@@ -113,30 +115,43 @@ pub fn fitting_inside_room(polygon: &[[f32; 2]], fitting: Fitting) -> bool {
 }
 
 fn bed(polygon: &[[f32; 2]], doorway: Option<[f32; 2]>) -> Fitting {
-    let center = deep_center(polygon, doorway, 0.22);
+    let center = deep_center(polygon, doorway, 0.18);
+    let facing = into_room(polygon, doorway);
     Fitting {
         kind: FittingKind::Bed,
         center,
-        half: [1.05, 0.55],
+        half: half_for(facing, 1.08, 0.76),
+        facing: [facing.0, facing.1],
     }
 }
 
 fn head(polygon: &[[f32; 2]], doorway: Option<[f32; 2]>) -> Vec<Fitting> {
-    let center = deep_center(polygon, doorway, 0.18);
+    let center = deep_center(polygon, doorway, 0.12);
+    let (fx, fy) = into_room(polygon, doorway);
     let (px, py) = perpendicular(polygon, doorway);
     let gap = 1.15;
     vec![
         Fitting {
             kind: FittingKind::Toilet,
             center: [center[0] + px * gap, center[1] + py * gap],
-            half: [0.42, 0.42],
+            half: [0.46, 0.46],
+            facing: [fx, fy],
         },
         Fitting {
             kind: FittingKind::Shower,
             center: [center[0] - px * gap, center[1] - py * gap],
-            half: [0.55, 0.55],
+            half: [0.58, 0.58],
+            facing: [fx, fy],
         },
     ]
+}
+
+fn half_for(facing: (f32, f32), along: f32, across: f32) -> [f32; 2] {
+    if facing.0.abs() >= facing.1.abs() {
+        [along, across]
+    } else {
+        [across, along]
+    }
 }
 
 fn deep_center(polygon: &[[f32; 2]], doorway: Option<[f32; 2]>, reach_fraction: f32) -> [f32; 2] {

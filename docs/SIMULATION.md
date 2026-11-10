@@ -6,27 +6,43 @@ Time is 1:1 with the wall clock. `World::step` covers 60 seconds. On boot the se
 
 ## Hull and decks
 
-The plan is 318 m long and 60 m across. Origin is the aft-starboard corner, +X points forward, +Y points to port. Decks are 3 m apart. Deck index 0 is the lowest. Decks 9 and above keep the upper-deck courtyard void.
+The plan follows Icon of the Seas' published size and public deck plans: 365 m overall, 213 ft (65 m) beam. Origin is the aft-starboard corner, outside the hull. +X points forward, +Y points to port. The waterline is a fine bow, a parallel mid-body, and a flat transom with rounded quarters. Decks are 3 m apart. Deck index 0 is the lowest. There is no deck 13, matching the ship, so index 13 is Icon deck 14 and index 19 is Icon deck 20.
 
-Rooms are named rectangles clipped to that deck's hull. A shared edge longer than a metre is a door. A corridor is a room. Crew walk the door graph at 1.3 m/s (78 m per step), aiming at the doorway and then into the next room. A stair, which has no shared edge, still aims at the room centre. A berth holds a bed. A head holds a toilet and a shower. Press P in the viewer for the top-down plan.
+Rooms are named rectangles that sit fully on that deck's hull. A shared edge longer than a metre is a door. A corridor is a room. Crew walk the door graph at 1.3 m/s (78 m per step), aiming at the doorway and then into the next room. A stair, which has no shared edge, still aims at the room centre. A berth holds a bed. A head holds a toilet and a shower. Press P in the viewer for the top-down plan.
 
-| Deck | Name | Program |
+| Index | Icon deck | What the plan contributes |
 | --- | --- | --- |
-| 0 | Engine Deck | Engineering, electrical, fuel store |
-| 1 | Tank Deck | Desalination, water store, waste treatment, recycling |
-| 2 | Hold | Cold store, dry store, timber store, metal store |
-| 3–4 | Garden decks | Hydroponics |
-| 5 | Galley Deck | Galley, bakery |
-| 6 | Mess Deck | Restaurant, mess |
-| 7 | Hospital Deck | Clinic, infirmary |
-| 8 | Carpentry Deck | Carpentry |
-| 9 | Metal Deck | Metalwork |
-| 10 | Textile Deck | Sewing, laundry |
-| 11 | Fishing Deck | Fishing station |
-| 12 | Bridge Deck | Bridge |
-| 13–19 | Berth decks | Berths and heads |
+| 0 | (below the guest plans) | Gas generator hall, switchgear, gas plant space |
+| 1 | (below the guest plans) | Desalination, wastewater and incinerator, water, recycling, carpentry, metal shop, sewing, laundry, crew mess |
+| 2 | 2 Gangway | Gangway alleys, cold and dry stores, timber and metal stores |
+| 3 | 3 | Main dining aft, galley, bakery, medical, Music Hall forward, ocean-view cabins |
+| 4 | 4 | Main dining aft, Casino Royale amidships, Royal Theater forward, cabins |
+| 5 | 5 | Royal Promenade, no cabins, Sorrento's, aft dining |
+| 6 | 6 | Royal Promenade, Giovanni's, Adventure Ocean aft, no cabins |
+| 7 | 7 | Surfside Eatery and Water's Edge aft, cabins forward |
+| 8 | 8 | Central Park (hydroponics beds and paths), Chops Grille, Izumi, Park Cafe, cabins |
+| 9–11 | 9–11 | Cabin decks, open over Central Park |
+| 12 | 12 | Cabins, Vitality Spa, bridge forward |
+| 13 | 14 | Cabins, Vitality Spa, The Overlook forward. The park is still open |
+| 14 | 15 | The Hideaway aft, Windjammer midship, AquaDome Market forward. Solid plate |
+| 15 | 16 | Category 6, Coastal Kitchen, suites forward |
+| 16 | 17 | Cloud 17, sports court, Coastal Kitchen, suites |
+| 17–18 | 18–19 | The Grove forward, plus an aft slide-tower island |
+| 19 | 20 | Category 6 slide tops, aft only |
 
-Every deck has a stair core on the same footprint, plus a longitudinal corridor. Upper decks link port and starboard forward of the courtyard. Filler rooms of the deck's main kind pack the remaining hull.
+Aft and forward atria are the stairs. Side alleys run the stateroom bands on decks 0–16.
+
+The public plans and the sim disagree where a rectangle, one room kind, or an adjacent-deck stair cannot say what the ship does:
+
+- Decks 0 and 1 are not on the guest plans. The gas-generator hall, switchgear, and tank space sit low, in the machinery band. The viewer draws the sets, cabinets, and tank shells; there is no fuel-flow model. Wastewater tanks and an incinerator share the waste room on deck 1. Carpentry, the metal shop, sewing, and laundry are the deck 1 workshops, also below the guest plans.
+- Lifeboats hang outboard of Icon deck 7 (the Surfside topsides), eight a side. They are scenery, not rooms, because a room has to sit inside the hull.
+- Icon has 2,805 staterooms. The sim samples that band as 4.4 m × 7.2 m modules (real balcony cabins are nearer 3 m; the module is wide enough for a 2 m bed). A 1.2 m gap between modules is a bulkhead, not a door. An en-suite bath is its own Head room, because a room has one kind.
+- Casino Royale, the Royal Theater, Music Hall, Absolute Zero, the ice rink, the spa, and the sports court have no room kinds. They keep the real footprint as a named corridor, restaurant, bakery, mess, hydroponics plot, or the bridge. Absolute Zero is not separate from the aft dining room. Fishing is required by the crew rules and is a small starboard room on deck 7; Icon has no fishing venue.
+- Pools and the waterpark are scenery on the rooms that already occupy those footprints. Hideaway Pool is aft on Icon deck 15. Water's Edge is the family pool on Icon deck 7. Royal Bay is the starboard side of the Windjammer footprint on Icon deck 15, because that rectangle is also the restaurant. Cloud 17's pool is on Icon deck 17. Category 6 (Icon decks 16 and 20, plus the slide-tower landings) has a splash basin and three flumes. The Cove, the whirlpools, FlowRider, and the mini golf are not separate rooms.
+- Central Park on Icon deck 8 is planted with trees, which is where the public plan puts the garden. Icon decks 18 and 19 are the Grove suite sun deck. The starboard half of those rooms is also planted, so half of that top sun deck reads as a park. On the real ship those decks are suite loungers, and deck 20 is only the slide tops, which is too small to hold the park.
+- Central Park is a hole on indices 9–13 (Icon decks 9–12 and 14). Deck 8 is the park floor. Index 14 (Icon 15) is a solid plate over that hole. The real park is still open air beside the pools; the sim cannot leave a deck open to the sky and still walk on it.
+- Indices 17 and 18 (Icon 18 and 19) add a disconnected aft island so the deck 20 slides can meet a stair on the deck below. Stairs only join adjacent decks that share a footprint. That island is not guest deck.
+- Crown's Edge, the running track, escalators, and curved rooms are not in the model. The perimeter passages on decks 5 and 6 stand in for the promenade edge.
 
 `RoomKind` is an exhaustive enum: corridor, stair, berth, head, hydroponics, fishing, cold store, dry store, galley, bakery, restaurant, mess, desalination, water store, waste treatment, recycling, carpentry, sewing, metalwork, laundry, timber store, metal store, clinic, infirmary, engineering, electrical, fuel store, bridge.
 
