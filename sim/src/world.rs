@@ -1316,7 +1316,7 @@ mod tests {
     use crate::fittings::{cabin_fittings, fitting_inside_room, FittingKind};
     use crate::format_unix_utc;
     use crate::geom::{polygon_centroid, segment_crosses_span, shared_edge_span};
-    use crate::hull::{hull_for_deck, point_in_polygon};
+    use crate::hull::{point_in_polygon, point_on_deck};
     use crate::kinds::RoomKind;
     use glam::Vec2;
 
@@ -1331,13 +1331,13 @@ mod tests {
             );
         }
         for room in &world.rooms {
-            let hull = hull_for_deck(room.deck as usize);
-            let (x, y) = polygon_centroid(&room.polygon);
-            assert!(
-                point_in_polygon(Vec2::new(x, y), &hull),
-                "{} centroid is outside the hull",
-                room.name
-            );
+            for point in &room.polygon {
+                assert!(
+                    point_on_deck(room.deck as usize, Vec2::new(point[0], point[1])),
+                    "{} is outside the hull",
+                    room.name
+                );
+            }
         }
         let stair = world
             .rooms
@@ -1345,7 +1345,12 @@ mod tests {
             .find(|room| room.kind == RoomKind::Stair)
             .unwrap();
         let reachable = reachable_from(&world, stair.id);
-        assert_eq!(reachable, world.rooms.len(), "disconnected rooms");
+        assert_eq!(
+            reachable,
+            world.rooms.len(),
+            "disconnected: {}",
+            unreachable_names(&world, stair.id).join(", ")
+        );
     }
 
     #[test]
@@ -1905,6 +1910,29 @@ mod tests {
             .map(|point| Vec2::new(point[0], point[1]))
             .collect();
         point_in_polygon(Vec2::new(x, y), &hull)
+    }
+
+    fn unreachable_names(world: &World, start: u32) -> Vec<String> {
+        let adj = adjacency(&world.doors, world.rooms.len());
+        let mut seen = vec![false; world.rooms.len()];
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start);
+        seen[start as usize] = true;
+        while let Some(node) = queue.pop_front() {
+            for &next in &adj[node as usize] {
+                if !seen[next as usize] {
+                    seen[next as usize] = true;
+                    queue.push_back(next);
+                }
+            }
+        }
+        world
+            .rooms
+            .iter()
+            .filter(|room| !seen[room.id as usize])
+            .take(8)
+            .map(|room| format!("{}#{} d{}", room.name, room.id, room.deck))
+            .collect()
     }
 
     fn reachable_from(world: &World, start: u32) -> usize {

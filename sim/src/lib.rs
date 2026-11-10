@@ -18,7 +18,8 @@ pub use command::{authorize, Command, Role, ViewOnly};
 pub use fittings::{cabin_fittings, contents_label, fitting_inside_room, Fitting, FittingKind};
 pub use geom::{polygon_area, polygon_centroid, segment_crosses_span, shared_edge_span, EdgeSpan};
 pub use hull::{
-    deck_hull_polygon, deck_hull_polygon_upper, hull_for_deck, point_in_polygon, SHIP_BEAM_M,
+    deck_hull, deck_hull_polygon, deck_hull_polygon_upper, hull_for_deck, point_in_polygon,
+    point_on_deck, rect_on_deck, DeckHull, PARK_X0, PARK_X1, PARK_Y0, PARK_Y1, SHIP_BEAM_M,
     SHIP_LENGTH_M, UPPER_DECK_START,
 };
 pub use kinds::{Activity, Department, Good, PowerClass, RoomKind, Skill};

@@ -651,7 +651,16 @@ pub async fn bootstrap_world(pool: &PgPool) -> anyhow::Result<World> {
     migrate(pool).await?;
     let now = chrono::Utc::now().timestamp();
     let mut world = if let Some(world) = load_world(pool).await? {
-        world
+        if saved_layout_matches(&world) {
+            world
+        } else {
+            tracing::warn!(
+                "Saved rooms do not match the Icon deck plan; generating a new ship from the stored seed"
+            );
+            let tick = world.last_tick_unix;
+            let aligned = tick - tick.rem_euclid(60);
+            World::generate(world.seed, aligned).map_err(|error| anyhow::anyhow!(error))?
+        }
     } else {
         let aligned = now - now.rem_euclid(60);
         World::generate(WORLD_SEED, aligned).map_err(|error| anyhow::anyhow!(error))?
@@ -671,6 +680,41 @@ pub async fn bootstrap_world(pool: &PgPool) -> anyhow::Result<World> {
 /// Stable seed for the first persistent world. Layout does not roll this.
 pub const WORLD_SEED: u64 = 0x7469_6D65_6865_6C6D;
 
+/// The saved ship is the one this build generates. A renamed deck or a missing
+/// Icon neighborhood means the stored rectangles are from an older plan.
+fn saved_layout_matches(world: &World) -> bool {
+    world.decks.len() == sim::DECK_COUNT
+        && world
+            .decks
+            .iter()
+            .zip(sim::DECK_NAMES)
+            .all(|(deck, name)| deck.name == name)
+        && world
+            .rooms
+            .iter()
+            .any(|room| room.deck == 8 && room.name == "Central Park")
+        && world
+            .rooms
+            .iter()
+            .any(|room| room.deck == 0 && room.name == "Gas generator hall")
+        && world
+            .rooms
+            .iter()
+            .any(|room| room.deck == 1 && room.name == "Wastewater and incinerator")
+        && world
+            .rooms
+            .iter()
+            .any(|room| room.deck == 4 && room.name == "Casino Royale")
+        && world.rooms.iter().any(|room| {
+            room.deck == 9
+                && room.kind == sim::RoomKind::Head
+                && room
+                    .polygon
+                    .iter()
+                    .any(|point| (point[0] - (40.0 + 5.6)).abs() < 0.2)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,6 +728,15 @@ mod tests {
             out.push(HEX[(byte & 0x0f) as usize] as char);
         }
         out
+    }
+
+    #[test]
+    fn a_saved_world_must_match_the_icon_deck_plan() {
+        let world = World::generate(1, 0).expect("world");
+        assert!(saved_layout_matches(&world));
+        let mut stale = world;
+        stale.decks[8].name = "Carpentry Deck".to_string();
+        assert!(!saved_layout_matches(&stale));
     }
 
     #[test]
