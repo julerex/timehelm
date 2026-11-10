@@ -551,13 +551,11 @@ impl World {
             let Some(recipe_id) = self.stations[index].recipe else {
                 continue;
             };
-            let staffed = self.station_staffed(self.stations[index].id, minute);
-            let running = self
-                .jobs
-                .iter()
-                .any(|job| job.station_id == self.stations[index].id);
             let spec = recipe(recipe_id);
-            if !running && (!staffed || !self.can_afford(spec.inputs)) {
+            let station_id = self.stations[index].id;
+            let running = self.jobs.iter().any(|job| job.station_id == station_id);
+            let rate = self.work_rate(station_id, recipe_id, minute);
+            if !running && (rate <= 0.0 || !self.can_afford(spec.inputs)) {
                 continue;
             }
             let per_step = spec.energy_kwh * (STEP_SECONDS as f64) / spec.duration_seconds;
@@ -600,20 +598,33 @@ impl World {
     }
 
     fn advance_station(&mut self, station_index: usize, minute: u32, fraction: f64) {
-        if fraction <= 0.0 {
-            return;
-        }
         let station_id = self.stations[station_index].id;
         let Some(recipe_id) = self.stations[station_index].recipe else {
             return;
         };
         let spec = recipe(recipe_id);
+        let rate = if self.station_staffed(station_id, minute) {
+            self.work_rate(station_id, recipe_id, minute)
+        } else {
+            0.0
+        };
+        if rate > 0.0 {
+            self.mark_watch_activity(station_id, recipe_id, minute);
+        }
+        let gain = if fraction <= 0.0 {
+            0.0
+        } else {
+            (STEP_SECONDS as f64) * fraction * rate
+        };
         let existing = self
             .jobs
             .iter()
             .position(|job| job.station_id == station_id);
         if let Some(job_index) = existing {
-            self.jobs[job_index].elapsed_seconds += (STEP_SECONDS as f64) * fraction;
+            if gain <= 0.0 {
+                return;
+            }
+            self.jobs[job_index].elapsed_seconds += gain;
             if self.jobs[job_index].elapsed_seconds + 1e-9 >= spec.duration_seconds {
                 let room_id = self.stations[station_index].room_id;
                 self.finish_recipe(room_id, recipe_id);
@@ -621,12 +632,11 @@ impl World {
             }
             return;
         }
-        if !self.station_staffed(station_id, minute) || !self.can_afford(spec.inputs) {
+        if gain <= 0.0 || !self.can_afford(spec.inputs) {
             return;
         }
         self.consume_inputs(spec.inputs);
-        let elapsed = (STEP_SECONDS as f64) * fraction;
-        if elapsed + 1e-9 >= spec.duration_seconds {
+        if gain + 1e-9 >= spec.duration_seconds {
             let room_id = self.stations[station_index].room_id;
             self.finish_recipe(room_id, recipe_id);
             return;
@@ -637,8 +647,80 @@ impl World {
             id,
             station_id,
             recipe: recipe_id,
-            elapsed_seconds: elapsed,
+            elapsed_seconds: gain,
         });
+    }
+
+    fn skill_matches(recipe_id: RecipeId, skill: Skill) -> bool {
+        match recipe_id {
+            RecipeId::BakeBread => skill == Skill::Baking,
+            RecipeId::CookMeal => skill == Skill::Cooking,
+            RecipeId::Desalinate | RecipeId::RecycleMetal | RecipeId::CompostNutrients => {
+                skill == Skill::Engineering
+            }
+            RecipeId::SpinCloth | RecipeId::SewGarment => skill == Skill::Sewing,
+            RecipeId::SawPlanks | RecipeId::RepairTools => skill == Skill::Carpentry,
+            RecipeId::ForgeFitting => skill == Skill::Metalwork,
+            RecipeId::WashClothes => skill == Skill::General,
+        }
+    }
+
+    fn work_rate(&self, station_id: u32, recipe_id: RecipeId, minute: u32) -> f64 {
+        let Some(station) = self.stations.get(station_id as usize) else {
+            return 0.0;
+        };
+        self.crew
+            .iter()
+            .filter(|crew| {
+                crew.health > 0.0
+                    && crew.station_id == Some(station_id)
+                    && crew.room_id == station.room_id
+                    && on_shift(crew.watch_offset_min, minute)
+            })
+            .map(|crew| Self::hand_rate(recipe_id, crew))
+            .sum()
+    }
+
+    fn hand_rate(recipe_id: RecipeId, crew: &CrewMember) -> f64 {
+        let matched = if Self::skill_matches(recipe_id, crew.skill) {
+            1.0
+        } else {
+            0.5
+        };
+        let rested = if crew.fatigue >= 1.0 { 0.5 } else { 1.0 };
+        let healthy = if crew.health < 0.55 { 0.5 } else { 1.0 };
+        matched * rested * healthy
+    }
+
+    fn mark_watch_activity(&mut self, station_id: u32, recipe_id: RecipeId, minute: u32) {
+        let Some(room_id) = self
+            .stations
+            .get(station_id as usize)
+            .map(|station| station.room_id)
+        else {
+            return;
+        };
+        let activity = match recipe_id {
+            RecipeId::CookMeal | RecipeId::BakeBread => Activity::Cooking,
+            RecipeId::Desalinate
+            | RecipeId::RecycleMetal
+            | RecipeId::CompostNutrients
+            | RecipeId::SpinCloth
+            | RecipeId::SewGarment
+            | RecipeId::SawPlanks
+            | RecipeId::RepairTools
+            | RecipeId::ForgeFitting
+            | RecipeId::WashClothes => Activity::Working,
+        };
+        for crew in &mut self.crew {
+            if crew.health > 0.0
+                && crew.station_id == Some(station_id)
+                && crew.room_id == room_id
+                && on_shift(crew.watch_offset_min, minute)
+            {
+                crew.activity = activity;
+            }
+        }
     }
 
     fn finish_recipe(&mut self, room_id: u32, recipe_id: RecipeId) {
@@ -690,9 +772,10 @@ impl World {
             };
             if room.kind == RoomKind::Fishing
                 && crew.room_id == room.id
+                && crew.health > 0.0
                 && on_shift(crew.watch_offset_min, minute)
             {
-                present += 1.0;
+                present += if crew.fatigue >= 1.0 { 0.5 } else { 1.0 };
             }
         }
         if present <= 0.0 {
@@ -1596,6 +1679,117 @@ mod tests {
     }
 
     #[test]
+    fn an_unstaffed_job_does_not_advance() {
+        let mut world = World::generate(31, 1_700_000_000).expect("layout");
+        let station = cook_station(&world);
+        let cook = world
+            .crew
+            .iter()
+            .position(|crew| crew.skill == Skill::Cooking)
+            .expect("cook");
+        let minute = minute_of_day(world.last_tick_unix + STEP_SECONDS);
+        let berth = world.crew[cook].berth_id;
+        world.crew[cook].station_id = Some(station.id);
+        world.crew[cook].watch_offset_min = on_shift_offset(minute);
+        world.crew[cook].hunger = 0.0;
+        world.crew[cook].thirst = 0.0;
+        world.crew[cook].health = 1.0;
+        place(&mut world, cook, berth);
+        let elapsed = recipe(RecipeId::CookMeal).duration_seconds - 30.0;
+        let job_id = world.next_job_id;
+        world.next_job_id += 1;
+        world.jobs.push(Job {
+            id: job_id,
+            station_id: station.id,
+            recipe: RecipeId::CookMeal,
+            elapsed_seconds: elapsed,
+        });
+        let meals = world.total(Good::MealKg);
+        world.step();
+        let job = world
+            .jobs
+            .iter()
+            .find(|job| job.id == job_id)
+            .expect("paused job");
+        assert!((job.elapsed_seconds - elapsed).abs() < 1e-9);
+        assert!((world.total(Good::MealKg) - meals).abs() < 1e-9);
+
+        let mut dead = World::generate(32, 1_700_000_000).expect("layout");
+        let station = cook_station(&dead);
+        let cook = dead
+            .crew
+            .iter()
+            .position(|crew| crew.skill == Skill::Cooking)
+            .expect("cook");
+        let minute = minute_of_day(dead.last_tick_unix + STEP_SECONDS);
+        dead.crew[cook].station_id = Some(station.id);
+        dead.crew[cook].watch_offset_min = on_shift_offset(minute);
+        dead.crew[cook].hunger = 0.0;
+        dead.crew[cook].thirst = 0.0;
+        dead.crew[cook].health = 0.0;
+        place(&mut dead, cook, station.room_id);
+        let job_id = dead.next_job_id;
+        dead.next_job_id += 1;
+        dead.jobs.push(Job {
+            id: job_id,
+            station_id: station.id,
+            recipe: RecipeId::CookMeal,
+            elapsed_seconds: elapsed,
+        });
+        let meals = dead.total(Good::MealKg);
+        dead.step();
+        let job = dead
+            .jobs
+            .iter()
+            .find(|job| job.id == job_id)
+            .expect("dead cook does not finish the batch");
+        assert!((job.elapsed_seconds - elapsed).abs() < 1e-9);
+        assert!((dead.total(Good::MealKg) - meals).abs() < 1e-9);
+    }
+
+    #[test]
+    fn two_cooks_finish_faster_than_one() {
+        let base = World::generate(33, 1_700_000_000).expect("layout");
+        let (one, activity) = staffed_cook_minute(&base, 1, 0.0, 1.0, Skill::Cooking);
+        let (two, _) = staffed_cook_minute(&base, 2, 0.0, 1.0, Skill::Cooking);
+        let (tired, _) = staffed_cook_minute(&base, 1, 1.0, 1.0, Skill::Cooking);
+        let (hurt, _) = staffed_cook_minute(&base, 1, 0.0, 0.4, Skill::Cooking);
+        let (relief, relief_activity) = staffed_cook_minute(&base, 1, 0.0, 1.0, Skill::General);
+        assert!(one > 0.0, "one cook added no time");
+        assert!(
+            (two - one * 2.0).abs() < 1e-6,
+            "two cooks {two} one cook {one}"
+        );
+        assert!(
+            (tired - one * 0.5).abs() < 1e-6,
+            "tired {tired} rested {one}"
+        );
+        assert!((hurt - one * 0.5).abs() < 1e-6, "hurt {hurt} rested {one}");
+        assert!(
+            (relief - one * 0.5).abs() < 1e-6,
+            "unmatched {relief} matched {one}"
+        );
+        assert_eq!(activity, Activity::Cooking);
+        assert_eq!(relief_activity, Activity::Cooking);
+    }
+
+    #[test]
+    fn fatigue_halves_a_fishers_catch() {
+        let base = World::generate(34, 1_700_000_000).expect("layout");
+        let rested = fish_caught(&base, 0.0, 1.0);
+        let tired = fish_caught(&base, 1.0, 1.0);
+        let dead = fish_caught(&base, 0.0, 0.0);
+        let absent = fish_caught_outside(&base);
+        assert!(rested > 0.0, "rested fisher landed nothing");
+        assert!(
+            (tired - rested * 0.5).abs() < 1e-9,
+            "tired {tired} rested {rested}"
+        );
+        assert!(dead.abs() < 1e-9, "dead fisher landed {dead}");
+        assert!(absent.abs() < 1e-9, "empty fishing room landed {absent}");
+    }
+
+    #[test]
     fn catch_up_matches_a_day_of_steps() {
         let start = 1_700_000_000;
         let mut stepped = World::generate(4, start).expect("layout");
@@ -1787,6 +1981,102 @@ mod tests {
         }
         assert!(berths > 0);
         assert!(heads > 0);
+    }
+
+    fn on_shift_offset(minute: u32) -> u32 {
+        (1440 - (minute % 1440)) % 1440
+    }
+
+    fn cook_station(world: &World) -> Station {
+        world
+            .stations
+            .iter()
+            .find(|station| {
+                station.recipe == Some(RecipeId::CookMeal)
+                    && world
+                        .rooms
+                        .get(station.room_id as usize)
+                        .is_some_and(|room| room.kind == RoomKind::Galley)
+            })
+            .expect("galley")
+            .clone()
+    }
+
+    fn staffed_cook_minute(
+        base: &World,
+        cooks: usize,
+        fatigue: f64,
+        health: f64,
+        skill: Skill,
+    ) -> (f64, Activity) {
+        let mut world = base.clone();
+        let station = cook_station(&world);
+        let chosen: Vec<usize> = world
+            .crew
+            .iter()
+            .enumerate()
+            .filter(|(_, crew)| crew.skill == Skill::Cooking)
+            .map(|(index, _)| index)
+            .take(cooks)
+            .collect();
+        assert_eq!(chosen.len(), cooks);
+        let minute = minute_of_day(world.last_tick_unix + STEP_SECONDS);
+        let offset = on_shift_offset(minute);
+        for &index in &chosen {
+            let crew = &mut world.crew[index];
+            crew.station_id = Some(station.id);
+            crew.watch_offset_min = offset;
+            crew.fatigue = fatigue;
+            crew.health = health;
+            crew.hunger = 0.0;
+            crew.thirst = 0.0;
+            crew.skill = skill;
+        }
+        for &index in &chosen {
+            place(&mut world, index, station.room_id);
+        }
+        world.step();
+        let elapsed = world
+            .jobs
+            .iter()
+            .find(|job| job.station_id == station.id)
+            .map(|job| job.elapsed_seconds)
+            .expect("cook job");
+        (elapsed, world.crew[chosen[0]].activity)
+    }
+
+    fn fish_caught(base: &World, fatigue: f64, health: f64) -> f64 {
+        let mut world = base.clone();
+        let room_id = world.first_room(RoomKind::Fishing).expect("fishing");
+        let fisher = world
+            .crew
+            .iter()
+            .position(|crew| crew.skill == Skill::Fishing)
+            .expect("fisher");
+        let minute = minute_of_day(world.last_tick_unix + STEP_SECONDS);
+        let station_id = world
+            .stations
+            .iter()
+            .find(|station| station.room_id == room_id)
+            .expect("fishing station")
+            .id;
+        world.crew[fisher].station_id = Some(station_id);
+        world.crew[fisher].watch_offset_min = on_shift_offset(minute);
+        world.crew[fisher].fatigue = fatigue;
+        world.crew[fisher].health = health;
+        world.crew[fisher].hunger = 0.0;
+        world.crew[fisher].thirst = 0.0;
+        place(&mut world, fisher, room_id);
+        let before = world.total(Good::FishKg);
+        world.step();
+        world.total(Good::FishKg) - before
+    }
+
+    fn fish_caught_outside(base: &World) -> f64 {
+        let mut world = base.clone();
+        let before = world.total(Good::FishKg);
+        world.step();
+        world.total(Good::FishKg) - before
     }
 
     fn place(world: &mut World, index: usize, room_id: u32) {
