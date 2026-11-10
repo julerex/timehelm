@@ -28,6 +28,10 @@ const HYDRO_NUTRIENT_PER_M2: f64 = 0.01;
 const FISH_KG_PER_FISHER_DAY: f64 = 8.0;
 const MEAL_PORTION_KG: f64 = 0.45;
 const HUNGER_RELIEF: f64 = 0.4;
+const BREAD_BITE_KG: f64 = 0.25;
+const STORED_BITE_KG: f64 = 0.20;
+const FALLBACK_HUNGER_RELIEF: f64 = 0.25;
+const SPOIL_FRACTION: f64 = 0.02;
 const DRINK_LITRES: f64 = 0.12;
 const THIRST_RELIEF: f64 = 0.3;
 /// Two positions closer than this are the same point.
@@ -240,7 +244,7 @@ impl World {
         self.last_tick_unix += STEP_SECONDS;
         let minute = minute_of_day(self.last_tick_unix);
         self.tick_needs(minute);
-        self.tick_clinic();
+        self.tick_clinic(minute);
         let hydro_fraction = self.tick_power_and_jobs(minute);
         self.tick_hydro(minute, hydro_fraction);
         self.tick_fishing(minute);
@@ -471,6 +475,7 @@ impl World {
             self.log_life(index, event, &detail);
         }
         let dining = self.dining_rooms();
+        let cold_stores = self.rooms_of(RoomKind::ColdStore);
         let water_rooms = self.rooms_of(RoomKind::WaterStore);
         let meals_before = self.total(Good::MealKg);
         let water_before = self.total(Good::WaterL);
@@ -482,25 +487,8 @@ impl World {
             let room_id = self.crew[index].room_id;
             let in_dining = dining.contains(&room_id);
             if self.crew[index].hunger >= 0.5 && in_dining {
-                if self.take_from_rooms(&[room_id], Good::MealKg, MEAL_PORTION_KG) {
-                    let hunger_before = self.crew[index].hunger;
-                    self.crew[index].hunger = (hunger_before - HUNGER_RELIEF).max(0.0);
-                    self.crew[index].activity = Activity::Eating;
-                    let hunger_after = self.crew[index].hunger;
-                    self.log_life(
-                        index,
-                        LifeEvent::Ate,
-                        &format!(
-                            "ate {MEAL_PORTION_KG:.2} kg of meals; hunger {hunger_before:.3} -> {hunger_after:.3}"
-                        ),
-                    );
-                    if hunger_before > 0.85 && hunger_after <= 0.85 {
-                        self.log_life(
-                            index,
-                            LifeEvent::HungerEased,
-                            "hunger fell to 0.85 or below after eating",
-                        );
-                    }
+                if let Some((qty, relief, food)) = self.take_bite(room_id, &cold_stores) {
+                    self.log_bite(index, qty, relief, food);
                 } else {
                     missed_meals += 1;
                 }
@@ -547,18 +535,24 @@ impl World {
         }
     }
 
-    fn tick_clinic(&mut self) {
+    fn tick_clinic(&mut self, minute: u32) {
         let medical_before = self.total(Good::MedicalKg);
         let crew_count = self.crew.len();
         for index in 0..crew_count {
             let room_id = self.crew[index].room_id;
+            let health_before = self.crew[index].health;
             let in_clinic = self
                 .rooms
                 .get(room_id as usize)
                 .is_some_and(|room| room.kind == RoomKind::Clinic);
-            let alive = is_alive(&self.crew[index]);
-            let health_before = self.crew[index].health;
-            if alive && in_clinic && health_before < 0.9 && self.take_good(Good::MedicalKg, 0.02) {
+            if !in_clinic
+                || health_before <= 0.0
+                || health_before >= 0.55
+                || !self.medic_on_duty(room_id, minute)
+            {
+                continue;
+            }
+            if self.take_good(Good::MedicalKg, 0.02) {
                 self.crew[index].health = (health_before + 0.05).min(1.0);
                 self.crew[index].activity = Activity::Treating;
                 self.log_life(
@@ -763,6 +757,7 @@ impl World {
         if minute != 0 {
             return;
         }
+        self.spoil_perishables();
         let worn = self.total(Good::GarmentKg) * 0.002;
         if worn <= 0.0 {
             return;
@@ -999,6 +994,69 @@ impl World {
                 })
                 && on_shift(crew.watch_offset_min, minute)
         })
+    }
+
+    fn take_bite(&mut self, room_id: u32, cold_stores: &[u32]) -> Option<(f64, f64, &'static str)> {
+        let here = [room_id];
+        if self.take_from_rooms(&here, Good::MealKg, MEAL_PORTION_KG) {
+            return Some((MEAL_PORTION_KG, HUNGER_RELIEF, "meals"));
+        }
+        if self.take_from_rooms(&here, Good::BreadKg, BREAD_BITE_KG) {
+            return Some((BREAD_BITE_KG, FALLBACK_HUNGER_RELIEF, "bread"));
+        }
+        if self.take_from_rooms(&here, Good::FishKg, STORED_BITE_KG)
+            || self.take_from_rooms(cold_stores, Good::FishKg, STORED_BITE_KG)
+        {
+            return Some((STORED_BITE_KG, FALLBACK_HUNGER_RELIEF, "fish"));
+        }
+        if self.take_from_rooms(&here, Good::VegetablesKg, STORED_BITE_KG)
+            || self.take_from_rooms(cold_stores, Good::VegetablesKg, STORED_BITE_KG)
+        {
+            return Some((STORED_BITE_KG, FALLBACK_HUNGER_RELIEF, "vegetables"));
+        }
+        None
+    }
+
+    fn log_bite(&mut self, index: usize, qty: f64, relief: f64, food: &str) {
+        let hunger_before = self.crew[index].hunger;
+        self.crew[index].hunger = (hunger_before - relief).max(0.0);
+        self.crew[index].activity = Activity::Eating;
+        let hunger_after = self.crew[index].hunger;
+        self.log_life(
+            index,
+            LifeEvent::Ate,
+            &format!("ate {qty:.2} kg of {food}; hunger {hunger_before:.3} -> {hunger_after:.3}"),
+        );
+        if hunger_before > 0.85 && hunger_after <= 0.85 {
+            self.log_life(
+                index,
+                LifeEvent::HungerEased,
+                "hunger fell to 0.85 or below after eating",
+            );
+        }
+    }
+
+    fn medic_on_duty(&self, room_id: u32, minute: u32) -> bool {
+        self.crew.iter().any(|crew| {
+            crew.room_id == room_id
+                && crew.health > 0.0
+                && crew.skill == Skill::Medicine
+                && on_shift(crew.watch_offset_min, minute)
+        })
+    }
+
+    fn spoil_perishables(&mut self) {
+        let cold_stores = self.rooms_of(RoomKind::ColdStore);
+        for stock in &mut self.stocks {
+            let perishable = matches!(
+                stock.good,
+                Good::MealKg | Good::BreadKg | Good::FishKg | Good::VegetablesKg
+            );
+            if !perishable || cold_stores.contains(&stock.room_id) {
+                continue;
+            }
+            stock.qty -= stock.qty * SPOIL_FRACTION;
+        }
     }
 
     fn dining_rooms(&self) -> Vec<u32> {
@@ -1897,7 +1955,12 @@ mod tests {
         place(&mut world, 0, mess);
         place(&mut world, 1, mess);
         place(&mut world, 3, water);
-        world.stocks.retain(|stock| stock.good != Good::MealKg);
+        world.stocks.retain(|stock| {
+            !matches!(
+                stock.good,
+                Good::MealKg | Good::BreadKg | Good::FishKg | Good::VegetablesKg
+            )
+        });
         world.add_stock(mess, Good::MealKg, 0.50);
         world.stocks.retain(|stock| stock.good != Good::WaterL);
         world.add_stock(water, Good::WaterL, 0.20);
@@ -1953,6 +2016,178 @@ mod tests {
             &["fell below one 0.45 kg portion", "1 crew missed a meal"],
         );
         assert_ship_logged(&logs, "water_exhausted", &["fell below one 0.12 L drink"]);
+    }
+
+    #[test]
+    fn a_hungry_person_eats_fish_when_meals_are_gone() {
+        let mut world = World::generate(32, 1_700_000_000).expect("layout");
+        let mess = world.first_room(RoomKind::Mess).expect("mess");
+        let cold = world.first_room(RoomKind::ColdStore).expect("cold store");
+        place(&mut world, 0, mess);
+        world
+            .stocks
+            .retain(|stock| stock.good != Good::MealKg && stock.good != Good::FishKg);
+        let bakery_bread = world.total(Good::BreadKg);
+        world.add_stock(mess, Good::BreadKg, BREAD_BITE_KG);
+        world.add_stock(mess, Good::FishKg, 1.0);
+        world.add_stock(cold, Good::FishKg, 1.0);
+        for crew in &mut world.crew {
+            crew.hunger = 0.2;
+            crew.thirst = 0.2;
+            crew.health = 1.0;
+        }
+        world.crew[0].hunger = 0.95;
+        only_one_in(&mut world, 0, mess);
+        world.step();
+        assert!(world.crew[0].hunger < 0.95);
+        assert!((qty_in(&world, mess, Good::BreadKg)).abs() < 1e-9);
+        assert!((world.total(Good::BreadKg) - bakery_bread).abs() < 1e-9);
+        assert!((qty_in(&world, mess, Good::FishKg) - 1.0).abs() < 1e-9);
+
+        world.crew[0].hunger = 0.95;
+        only_one_in(&mut world, 0, mess);
+        let days_before = world.delta().totals.food_days;
+        world.step();
+        assert!(world.crew[0].hunger < 0.95);
+        assert!(world.total(Good::MealKg) < MEAL_PORTION_KG);
+        assert!((qty_in(&world, mess, Good::FishKg) - (1.0 - STORED_BITE_KG)).abs() < 1e-9);
+        assert!((qty_in(&world, cold, Good::FishKg) - 1.0).abs() < 1e-9);
+        assert!(world.delta().totals.food_days < days_before);
+
+        world
+            .stocks
+            .retain(|stock| stock.good != Good::FishKg || stock.room_id != mess);
+        world.crew[0].hunger = 0.95;
+        only_one_in(&mut world, 0, mess);
+        world.step();
+        assert!(world.crew[0].hunger < 0.95);
+        assert!((qty_in(&world, cold, Good::FishKg) - (1.0 - STORED_BITE_KG)).abs() < 1e-9);
+
+        world.stocks.retain(|stock| stock.good != Good::FishKg);
+        let vegetables_before = qty_in(&world, cold, Good::VegetablesKg);
+        world.crew[0].hunger = 0.95;
+        only_one_in(&mut world, 0, mess);
+        world.step();
+        assert!(world.crew[0].hunger < 0.95);
+        assert!(
+            (qty_in(&world, cold, Good::VegetablesKg) - (vegetables_before - STORED_BITE_KG)).abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn perishables_spoil_outside_the_cold_store() {
+        let mut world = World::generate(33, 1439 * 60).expect("layout");
+        let galley = world.first_room(RoomKind::Galley).expect("galley");
+        let cold = world.first_room(RoomKind::ColdStore).expect("cold store");
+        world.stocks.retain(|stock| stock.good != Good::MealKg);
+        world.add_stock(galley, Good::MealKg, 50.0);
+        for crew in &mut world.crew {
+            crew.hunger = 0.0;
+            crew.thirst = 0.0;
+        }
+        let bakery = world.first_room(RoomKind::Bakery).expect("bakery");
+        let meals_before = qty_in(&world, galley, Good::MealKg);
+        let fish_before = qty_in(&world, cold, Good::FishKg);
+        let bread_before = qty_in(&world, bakery, Good::BreadKg);
+        let vegetables_before = qty_in(&world, cold, Good::VegetablesKg);
+        let garments_before = world.total(Good::GarmentKg);
+        assert!(meals_before > 0.0 && fish_before > 0.0 && bread_before > 0.0);
+        world.step();
+        assert_eq!(minute_of_day(world.last_tick_unix), 0);
+        let meals_after = qty_in(&world, galley, Good::MealKg);
+        assert!((qty_in(&world, cold, Good::FishKg) - fish_before).abs() < 1e-9);
+        assert!((qty_in(&world, cold, Good::VegetablesKg) - vegetables_before).abs() < 1e-9);
+        assert!((meals_after - meals_before * (1.0 - SPOIL_FRACTION)).abs() < 1e-6);
+        assert!(
+            (qty_in(&world, bakery, Good::BreadKg) - bread_before * (1.0 - SPOIL_FRACTION)).abs()
+                < 1e-6
+        );
+        assert!(meals_after < meals_before);
+        let worn = garments_before * 0.002;
+        assert!((world.total(Good::GarmentKg) - (garments_before - worn)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clinic_treats_only_with_a_medic() {
+        let mut world = World::generate(31, 1_700_000_000).expect("layout");
+        let clinic = world.first_room(RoomKind::Clinic).expect("clinic");
+        let medic = world
+            .crew
+            .iter()
+            .position(|crew| crew.skill == Skill::Medicine)
+            .expect("medic");
+        place(&mut world, 0, clinic);
+        world.stocks.retain(|stock| stock.good != Good::MedicalKg);
+        world.add_stock(clinic, Good::MedicalKg, 1.0);
+        world.crew[0].hunger = 0.0;
+        world.crew[0].thirst = 0.0;
+        world.crew[0].health = 0.5;
+        world.step();
+        assert!((world.crew[0].health - 0.5).abs() < 1e-12);
+        assert!((world.total(Good::MedicalKg) - 1.0).abs() < 1e-12);
+
+        seat(&mut world, clinic, &[0, medic]);
+        watch(&mut world, medic, false);
+        world.crew[0].health = 0.5;
+        world.step();
+        assert!((world.crew[0].health - 0.5).abs() < 1e-12);
+        assert!((world.total(Good::MedicalKg) - 1.0).abs() < 1e-12);
+
+        seat(&mut world, clinic, &[0, medic]);
+        watch(&mut world, medic, true);
+        world.crew[0].health = 0.5;
+        world.step();
+        assert!((world.crew[0].health - 0.55).abs() < 1e-12);
+        assert!((world.total(Good::MedicalKg) - 0.98).abs() < 1e-9);
+
+        seat(&mut world, clinic, &[0, medic]);
+        watch(&mut world, medic, true);
+        world.crew[0].health = 0.55;
+        let held = world.total(Good::MedicalKg);
+        world.step();
+        assert!((world.crew[0].health - 0.55).abs() < 1e-12);
+        assert!((world.total(Good::MedicalKg) - held).abs() < 1e-9);
+
+        seat(&mut world, clinic, &[0, medic]);
+        watch(&mut world, medic, true);
+        world.crew[0].health = 0.0;
+        let held = world.total(Good::MedicalKg);
+        world.step();
+        assert!(world.crew[0].health <= 0.0);
+        assert!((world.total(Good::MedicalKg) - held).abs() < 1e-9);
+
+        let infirmary = world.first_room(RoomKind::Infirmary).expect("infirmary");
+        place(&mut world, 0, infirmary);
+        place(&mut world, medic, infirmary);
+        watch(&mut world, medic, true);
+        world.crew[0].health = 0.4;
+        let held = world.total(Good::MedicalKg);
+        world.step();
+        assert!((world.crew[0].health - 0.4).abs() < 1e-12);
+        assert!((world.total(Good::MedicalKg) - held).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_dead_patient_is_not_revived() {
+        let mut world = World::generate(13, 1_700_000_000).expect("layout");
+        let clinic = world.first_room(RoomKind::Clinic).expect("clinic");
+        place(&mut world, 0, clinic);
+        world.stocks.retain(|stock| stock.good != Good::MedicalKg);
+        world.add_stock(clinic, Good::MedicalKg, 0.05);
+        world.crew[0].hunger = 0.0;
+        world.crew[0].thirst = 0.0;
+        world.crew[0].health = 0.0;
+        let logs = capture_life_logs(|| {
+            world.step();
+            world.step();
+        });
+        assert!(world.crew[0].health <= 0.0);
+        assert!((world.total(Good::MedicalKg) - 0.05).abs() < 1e-12);
+        assert_eq!(count_life(&logs, "revived:"), 0);
+        assert!(!logs.contains("treated:"));
+        assert!(!logs.contains("medical_exhausted"));
+        assert!(!logs.contains("died:"));
     }
 
     #[test]
@@ -2068,6 +2303,23 @@ mod tests {
         assert!(!logs.contains("revived:"));
         assert!(!logs.contains("died:"));
 
+        let medic = world
+            .crew
+            .iter()
+            .enumerate()
+            .find_map(|(index, crew)| (index > 1 && crew.skill == Skill::Medicine).then_some(index))
+            .expect("medic");
+        for index in 0..world.crew.len() {
+            if index == 0 || index == 1 || index == medic {
+                continue;
+            }
+            if world.crew[index].room_id == clinic {
+                let berth = world.crew[index].berth_id;
+                place(&mut world, index, berth);
+            }
+        }
+        place(&mut world, medic, clinic);
+        watch(&mut world, medic, true);
         place(&mut world, 1, clinic);
         world.crew[1].hunger = 0.0;
         world.crew[1].thirst = 0.0;
@@ -2732,6 +2984,49 @@ mod tests {
     fn goal_of(world: &World, crew: &CrewMember, minute: u32) -> u32 {
         let adj = adjacency(&world.doors, world.rooms.len());
         world.goal_room(crew, minute, &adj)
+    }
+
+    fn only_one_in(world: &mut World, index: usize, room_id: u32) {
+        for other in 0..world.crew.len() {
+            if other == index {
+                place(world, other, room_id);
+            } else {
+                let berth = world.crew[other].berth_id;
+                place(world, other, berth);
+            }
+        }
+    }
+
+    fn qty_in(world: &World, room_id: u32, good: Good) -> f64 {
+        world
+            .stocks
+            .iter()
+            .filter(|stock| stock.room_id == room_id && stock.good == good)
+            .map(|stock| stock.qty)
+            .sum()
+    }
+
+    fn seat(world: &mut World, clinic: u32, keep: &[usize]) {
+        for index in 0..world.crew.len() {
+            if keep.contains(&index) {
+                place(world, index, clinic);
+            } else {
+                let berth = world.crew[index].berth_id;
+                place(world, index, berth);
+            }
+        }
+    }
+
+    fn watch(world: &mut World, index: usize, on_duty: bool) {
+        let minute = minute_of_day(world.last_tick_unix + STEP_SECONDS);
+        world.crew[index].watch_offset_min = if on_duty {
+            (1440 - minute % 1440) % 1440
+        } else {
+            (480 + 1440 - minute % 1440) % 1440
+        };
+        world.crew[index].health = 1.0;
+        world.crew[index].hunger = 0.0;
+        world.crew[index].thirst = 0.0;
     }
 
     fn place(world: &mut World, index: usize, room_id: u32) {

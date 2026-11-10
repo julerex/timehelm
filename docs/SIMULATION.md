@@ -76,7 +76,7 @@ Health below 0.55 sends a living person to the nearest clinic. Otherwise thirst 
 
 Each minute, a living person's hunger and thirst rise by `1/1440` (capped at 1.5). Fatigue rises by `1/480` on shift and falls by `1/480` while sleeping in a berth. Companionship above 0.8 halves that sleep recovery. Companionship starts at 0.5. A living person who is alone among living people gains `1/1440` each minute, capped at 1.5. Sharing a room with another living person removes `1/480` each minute, floored at 0. Health at or below 0 is not company, and that person's companionship stays put. Health falls slowly when hunger exceeds 0.85 or thirst exceeds 0.85.
 
-Eating requires hunger of at least 0.5 while standing in a mess, restaurant, or galley. A portion is 0.45 kg of meals taken from that room and relieves hunger by 0.4. Drinking requires thirst of at least 0.35 while standing in a water store. It takes 0.12 L from that room and relieves thirst by 0.3. In the clinic, a living patient with health below 0.9 consumes 0.02 kg of medical supplies and restores 0.05 health.
+A living person eats in a mess, restaurant, or galley when hunger is at least 0.5. A meal from that room is 0.45 kg and relieves hunger by 0.4. When that room has no meal portion, they eat 0.25 kg of bread from the room, otherwise 0.20 kg of fish, otherwise 0.20 kg of vegetables. Fish and vegetables come from that room or a cold store. Each of those bites relieves hunger by 0.25. Drinking requires thirst of at least 0.35 while standing in a water store. It takes 0.12 L from that room and relieves thirst by 0.3. A clinic treats a living patient only when health is below 0.55 and a living on-shift medic is in that same room. Treatment consumes 0.02 kg of medical supplies and restores 0.05 health. The infirmary does not treat, and nothing manufactures medicine.
 
 ## Goods and recipes
 
@@ -104,9 +104,9 @@ Hydroponics is not a job. Each crop room advances `1/1440` of a day per minute, 
 
 Fishing adds 8 kg per living on-shift fisher per day into the cold store, and only while that person is in the fishing room. That catch is a renewable inflow.
 
-Once a day, at minute 0, 0.2% of stored garments become scrap.
+Once a day, at minute 0, 0.2% of stored garments become scrap. At that same minute, meals, bread, fish, and vegetables stored outside a cold store lose 2 percent. Cold-store quantities stay put.
 
-The opening endowment is meant to last weeks: 2000 kg flour, 2000 kg vegetables, 600 kg fish, 120 kg bread, 80 kg meals, 30 000 L water, 2500 kg timber, 900 kg metal, plus smaller stocks of salt, yeast, fibre, cloth, garments, planks, tools, scrap, medical supplies, nutrients, and compost. Timber and metal are finite. Food and water can be renewed by the galley, hydroponics, fishing, and desalination. Food days are edible kilograms divided by crew × 0.6. Water days are litres divided by crew × 3.
+The opening endowment is meant to last weeks: 2000 kg flour, 2000 kg vegetables, 600 kg fish, 120 kg bread, 80 kg meals, 30 000 L water, 2500 kg timber, 900 kg metal, plus smaller stocks of salt, yeast, fibre, cloth, garments, planks, tools, scrap, medical supplies, nutrients, and compost. Timber and metal are finite. Food and water can be renewed by the galley, hydroponics, fishing, and desalination. Food days are edible kilograms (meals, bread, vegetables, and fish) divided by crew × 0.6. Water days are litres divided by crew × 3.
 
 ## Power
 
