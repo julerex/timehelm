@@ -5,6 +5,7 @@ mod cabin_marks;
 mod deck_geometry;
 mod shader_embed;
 mod shared;
+mod venue_props;
 mod viewer_net;
 
 #[cfg(target_arch = "wasm32")]

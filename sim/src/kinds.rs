@@ -106,10 +106,10 @@ impl RoomKind {
     /// sRGB colour used by the viewer. Kept here so docs and client share one map.
     pub fn color_rgba(self) -> [f32; 4] {
         match self {
-            RoomKind::Corridor => [0.45, 0.48, 0.52, 1.0],
-            RoomKind::Stair => [0.35, 0.38, 0.42, 1.0],
-            RoomKind::Berth => [0.55, 0.62, 0.78, 1.0],
-            RoomKind::Head => [0.62, 0.78, 0.82, 1.0],
+            RoomKind::Corridor => [0.20, 0.22, 0.26, 1.0],
+            RoomKind::Stair => [0.32, 0.34, 0.38, 1.0],
+            RoomKind::Berth => [0.55, 0.42, 0.30, 1.0],
+            RoomKind::Head => [0.76, 0.81, 0.83, 1.0],
             RoomKind::Hydroponics => [0.35, 0.62, 0.38, 1.0],
             RoomKind::Fishing => [0.25, 0.48, 0.62, 1.0],
             RoomKind::ColdStore => [0.70, 0.86, 0.92, 1.0],
