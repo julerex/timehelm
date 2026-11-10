@@ -2,7 +2,7 @@
 
 Time Helm is a persistent simulation of a self-sustaining community ship.
 
-The ship is a set of rooms on a 318 m × 60 m hull, not a lattice of 1 m cells. About 80 named crew work watches, walk between rooms, and run a closed material economy: bread, meals, fresh water, crops, fishing, cloth, timber, metal, and a small clinic. Solar power is a fixed average. When it runs short, grow lights and desalination throttle before the galley and the clinic.
+The ship is a set of rooms on a 365 m × 65 m hull shaped like Icon of the Seas, not a lattice of 1 m cells. Public deck plans set where the cabins, promenade, park, theaters, pools, and waterpark sit. Workshops, the gas-generator hall, and waste treatment are below those plans. About 80 named crew work watches, walk between rooms, and run a closed material economy: bread, meals, fresh water, crops, fishing, cloth, timber, metal, and a small clinic. Solar power is a fixed average. When it runs short, grow lights and desalination throttle before the galley and the clinic.
 
 Time runs at **1 real second = 1 sim second**. The server keeps the world in PostgreSQL and catches up any missed minutes when it starts, including while nobody is watching. The Bevy client is a viewer. It can orbit the ship, change decks, and read the keymap. It cannot change crew, stocks, or recipes. The command path is in place so a later participant role can be added without a second world model.
 
@@ -60,6 +60,7 @@ The top bar shows the simulation clock in UTC, the deck, crew count, food and wa
 | `server/` | Load, catch up, save, and stream the world. |
 | `ship-game/` | Bevy 0.18 viewer. |
 | `docs/SIMULATION.md` | Rooms, goods, recipes, power priority, and the `Role` / `Command` seam. |
+| `docs/bevy-plugins.md` | Bevy 0.18 plugins that fit the read-only WebGL2 viewer, and the ones that do not. |
 | `client/public/` | Pages and the built WASM viewer. |
 
 The repository is one Cargo workspace. `make test` and `make lint` cover `sim`, `server`, and `ship-game`.

@@ -71,6 +71,7 @@ timehelm/
 │   ├── index.html          # Redirects to /3d/
 │   └── ship/               # wasm-bindgen output from scripts/build-ship.sh
 ├── docs/SIMULATION.md      # Rooms, recipes, power, and the command seam
+├── docs/bevy-plugins.md    # Bevy 0.18 plugins for the read-only viewer
 ├── scripts/build-ship.sh
 ├── Cargo.toml              # Workspace (sim, server, ship-game)
 └── fly.toml
