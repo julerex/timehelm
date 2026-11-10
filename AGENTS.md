@@ -65,7 +65,7 @@ timehelm/
 │   ├── src/main.rs
 │   ├── src/db.rs
 │   ├── src/websocket.rs
-│   └── migrations/         # Applied with sqlx::migrate! on startup
+│   └── migrations/         # sqlx history. Startup applies them when the DB user can create tables
 ├── ship-game/              # Bevy 3D viewer (Rust/WASM)
 ├── client/public/          # Static files served by the Rust server
 │   ├── index.html          # Redirects to /3d/
@@ -213,6 +213,7 @@ The **Makefile** (see test/format/clippy targets) works around this by running *
 - Use Rust **1.92.0** (the `rust:1.92` image in `Dockerfile`). Install the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` **0.2.130**, which must match `wasm-bindgen` in the workspace `Cargo.lock`. `scripts/build-ship.sh` fails if the CLI schema does not match. The WASM artifact is `target/wasm32-unknown-unknown/release/ship_game.wasm`.
 - `make run-ship` builds the Bevy WASM client into `client/public/ship/` and serves it from the Rust server. `http://localhost:8080/` redirects to `/3d/`. `/2d` and `/seacells` redirect there too. Page Up/Down switches decks. K toggles the keymap.
 - `dotenv` reads `.env` from the process working directory. `make run-ship` and `cd server && cargo run` therefore need `server/.env`, not only a root `.env`. Copy `DATABASE_URL` into `server/.env`. If it is unset, the server still listens and tells the viewer the world is unavailable. It does not simulate an unsaved ship.
-- Local Postgres is cluster **16/main**. `policy-rc.d` can refuse `service postgresql start`; use `sudo pg_ctlcluster 16 main start`. The dev URL is `postgresql://postgres:password@localhost:5432/timehelm`. The server applies `server/migrations` itself. `database/timehelm_schema.sql` is the older unused schema; re-running it fails on `CREATE TRIGGER`.
+- Local Postgres is cluster **16/main**. `policy-rc.d` can refuse `service postgresql start`; use `sudo pg_ctlcluster 16 main start`. The dev URL is `postgresql://postgres:password@localhost:5432/timehelm`. The local database user can create tables, so the server applies `server/migrations` on startup. `database/timehelm_schema.sql` is the older unused schema; re-running it fails on `CREATE TRIGGER`.
+- Fly Managed Postgres attaches `timehelm` as a writer. That user can read and write rows and cannot create tables, including `CREATE TABLE IF NOT EXISTS` when the table is already there. Apply `server/migrations` from this computer as `fly-user` (schema_admin): `fly mpg connect <cluster-id> -u fly-user -d timehelm`. Record the matching `_sqlx_migrations` checksum. Leave the writer role and `DATABASE_URL` unchanged. After the history matches, startup skips DDL, then loads or seeds the world.
 - Twitter OAuth secrets are not required to boot. `server/src/main.rs` does not mount the auth module.
 - `make test` runs `sim`, `server`, and `ship-game` tests. `make lint` is `cargo fmt --check` plus `cargo clippy -- -D warnings` for those three crates. Prefer `make test` and `make lint` so cargo is not pointed at the Cursor proxy.

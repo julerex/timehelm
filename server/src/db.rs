@@ -21,11 +21,125 @@ pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
 }
 
 pub async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::migrate!("./migrations")
-        .run(pool)
-        .await
-        .context("apply sql migrations")?;
-    Ok(())
+    let migrator = sqlx::migrate!("./migrations");
+    let expected: Vec<(i64, &[u8])> = migrator
+        .migrations
+        .iter()
+        .map(|migration| (migration.version, migration.checksum.as_ref()))
+        .collect();
+    match classify_migration_history(read_migration_history(pool).await?.as_deref(), &expected) {
+        MigrationHistory::Current => {
+            tracing::info!("SQL migrations already applied");
+            Ok(())
+        }
+        MigrationHistory::Diverged(detail) => {
+            anyhow::bail!("SQL migration history does not match this server: {detail}")
+        }
+        MigrationHistory::Missing | MigrationHistory::Pending => {
+            apply_migrations(&migrator, pool).await
+        }
+    }
+}
+
+async fn read_migration_history(pool: &PgPool) -> anyhow::Result<Option<Vec<MigrationRow>>> {
+    match sqlx::query_as::<_, MigrationRow>(
+        "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => Ok(Some(rows)),
+        Err(error) if is_postgres_code(&error, "42P01") => Ok(None),
+        Err(error) => Err(error).context("read migration history"),
+    }
+}
+
+async fn apply_migrations(migrator: &sqlx::migrate::Migrator, pool: &PgPool) -> anyhow::Result<()> {
+    match migrator.run(pool).await {
+        Ok(()) => Ok(()),
+        Err(error) if is_postgres_code(&error, "42501") => {
+            anyhow::bail!(
+                "apply sql migrations: this database user cannot change the schema. Apply server/migrations as schema_admin from an operator machine, then restart"
+            )
+        }
+        Err(error) => Err(error).context("apply sql migrations"),
+    }
+}
+
+fn is_postgres_code(error: &(dyn std::error::Error + 'static), code: &str) -> bool {
+    let mut current = Some(error);
+    while let Some(err) = current {
+        if let Some(sqlx_error) = err.downcast_ref::<sqlx::Error>() {
+            if sqlx_error
+                .as_database_error()
+                .and_then(|db| db.code())
+                .is_some_and(|db_code| db_code == code)
+            {
+                return true;
+            }
+        }
+        current = err.source();
+    }
+    false
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MigrationHistory {
+    Missing,
+    Current,
+    Pending,
+    Diverged(String),
+}
+
+#[derive(sqlx::FromRow)]
+struct MigrationRow {
+    version: i64,
+    checksum: Vec<u8>,
+    success: bool,
+}
+
+fn classify_migration_history(
+    recorded: Option<&[MigrationRow]>,
+    expected: &[(i64, &[u8])],
+) -> MigrationHistory {
+    let Some(recorded) = recorded else {
+        return MigrationHistory::Missing;
+    };
+
+    if let Some(failed) = recorded.iter().find(|row| !row.success) {
+        return MigrationHistory::Diverged(format!(
+            "migration {} is recorded as failed",
+            failed.version
+        ));
+    }
+
+    for row in recorded {
+        match expected.iter().find(|(version, _)| *version == row.version) {
+            Some((_, checksum)) if *checksum == row.checksum.as_slice() => {}
+            Some(_) => {
+                return MigrationHistory::Diverged(format!(
+                    "migration {} checksum does not match this server",
+                    row.version
+                ));
+            }
+            None => {
+                return MigrationHistory::Diverged(format!(
+                    "migration {} is recorded but is not in this server",
+                    row.version
+                ));
+            }
+        }
+    }
+
+    if expected.iter().all(|(version, _)| {
+        recorded
+            .iter()
+            .any(|row| row.version == *version && row.success)
+    }) {
+        MigrationHistory::Current
+    } else {
+        MigrationHistory::Pending
+    }
 }
 
 /// Load the singleton world. `Ok(None)` means the schema is empty and should be seeded.
@@ -561,6 +675,91 @@ pub const WORLD_SEED: u64 = 0x7469_6D65_6865_6C6D;
 mod tests {
     use super::*;
     use sim::MemoryStore;
+
+    fn hex_encode(bytes: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        out
+    }
+
+    #[test]
+    fn embedded_migration_checksum_matches_the_sql_file() {
+        let migrator = sqlx::migrate!("./migrations");
+        let migration = migrator
+            .migrations
+            .iter()
+            .find(|migration| migration.version == 1)
+            .expect("version 1");
+        assert_eq!(migration.description.as_ref(), "sim world");
+        assert_eq!(
+            hex_encode(migration.checksum.as_ref()),
+            "aef2ddacb6e8bc1dd89506a3a910cdfe592b652f4a202ebc83ad40a85a33fb805da412a61799e6bc4842b74d1115ea54"
+        );
+    }
+
+    #[test]
+    fn migration_history_classifies_recorded_rows() {
+        let checksum = b"abc";
+        let expected = [(1_i64, checksum.as_slice())];
+        let applied = [MigrationRow {
+            version: 1,
+            checksum: checksum.to_vec(),
+            success: true,
+        }];
+        assert_eq!(
+            classify_migration_history(None, &expected),
+            MigrationHistory::Missing
+        );
+        assert_eq!(
+            classify_migration_history(Some(&[]), &expected),
+            MigrationHistory::Pending
+        );
+        assert_eq!(
+            classify_migration_history(Some(&applied), &expected),
+            MigrationHistory::Current
+        );
+        assert_eq!(
+            classify_migration_history(
+                Some(&[MigrationRow {
+                    version: 1,
+                    checksum: b"nope".to_vec(),
+                    success: true,
+                }]),
+                &expected
+            ),
+            MigrationHistory::Diverged(
+                "migration 1 checksum does not match this server".to_string()
+            )
+        );
+        assert_eq!(
+            classify_migration_history(
+                Some(&[MigrationRow {
+                    version: 1,
+                    checksum: checksum.to_vec(),
+                    success: false,
+                }]),
+                &expected
+            ),
+            MigrationHistory::Diverged("migration 1 is recorded as failed".to_string())
+        );
+        assert_eq!(
+            classify_migration_history(
+                Some(&[MigrationRow {
+                    version: 9,
+                    checksum: checksum.to_vec(),
+                    success: true,
+                }]),
+                &expected
+            ),
+            MigrationHistory::Diverged(
+                "migration 9 is recorded but is not in this server".to_string()
+            )
+        );
+    }
 
     #[test]
     fn encoded_rows_round_trip_and_memory_store() {
