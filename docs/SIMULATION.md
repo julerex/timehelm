@@ -8,7 +8,7 @@ Time is 1:1 with the wall clock. `World::step` covers 60 seconds. On boot the se
 
 The plan follows Icon of the Seas' published size and public deck plans: 365 m overall, 213 ft (65 m) beam. Origin is the aft-starboard corner, outside the hull. +X points forward, +Y points to port. The waterline is a fine bow, a parallel mid-body, and a flat transom with rounded quarters. Decks are 3 m apart. Deck index 0 is the lowest. There is no deck 13, matching the ship, so index 13 is Icon deck 14 and index 19 is Icon deck 20.
 
-Rooms are named rectangles that sit fully on that deck's hull. A shared edge longer than a metre is a door. A corridor is a room. Crew walk the door graph at 1.3 m/s (78 m per step), aiming at the doorway and then into the next room. A stair, which has no shared edge, still aims at the room centre. A berth holds a bed. A head holds a toilet and a shower. Press P in the viewer for the top-down plan.
+Rooms are named rectangles that sit fully on that deck's hull. A shared edge longer than a metre is a door. A corridor is a room. Crew walk the door graph at 1.3 m/s when health is 1 and fatigue is 0 (78 m per step). The pace is that speed times health and times one minus fatigue, each clamped from 0 to 1, so health 0.55 or fatigue 1 is slower and health 0 stays still. They aim at the doorway and then into the next room. A stair, which has no shared edge, still aims at the room centre. A berth holds a bed. Living people in the goal room stand on distinct points, and a free bed is used when the berth has one. A head holds a toilet and a shower. Press P in the viewer for the top-down plan.
 
 | Index | Icon deck | What the plan contributes |
 | --- | --- | --- |
@@ -68,7 +68,7 @@ Eighty named people are seeded from a stored seed. They share 4-berth cabins. De
 | Bridge | 4 |
 | Relief | 9 |
 
-A watch is 8 hours. Department `i` is offset by `i * 45` minutes, so the watches stagger. On shift, a person walks to their assigned station. Off shift, hunger above 0.6 sends them to the mess; otherwise they return to their berth. Health below 0.55 sends them to the clinic first.
+A watch is 8 hours. Department `i` is offset by `i * 45` minutes, so the watches stagger. Health below 0.55 sends them to the nearest clinic first. On shift, a person walks to their assigned station. Off shift, hunger above 0.6 sends them to the nearest mess; otherwise they return to their berth. Nearest is door-graph distance, and a tie keeps the lower room id.
 
 Each minute, hunger and thirst rise by `1/1440` (capped at 1.5). Fatigue rises by `1/480` on shift and falls by `1/480` while sleeping in a berth. Health falls slowly when hunger exceeds 0.85 or thirst exceeds 0.85.
 
