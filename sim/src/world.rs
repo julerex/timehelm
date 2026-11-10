@@ -760,6 +760,8 @@ impl World {
                 && crew.station_id == Some(station_id)
                 && crew.room_id == room_id
                 && on_shift(crew.watch_offset_min, minute)
+                && crew.activity != Activity::Eating
+                && crew.activity != Activity::Treating
             {
                 crew.activity = activity;
             }
