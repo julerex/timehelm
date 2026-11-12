@@ -136,6 +136,8 @@ pub fn procedural_deck_plan_texture_image() -> Image {
 }
 
 const HULL_PLATE_COLOR: [f32; 4] = [0.56, 0.63, 0.70, 1.0];
+/// Half-thickness of [`ship_hull_plate`]. Local Z runs from `-half` to `+half`.
+pub const HULL_PLATE_HALF_THICKNESS_M: f32 = 0.09;
 
 /// Deck plate for one hull outline. Holes are left open. Local Z is centred on 0.
 pub fn ship_hull_plate(outline: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Option<Mesh> {
@@ -167,7 +169,7 @@ pub fn ship_hull_plate(outline: &[[f32; 2]], holes: &[Vec<[f32; 2]>]) -> Option<
     if tris.len() < 3 {
         return None;
     }
-    let half = 0.09;
+    let half = HULL_PLATE_HALF_THICKNESS_M;
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut uvs = Vec::new();
