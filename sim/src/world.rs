@@ -1361,10 +1361,12 @@ pub fn on_shift(offset_min: u32, minute_of_day: u32) -> bool {
     local < 8 * 60
 }
 
-/// Full pace at health 1 and fatigue 0. Each factor clamps from 0 to 1.
+/// Full pace at health 1 and fatigue 0.
+/// Health clamps from 0 to 1. One minus fatigue clamps from 0.2 to 1,
+/// so fatigue 1 still walks and health 0 stays still.
 fn walk_step_metres(health: f64, fatigue: f64) -> f32 {
     let health_scale = (health as f32).clamp(0.0, 1.0);
-    let rested_scale = (1.0 - fatigue as f32).clamp(0.0, 1.0);
+    let rested_scale = (1.0 - fatigue as f32).clamp(0.2, 1.0);
     WALK_PER_STEP * health_scale * rested_scale
 }
 
@@ -2873,6 +2875,19 @@ mod tests {
             tired < rested,
             "tired {tired} should cover less ground than rested {rested}"
         );
+    }
+
+    #[test]
+    fn fatigue_one_still_walks_and_health_zero_stays_still() {
+        let mut world = World::generate(3, 1_700_000_000).expect("layout");
+        let (dead, tired) = walked_distances(&mut world, 0.0, 1.0, 1.0, 1.0);
+        let full = WALK_METRES_PER_SECOND * (STEP_SECONDS as f32);
+        let expected = full * 0.2;
+        assert!(
+            (tired - expected).abs() < 0.05,
+            "fatigue 1 covered {tired}, expected about {expected:.1}"
+        );
+        assert!(dead < 0.01, "health 0 covered {dead}");
     }
 
     #[test]
