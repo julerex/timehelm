@@ -1,7 +1,8 @@
 //! Furniture for the working rooms and the public venues.
 //!
 //! These meshes follow the room rectangles. They do not move crew, stocks, or recipes.
-//! A pool, a slide, a tree, and a lifeboat are scenery on the deck that already has that name.
+//! A pool, a slide, and a tree are scenery in the room that already has that name.
+//! Lifeboats are a separate mesh on [`LIFEBOAT_DECK`].
 
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -33,16 +34,21 @@ const SLIDE_B: [f32; 4] = [0.90, 0.78, 0.12, 1.0];
 const SLIDE_C: [f32; 4] = [0.82, 0.22, 0.28, 1.0];
 
 /// Icon deck 7 (sim index 6). The boats hang outboard of the Surfside topsides.
-const LIFEBOAT_DECK: usize = 6;
+pub const LIFEBOAT_DECK: usize = 6;
 
-pub fn venue_mesh(deck: usize, rooms: &[&RoomView]) -> Option<Mesh> {
+pub fn venue_mesh(rooms: &[&RoomView]) -> Option<Mesh> {
     let mut parts = Parts::default();
     for room in rooms {
         furnish(&mut parts, room);
     }
-    if deck == LIFEBOAT_DECK {
-        lifeboats(&mut parts);
-    }
+    parts.into_mesh()
+}
+
+/// Boats and davits outboard of [`LIFEBOAT_DECK`]. Kept off the room mesh so a
+/// closed lower deck can still show them.
+pub fn lifeboat_mesh() -> Option<Mesh> {
+    let mut parts = Parts::default();
+    lifeboats(&mut parts);
     parts.into_mesh()
 }
 
@@ -583,19 +589,23 @@ mod tests {
             rect(150.0, 12.0, 200.0, 26.0),
         );
         let rooms = [&shop, &galley, &park, &grove, &hideaway, &waste];
-        let mesh = venue_mesh(6, &rooms).expect("venues");
+        let mesh = venue_mesh(&rooms).expect("venues");
         assert!(has_color(&mesh, SAW));
         assert!(has_color(&mesh, RANGE));
         assert!(has_color(&mesh, CANOPY));
         assert!(has_color(&mesh, WATER));
         assert!(has_color(&mesh, INCINERATOR));
-        assert!(has_color(&mesh, BOAT));
         let points = positions(&mesh);
-        assert!(points.iter().any(|point| point[1] < 0.0 && point[2] > 1.0));
-        assert!(points.iter().any(|point| point[1] > 65.0));
         assert!(points
             .iter()
             .any(|point| point[2] > 2.0 && point[0] > 120.0));
+        let boats = lifeboat_mesh().expect("boats");
+        assert!(has_color(&boats, BOAT));
+        let boat_points = positions(&boats);
+        assert!(boat_points
+            .iter()
+            .any(|point| point[1] < 0.0 && point[2] > 1.0));
+        assert!(boat_points.iter().any(|point| point[1] > 65.0));
         let grove_canopy: Vec<_> = points
             .iter()
             .filter(|point| {

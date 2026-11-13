@@ -1,5 +1,8 @@
 //! Read-only 3D view of the persistent ship.
 //!
+//! The deck you have open shows its rooms. Decks below it keep the outer shell
+//! and a lid, so you see the outside of the ship there instead of those rooms.
+//!
 //! Camera actions live in a leafwing action map. Press K for the keymap.
 //! Interaction actions are registered and left unbound.
 
@@ -9,12 +12,12 @@ use crate::cabin_marks::{
 };
 use crate::deck_geometry::{
     extruded_polygon_deck_mesh, procedural_deck_plan_texture_image, ship_bulwark_mesh,
-    ship_hull_plate,
+    ship_hull_plate, HULL_PLATE_HALF_THICKNESS_M,
 };
 use crate::lamps::{lamp_uniform, LAMP_LIMIT};
 use crate::shader_embed::ShipShaderEmbedPlugin;
 use crate::shared::{asset_plugin, primary_window};
-use crate::venue_props::venue_mesh;
+use crate::venue_props::{lifeboat_mesh, venue_mesh, LIFEBOAT_DECK};
 use crate::viewer_net::{drain_inbox, start_inbox, LiveWorld};
 use bevy::camera::ScalingMode;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
@@ -44,6 +47,10 @@ const CAM_MAX_DISTANCE_M: f32 = 6200.0;
 const CAM_PITCH_MIN: f32 = 0.15;
 const CAM_PITCH_MAX: f32 = 1.42;
 const FLOOR_THICKNESS_M: f32 = 0.22;
+/// Top of the white outer band, metres above the deck floor.
+const SHELL_TOP_M: f32 = 2.45;
+/// Keeps the lid just under the wall's top face.
+const LID_CLEARANCE_M: f32 = 0.02;
 const CREW_SCALE: f32 = 0.55;
 const CREW_MODELS: [&str; 18] = [
     "character-a.glb",
@@ -203,6 +210,21 @@ struct CameraRig {
 #[derive(Resource)]
 struct CurrentDeck(usize);
 
+/// Shell stays on every deck. Rooms show only on the open deck.
+/// A lid closes each deck below the open one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeckLayer {
+    Shell,
+    Interior,
+    Lid,
+}
+
+#[derive(Component, Clone, Copy)]
+struct DeckPart {
+    deck: u8,
+    layer: DeckLayer,
+}
+
 #[derive(Resource, Default)]
 struct KeymapOpen(bool);
 
@@ -297,6 +319,12 @@ pub fn run_app_3d() {
         .add_systems(
             Update,
             (camera_controls, apply_camera, deck_and_keymap, sync_clip).chain(),
+        )
+        .add_systems(
+            Update,
+            sync_deck_layers
+                .after(spawn_ship_once)
+                .after(deck_and_keymap),
         )
         .run();
 }
@@ -496,36 +524,62 @@ fn spawn_ship_once(
         }
         let deck_z = deck as f32 * DECK_HEIGHT_M;
         let floor_top = deck_z + FLOOR_THICKNESS_M;
+        let interior = DeckPart {
+            deck: deck as u8,
+            layer: DeckLayer::Interior,
+        };
         spawn_hull(&mut commands, &mut meshes, &clip.0, deck, deck_z);
         if let Some(mesh) = deck_floor_mesh(&rooms) {
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(clip.0.clone()),
+            spawn_layer(
+                &mut commands,
+                &mut meshes,
+                &clip.0,
+                mesh,
                 Transform::from_xyz(0.0, 0.0, deck_z + FLOOR_THICKNESS_M * 0.5),
-            ));
+                interior,
+            );
         }
         if let Some(mesh) = deck_wall_mesh(snapshot, deck as u8) {
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(clip.0.clone()),
+            spawn_layer(
+                &mut commands,
+                &mut meshes,
+                &clip.0,
+                mesh,
                 Transform::from_xyz(0.0, 0.0, floor_top),
-            ));
+                interior,
+            );
         }
         for (mesh, z) in [
             bulkhead_mesh(&rooms).map(|mesh| (mesh, floor_top)),
             door_frame_mesh(&rooms).map(|mesh| (mesh, floor_top)),
             corridor_runner_mesh(&rooms).map(|mesh| (mesh, floor_top)),
             deck_fitting_mesh(&rooms).map(|mesh| (mesh, floor_top)),
-            venue_mesh(deck, &rooms).map(|mesh| (mesh, floor_top)),
+            venue_mesh(&rooms).map(|mesh| (mesh, floor_top)),
         ]
         .into_iter()
         .flatten()
         {
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(clip.0.clone()),
+            spawn_layer(
+                &mut commands,
+                &mut meshes,
+                &clip.0,
+                mesh,
                 Transform::from_xyz(0.0, 0.0, z),
-            ));
+                interior,
+            );
+        }
+        if let Some(mesh) = (deck == LIFEBOAT_DECK).then(lifeboat_mesh).flatten() {
+            spawn_layer(
+                &mut commands,
+                &mut meshes,
+                &clip.0,
+                mesh,
+                Transform::from_xyz(0.0, 0.0, floor_top),
+                DeckPart {
+                    deck: deck as u8,
+                    layer: DeckLayer::Shell,
+                },
+            );
         }
         let placements = door_placements(&rooms);
         if !placements.is_empty() {
@@ -544,6 +598,7 @@ fn spawn_ship_once(
                         span: door.span,
                         openness: 0.0,
                     },
+                    interior,
                 ));
             }
         }
@@ -655,7 +710,6 @@ fn animate_crew(
     mut crew: Query<(&CrewBody, &mut Transform, &mut Visibility)>,
 ) {
     let now = time.elapsed_secs();
-    let cut = cut_z(deck.0);
     for (body, mut transform, mut visibility) in &mut crew {
         let pos = sample_crew(body, now);
         let flat = Vec3::new(body.to.x - body.from.x, body.to.y - body.from.y, 0.0);
@@ -664,11 +718,16 @@ fn animate_crew(
             transform.look_to(flat.normalize(), Vec3::Z);
         }
         transform.scale = Vec3::splat(CREW_SCALE);
-        *visibility = if pos.z <= cut + 0.2 {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
+        let next = deck_visibility(
+            DeckPart {
+                deck: body.deck,
+                layer: DeckLayer::Interior,
+            },
+            deck.0,
+        );
+        if *visibility != next {
+            *visibility = next;
+        }
     }
 }
 
@@ -1027,12 +1086,38 @@ fn spawn_hull(
         .map(|ring| ring.iter().map(|point| [point.x, point.y]).collect())
         .collect();
     let floor_top = deck_z + FLOOR_THICKNESS_M;
-    if outlines.len() == 1 {
-        spawn_plate(commands, meshes, clip, &outlines[0], &holes, floor_top);
+    let deck_u8 = deck as u8;
+    let no_holes: &[Vec<[f32; 2]>] = &[];
+    let plate_holes = if outlines.len() == 1 {
+        holes.as_slice()
     } else {
-        for outline in &outlines {
-            spawn_plate(commands, meshes, clip, outline, &[], floor_top);
-        }
+        no_holes
+    };
+    for outline in &outlines {
+        spawn_plate(
+            commands,
+            meshes,
+            clip,
+            outline,
+            plate_holes,
+            floor_top - 0.12,
+            DeckPart {
+                deck: deck_u8,
+                layer: DeckLayer::Shell,
+            },
+        );
+        spawn_plate(
+            commands,
+            meshes,
+            clip,
+            outline,
+            plate_holes,
+            lid_center_z(floor_top),
+            DeckPart {
+                deck: deck_u8,
+                layer: DeckLayer::Lid,
+            },
+        );
     }
     spawn_band(
         commands,
@@ -1040,13 +1125,21 @@ fn spawn_hull(
         clip,
         ship_bulwark_mesh(&outlines, 0.0, 0.62, 0.8, [0.14, 0.17, 0.22, 1.0]),
         floor_top,
+        DeckPart {
+            deck: deck_u8,
+            layer: DeckLayer::Shell,
+        },
     );
     spawn_band(
         commands,
         meshes,
         clip,
-        ship_bulwark_mesh(&outlines, 0.62, 2.45, 0.55, [0.90, 0.92, 0.94, 1.0]),
+        ship_bulwark_mesh(&outlines, 0.62, SHELL_TOP_M, 0.55, [0.90, 0.92, 0.94, 1.0]),
         floor_top,
+        DeckPart {
+            deck: deck_u8,
+            layer: DeckLayer::Shell,
+        },
     );
     if !holes.is_empty() {
         spawn_band(
@@ -1055,6 +1148,10 @@ fn spawn_hull(
             clip,
             ship_bulwark_mesh(&holes, 0.0, 1.1, 0.28, [0.68, 0.80, 0.76, 1.0]),
             floor_top,
+            DeckPart {
+                deck: deck_u8,
+                layer: DeckLayer::Shell,
+            },
         );
     }
 }
@@ -1065,14 +1162,18 @@ fn spawn_plate(
     clip: &Handle<ShipClipMaterial>,
     outline: &[[f32; 2]],
     holes: &[Vec<[f32; 2]>],
-    floor_top: f32,
+    center_z: f32,
+    part: DeckPart,
 ) {
     if let Some(mesh) = ship_hull_plate(outline, holes) {
-        commands.spawn((
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(clip.clone()),
-            Transform::from_xyz(0.0, 0.0, floor_top - 0.12),
-        ));
+        spawn_layer(
+            commands,
+            meshes,
+            clip,
+            mesh,
+            Transform::from_xyz(0.0, 0.0, center_z),
+            part,
+        );
     }
 }
 
@@ -1082,14 +1183,34 @@ fn spawn_band(
     clip: &Handle<ShipClipMaterial>,
     mesh: Option<Mesh>,
     floor_top: f32,
+    part: DeckPart,
 ) {
     if let Some(mesh) = mesh {
-        commands.spawn((
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(clip.clone()),
+        spawn_layer(
+            commands,
+            meshes,
+            clip,
+            mesh,
             Transform::from_xyz(0.0, 0.0, floor_top),
-        ));
+            part,
+        );
     }
+}
+
+fn spawn_layer(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    clip: &Handle<ShipClipMaterial>,
+    mesh: Mesh,
+    transform: Transform,
+    part: DeckPart,
+) {
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(clip.clone()),
+        transform,
+        part,
+    ));
 }
 
 fn deck_floor_mesh(rooms: &[&RoomView]) -> Option<Mesh> {
@@ -1440,6 +1561,36 @@ fn cut_z(deck: usize) -> f32 {
     (deck as f32 + 1.0) * DECK_HEIGHT_M - 0.08
 }
 
+/// Centre of the closing plate, just under the top of the outer wall.
+fn lid_center_z(floor_top: f32) -> f32 {
+    floor_top + SHELL_TOP_M - HULL_PLATE_HALF_THICKNESS_M - LID_CLEARANCE_M
+}
+
+fn part_visible(layer: DeckLayer, deck: u8, open: usize) -> bool {
+    match layer {
+        DeckLayer::Shell => true,
+        DeckLayer::Interior => deck as usize == open,
+        DeckLayer::Lid => (deck as usize) < open,
+    }
+}
+
+fn deck_visibility(part: DeckPart, open: usize) -> Visibility {
+    if part_visible(part.layer, part.deck, open) {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    }
+}
+
+fn sync_deck_layers(deck: Res<CurrentDeck>, mut parts: Query<(&DeckPart, &mut Visibility)>) {
+    for (part, mut visibility) in &mut parts {
+        let next = deck_visibility(*part, deck.0);
+        if *visibility != next {
+            *visibility = next;
+        }
+    }
+}
+
 fn wall_utc() -> String {
     format_unix_utc(wall_unix())
 }
@@ -1762,5 +1913,110 @@ mod tests {
         let packed = sun_uniform(rotation);
         assert_eq!(packed.truncate(), to_sun);
         assert!((packed.w - super::SUN_DIFFUSE_GAIN).abs() < 1e-6);
+    }
+
+    #[test]
+    fn open_deck_shows_its_rooms_and_only_the_outside_below() {
+        assert!(part_visible(DeckLayer::Interior, 4, 4));
+        assert!(!part_visible(DeckLayer::Interior, 3, 4));
+        assert!(!part_visible(DeckLayer::Interior, 5, 4));
+        assert!(part_visible(DeckLayer::Shell, 0, 4));
+        assert!(part_visible(DeckLayer::Shell, 4, 4));
+        assert!(part_visible(DeckLayer::Lid, 3, 4));
+        assert!(!part_visible(DeckLayer::Lid, 4, 4));
+        assert!(!part_visible(DeckLayer::Lid, 5, 4));
+        assert!(!part_visible(DeckLayer::Lid, 0, 0));
+    }
+
+    #[test]
+    fn lower_deck_lid_stays_under_the_next_floor_and_inside_the_wall() {
+        let floor_top = 3.0 * DECK_HEIGHT_M + FLOOR_THICKNESS_M;
+        let center = lid_center_z(floor_top);
+        let lid_top = center + HULL_PLATE_HALF_THICKNESS_M;
+        let next_floor = 4.0 * DECK_HEIGHT_M;
+        assert!(lid_top < next_floor);
+        assert!(lid_top < floor_top + SHELL_TOP_M);
+        assert!(center > floor_top);
+    }
+
+    #[test]
+    fn changing_decks_hides_lower_rooms_and_closes_them() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(CurrentDeck(1));
+        app.add_systems(Update, sync_deck_layers);
+        let shell = app
+            .world_mut()
+            .spawn((
+                DeckPart {
+                    deck: 0,
+                    layer: DeckLayer::Shell,
+                },
+                Visibility::Hidden,
+            ))
+            .id();
+        let below = app
+            .world_mut()
+            .spawn((
+                DeckPart {
+                    deck: 0,
+                    layer: DeckLayer::Interior,
+                },
+                Visibility::Inherited,
+            ))
+            .id();
+        let lid = app
+            .world_mut()
+            .spawn((
+                DeckPart {
+                    deck: 0,
+                    layer: DeckLayer::Lid,
+                },
+                Visibility::Hidden,
+            ))
+            .id();
+        let open_rooms = app
+            .world_mut()
+            .spawn((
+                DeckPart {
+                    deck: 1,
+                    layer: DeckLayer::Interior,
+                },
+                Visibility::Hidden,
+            ))
+            .id();
+        let open_lid = app
+            .world_mut()
+            .spawn((
+                DeckPart {
+                    deck: 1,
+                    layer: DeckLayer::Lid,
+                },
+                Visibility::Inherited,
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(layer_visibility(&app, shell), Visibility::Inherited);
+        assert_eq!(layer_visibility(&app, below), Visibility::Hidden);
+        assert_eq!(layer_visibility(&app, lid), Visibility::Inherited);
+        assert_eq!(layer_visibility(&app, open_rooms), Visibility::Inherited);
+        assert_eq!(layer_visibility(&app, open_lid), Visibility::Hidden);
+
+        app.world_mut().resource_mut::<CurrentDeck>().0 = 0;
+        app.update();
+        assert_eq!(layer_visibility(&app, shell), Visibility::Inherited);
+        assert_eq!(layer_visibility(&app, below), Visibility::Inherited);
+        assert_eq!(layer_visibility(&app, lid), Visibility::Hidden);
+        assert_eq!(layer_visibility(&app, open_rooms), Visibility::Hidden);
+        assert_eq!(layer_visibility(&app, open_lid), Visibility::Hidden);
+    }
+
+    fn layer_visibility(app: &App, entity: Entity) -> Visibility {
+        *app.world()
+            .get_entity(entity)
+            .unwrap()
+            .get::<Visibility>()
+            .unwrap()
     }
 }
